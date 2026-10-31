@@ -21,7 +21,7 @@ def sh(tmp_path, comfy):
     dropins = tmp_path / "comfyui.service.d"
     comfy_dir = tmp_path / "repo" / "comfy"
     comfy_dir.mkdir(parents=True)
-    for f in (REPO / "comfy").iterdir():
+    for f in (p for p in (REPO / "comfy").iterdir() if p.is_file()):
         text = f.read_text()
         if f.suffix == ".sh":
             assert REAL_DIR in text, f"{f.name}: drop-in path changed, update this test"

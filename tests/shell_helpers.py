@@ -3,7 +3,7 @@
 limits.sh and update.sh ask y/N on /dev/tty (and treat "no terminal" as no). run_script() always
 starts the script in a new session, so it can never reach the terminal pytest runs in (a test
 must not stop and wait for you). With answer="y", it gets a pseudo-terminal of its own as its
-controlling terminal, and the answer is typed into it.
+controlling terminal, and the answer is typed at every [y/N] prompt.
 """
 from __future__ import annotations
 
@@ -40,26 +40,30 @@ def run_script(cmd: list[str], env: dict, cwd=None, answer: str | None = None, t
     p = subprocess.Popen(cmd, env=env, cwd=cwd, stdin=slave, stdout=slave, stderr=slave,
                          start_new_session=True, preexec_fn=take_tty, close_fds=True)
     os.close(slave)
-    buf, sent, deadline = b"", False, time.time() + timeout
-    while True:
-        if time.time() > deadline:
-            p.kill()
-            raise TimeoutError(f"{cmd} still running after {timeout}s; output so far:\n{buf.decode(errors='replace')}")
-        r, _, _ = select.select([master], [], [], 0.1)
-        if r:
+    buf, answered, deadline = b"", 0, time.time() + timeout
+    try:
+        while True:
+            if time.time() > deadline:
+                p.kill()
+                raise TimeoutError(f"{cmd} still running after {timeout}s; output so far:\n"
+                                   + buf.decode(errors="replace"))
+            r, _, _ = select.select([master], [], [], 0.1)
+            if not r:
+                if p.poll() is not None:
+                    break
+                continue
             try:
                 chunk = os.read(master, 4096)
-            except OSError:  # EIO: the child closed the terminal
-                chunk = b""
-            if not chunk and p.poll() is not None:
+            except OSError:  # EIO: every process closed the terminal
+                break
+            if not chunk:
                 break
             buf += chunk
-            if not sent and b"[y/N]" in buf:
+            while buf.count(b"[y/N]") > answered:  # answer every prompt (install.sh -> limits.sh asks twice)
                 os.write(master, answer.encode() + b"\n")
-                sent = True
-        elif p.poll() is not None:
-            break
-    os.close(master)
-    p.wait()
+                answered += 1
+    finally:
+        os.close(master)
+        p.wait()
     out = ANSI.sub("", buf.decode(errors="replace")).replace("\r\n", "\n")
     return Result(p.returncode, out)

@@ -66,8 +66,10 @@ def test_icon_runs_remove_bg(comfy, fake_rembg):
     assert run["transparent"] is True
 
 
-def test_windows_paths_via_wslpath(comfy, monkeypatch, tmp_path):
-    monkeypatch.setenv("IMAGEGEN_OUTPUT_DIR", "/mnt/c/never-written")  # only the path text matters here
+def test_windows_paths_via_wslpath():
+    assert imagegen.to_windows_path("/mnt/c") == "C:\\"
+    assert imagegen.to_linux_path("\\\\wsl.localhost\\Ubuntu-24.04\\tmp\\a b.png") == Path("/tmp/a b.png")
+    assert imagegen.to_linux_path("\\\\wsl$\\Ubuntu-24.04\\tmp") == Path("/tmp")
     assert imagegen.to_windows_path("/mnt/c/Users/lalli/x.png") == "C:\\Users\\lalli\\x.png"
     assert imagegen.to_linux_path("C:\\Users\\lalli\\x.png") == Path("/mnt/c/Users/lalli/x.png")
 
