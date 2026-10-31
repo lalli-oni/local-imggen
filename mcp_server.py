@@ -112,7 +112,8 @@ def vary(path: str, count: int = 4, strength: float | None = None, prompt: str |
     """Variations of an existing image (img2img), or inpaint with a mask. path/mask: Linux or Windows paths.
 
     strength = how much may change, 0-1 (default 0.4; 0.85 with a mask). ~0.25 keeps the composition,
-    ~0.6+ reinterprets it. mask: white = repaint, black = keep; unmasked pixels stay exact.
+    ~0.6+ reinterprets it. mask: white = repaint, black = keep; pixels away from the (slightly feathered)
+    mask edge are kept. Output is ~1 MP (source aspect), except wallpaper presets which upscale.
     prompt/preset/negative default to the image's sidecar JSON; an outside image needs a prompt.
     Same waiting/job_id behaviour as generate.
     """

@@ -16,6 +16,7 @@ Usage:
 from __future__ import annotations
 
 import base64
+import hashlib
 import html
 import io
 import json
@@ -173,7 +174,9 @@ def prepare_source(path: Path, mask: Path | None = None) -> tuple[bytes, bytes |
     """Load the source (and optional mask) as PNG bytes at an SDXL-friendly size.
 
     Transparency is flattened onto white, so icons and cut-outs work as sources.
-    Mask: white = repaint, black = keep. It is resized to the source's size.
+    Mask: white = repaint, black = keep. It is resized to the source's size and its edge is
+    feathered by MASK_FEATHER px, so pixels just outside the white area blend a little.
+    Output is at this ~1 MP size, not the source's resolution.
     """
     from PIL import Image  # lazy: only img2img needs it
 
@@ -182,8 +185,8 @@ def prepare_source(path: Path, mask: Path | None = None) -> tuple[bytes, bytes |
         im.save(buf, "PNG")
         return buf.getvalue()
 
-    im = Image.open(path)
-    im.load()
+    from PIL import ImageOps
+    im = ImageOps.exif_transpose(Image.open(path))  # phone photos: apply the EXIF rotation
     if im.mode in ("RGBA", "LA", "P"):
         im = im.convert("RGBA")
         bg = Image.new("RGB", im.size, (255, 255, 255))
@@ -193,8 +196,7 @@ def prepare_source(path: Path, mask: Path | None = None) -> tuple[bytes, bytes |
     src = png(im.convert("RGB").resize(size, Image.LANCZOS))
     m = None
     if mask is not None:
-        mk = Image.open(mask)
-        mk.load()
+        mk = ImageOps.exif_transpose(Image.open(mask))
         from PIL import ImageFilter
         # feather the edge a little so the repainted part blends into the kept part
         m = png(mk.convert("L").resize(size, Image.LANCZOS)
@@ -208,9 +210,11 @@ def find_sidecar(path: Path) -> dict | None:
                  path.with_name(path.stem.removesuffix("-transparent") + ".json")):
         if cand.is_file():
             try:
-                return json.loads(cand.read_text())
-            except json.JSONDecodeError:
-                return None
+                meta = json.loads(cand.read_text())
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                continue
+            if isinstance(meta, dict):
+                return meta
     return None
 
 
@@ -296,11 +300,13 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
 
     source = None
     if src_path is not None:
-        tag = uuid.uuid4().hex[:8]
-        params.update(image=comfy.upload(src_png, f"imagegen-src-{tag}.png"), denoise=denoise,
+        # content-addressed names: re-running on the same source/mask overwrites instead of piling up
+        def name(kind: str, data: bytes) -> str:
+            return f"imagegen-{kind}-{hashlib.sha1(data).hexdigest()[:16]}.png"
+        params.update(image=comfy.upload(src_png, name("src", src_png)), denoise=denoise,
                       width=src_size[0], height=src_size[1])
         if mask_png is not None:
-            params["mask"] = comfy.upload(mask_png, f"imagegen-mask-{tag}.png")
+            params["mask"] = comfy.upload(mask_png, name("mask", mask_png))
         source = {"source_image": str(src_path), "mask": str(mask_path) if mask_path else None,
                   "denoise": denoise}
 
@@ -353,6 +359,8 @@ def vary(path: str, count: int = 4, strength: float | None = None, prompt: str |
     an outside image (no sidecar) needs a prompt.
     """
     src = to_linux_path(path)
+    if not src.is_file():
+        raise FileNotFoundError(src)
     meta = find_sidecar(src) or {}
     if prompt is None:
         prompt = meta.get("prompt")
@@ -473,7 +481,14 @@ def main(argv: list[str]) -> int:
         _print_run(run, a.open)
         return 0
     if argv and argv[0] == "cutout":
-        print(remove_bg(to_linux_path(argv[1])))
+        if len(argv) != 2:
+            print("usage: gen cutout PATH", file=sys.stderr)
+            return 2
+        src = to_linux_path(argv[1])
+        if not src.is_file():
+            print(f"not a file: {src}", file=sys.stderr)
+            return 1
+        print(remove_bg(src))
         return 0
     if argv and argv[0] == "set-wallpaper":
         print("wallpaper set:", set_wallpaper(argv[1]))
