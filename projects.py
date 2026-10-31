@@ -18,11 +18,14 @@ Boards (#7) are not built yet; until then the run folders listed under "passes" 
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import os
 import re
 import shutil
 import sys
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -32,6 +35,8 @@ SCHEMA = 1
 # changes to these make assets from older versions stale; preset/params changes do not
 LOOK_KEYS = ("prompt", "negative", "snippets", "palette", "refs")
 PARAM_KEYS = {"width": int, "height": int, "steps": int, "cfg": float, "strength": float}
+PARAM_RANGES = {"width": (256, 4096), "height": (256, 4096), "steps": (1, 150), "cfg": (0.0, 30.0),
+                "strength": (0.01, 1.0)}
 _SLUG = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _HEX = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
@@ -66,12 +71,35 @@ def load(slug: str) -> dict:
     return json.loads(f.read_text(encoding="utf-8"))
 
 
+def _write_json(path: Path, data) -> None:
+    # unique tmp + replace: a crash never leaves half a file, and two writers never share a tmp
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, path)
+
+
 def save(proj: dict) -> None:
     d = project_dir(proj["slug"])
     d.mkdir(parents=True, exist_ok=True)
-    tmp = d / "project.json.tmp"
-    tmp.write_text(json.dumps(proj, indent=2, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, d / "project.json")  # atomic: a crash never leaves half a project.json
+    _write_json(d / "project.json", proj)
+
+
+_THREAD_LOCK = threading.RLock()
+
+
+@contextlib.contextmanager
+def locked(slug: str):
+    """Hold this while doing load -> change -> save, so the MCP job thread, project_get and a
+    terminal `gen project` never overwrite each other's changes."""
+    root = projects_root()
+    root.mkdir(parents=True, exist_ok=True)
+    # next to the project folders, so locking an unknown slug leaves no empty folder behind
+    with _THREAD_LOCK, open(root / f".{_check_name(slug, 'project')}.lock", "a") as fh:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+        except OSError:  # a filesystem without flock: the in-process lock still covers MCP threads
+            pass
+        yield
 
 
 def list_projects() -> list[str]:
@@ -98,25 +126,29 @@ def _commit(proj: dict, changed: list[str], author: str, note: str | None) -> di
 def new(slug: str, title: str | None = None, brief: str = "", author: str = "human",
         **state) -> dict:
     """Create a project at version 1. state: any of set_state()'s arguments."""
-    d = project_dir(slug)
-    if (d / "project.json").exists():
-        raise ValueError(f"project '{slug}' already exists")
-    proj = {"schema": SCHEMA, "slug": slug, "title": title or slug, "brief": brief,
-            "created": _now(), "version": 0, "state": _empty_state(),
-            "versions": [], "assets": {}, "passes": [], "seen": {}}
-    _apply(proj, **state)
-    _commit(proj, ["created"], author, "created")
-    save(proj)
+    with locked(slug):
+        if (project_dir(slug) / "project.json").exists():
+            raise ValueError(f"project '{slug}' already exists")
+        proj = {"schema": SCHEMA, "slug": slug, "title": title or slug, "brief": brief,
+                "created": _now(), "version": 0, "state": _empty_state(),
+                "versions": [], "assets": {}, "passes": []}
+        _apply(proj, **state)
+        _commit(proj, ["created"], author, "created")
+        save(proj)
     return proj
 
 
-def _add_ref(proj: dict, name: str, path: str, role: str = "") -> None:
-    _check_name(name, "ref")
+def _image(path: str, what: str) -> Path:
     src = imagegen.to_linux_path(path)
     if not src.is_file():
         raise FileNotFoundError(src)
     if src.suffix.lower() not in IMAGE_EXTS:
-        raise ValueError(f"{src.name}: refs must be {', '.join(sorted(IMAGE_EXTS))}")
+        raise ValueError(f"{src.name}: {what} must be {', '.join(sorted(IMAGE_EXTS))}")
+    return src
+
+
+def _add_ref(proj: dict, name: str, src: Path, role: str = "") -> None:
+    """Copy an already validated image (see _image) into refs/ and point the state at it."""
     refs = project_dir(proj["slug"]) / "refs"
     refs.mkdir(parents=True, exist_ok=True)
     # named after the version it arrives in, so older snapshots keep pointing at their own file
@@ -150,10 +182,19 @@ def _apply(proj: dict, prompt: str | None = None, negative: str | None = None,
             raise ValueError(f"unknown param '{k}' (known: {', '.join(PARAM_KEYS)})")
         if v is None:
             st["params"].pop(k, None)
-        else:
-            st["params"][k] = PARAM_KEYS[k](v)
-    if "strength" in st["params"] and not 0 < st["params"]["strength"] <= 1:
-        raise ValueError("strength must be in (0, 1]")
+            continue
+        try:
+            num = float(v)
+        except (TypeError, ValueError):
+            raise ValueError(f"param {k}={v!r} is not a number") from None
+        if PARAM_KEYS[k] is int and not num.is_integer():
+            raise ValueError(f"param {k} must be a whole number, got {v}")
+        lo, hi = PARAM_RANGES[k]
+        if not lo <= num <= hi:
+            raise ValueError(f"param {k} must be between {lo} and {hi}, got {v}")
+        if k in ("width", "height") and num % 8:
+            raise ValueError(f"param {k} must be a multiple of 8, got {v}")
+        st["params"][k] = PARAM_KEYS[k](num)
     for k, v in (snippets or {}).items():
         _check_name(k, "snippet")
         if v is None or not str(v).strip():
@@ -169,24 +210,33 @@ def _apply(proj: dict, prompt: str | None = None, negative: str | None = None,
         if bad:
             raise ValueError(f"not hex colours: {', '.join(bad)} (use #rgb or #rrggbb)")
         st["palette"] = [c.lower() for c in palette]
-    for k in drop_refs or []:
+    drop_refs = list(drop_refs or [])
+    new_refs = {}
+    for name, r in (refs or {}).items():  # validate every ref before copying any
+        _check_name(name, "ref")
+        r = r if isinstance(r, dict) else {"path": r}
+        if not r.get("path"):  # NAME= / null removes it, like params and snippets
+            drop_refs.append(name)
+        else:
+            new_refs[name] = (_image(r["path"], "refs"), r.get("role", ""))
+    for k in drop_refs:
         if k not in st["refs"]:
             raise ValueError(f"no ref '{k}'")
         del st["refs"][k]
-    for name, r in (refs or {}).items():
-        r = r if isinstance(r, dict) else {"path": r}
-        _add_ref(proj, name, r["path"], r.get("role", ""))
+    for name, (src, role) in new_refs.items():
+        _add_ref(proj, name, src, role)
     return [k for k in st if st[k] != before.get(k)]
 
 
 def set_state(slug: str, note: str | None = None, author: str = "human", **changes) -> dict:
     """Change the project state and commit it as a new version. Returns the new version entry."""
-    proj = load(slug)
-    changed = _apply(proj, **changes)
-    if not changed:
-        raise ValueError("nothing changed")
-    v = _commit(proj, changed, author, note)
-    save(proj)
+    with locked(slug):
+        proj = load(slug)
+        changed = _apply(proj, **changes)
+        if not changed:
+            raise ValueError("nothing changed")
+        v = _commit(proj, changed, author, note)
+        save(proj)
     return v
 
 
@@ -195,11 +245,16 @@ def full_prompt(state: dict, extra: str | None = None) -> str:
     return ", ".join(p.strip().strip(",") for p in parts if p and p.strip())
 
 
-def _sidecar_file(img: Path) -> Path | None:
-    for cand in (img.with_suffix(".json"), img.with_name(img.stem.removesuffix("-transparent") + ".json")):
-        if cand.is_file():
-            return cand
-    return None
+def _tag_json(f: Path, tag: dict) -> None:
+    """Add "project": tag to a sidecar or run.json written by generate(); unreadable ones are skipped."""
+    try:
+        meta = json.loads(f.read_text())
+    except (OSError, ValueError):
+        imagegen.log(f"warning: could not tag {f} with the project")
+        return
+    if isinstance(meta, dict):
+        meta["project"] = tag
+        f.write_text(json.dumps(meta, indent=2))
 
 
 def run_pass(slug: str, count: int = 4, extra: str | None = None, seed: int | None = None,
@@ -213,6 +268,8 @@ def run_pass(slug: str, count: int = 4, extra: str | None = None, seed: int | No
     prompt = full_prompt(st, extra)
     if not prompt:
         raise ValueError(f"project '{slug}' has no prompt yet: gen project set {slug} --prompt '...'")
+    if strength is not None and ref is None:
+        raise ValueError("strength needs a ref (img2img from a project ref)")
     p = st["params"]
     kwargs = dict(prompt=prompt, preset=st["preset"], count=count, seed=seed, negative=st["negative"],
                   width=p.get("width"), height=p.get("height"), steps=p.get("steps"), cfg=p.get("cfg"),
@@ -224,21 +281,23 @@ def run_pass(slug: str, count: int = 4, extra: str | None = None, seed: int | No
                       denoise=strength if strength is not None else p.get("strength"))
     run = imagegen.generate(**kwargs)
 
+    # tagged afterwards rather than inside generate(), so generate() needs no project knowledge
     tag = {"slug": slug, "version": v, **({"ref": ref} if ref else {})}
     for im in run["images"]:
-        if (f := _sidecar_file(Path(im["path"]))) is not None:
-            meta = json.loads(f.read_text())
-            meta["project"] = tag
-            f.write_text(json.dumps(meta, indent=2))
+        img = Path(im["path"])
+        for f in (img.with_suffix(".json"), img.with_name(img.stem.removesuffix("-transparent") + ".json")):
+            if f.is_file():
+                _tag_json(f, tag)
+                break
+    _tag_json(Path(run["run_dir"]) / "run.json", tag)
     run["project"] = tag
-    rf = Path(run["run_dir"]) / "run.json"
-    rf.write_text(json.dumps({**json.loads(rf.read_text()), "project": tag}, indent=2))
 
-    proj = load(slug)  # re-read: a long run may overlap other changes
-    proj["passes"].append({"run_dir": run["run_dir"], "version": v, "at": _now(), "author": author,
-                           "count": len(run["images"]), "extra": extra, "ref": ref,
-                           "base_seed": run["base_seed"]})
-    save(proj)
+    with locked(slug):
+        proj = load(slug)  # re-read: other changes may have landed during the run
+        proj["passes"].append({"run_dir": run["run_dir"], "version": v, "at": _now(), "author": author,
+                               "count": len(run["images"]), "extra": extra, "ref": ref,
+                               "base_seed": run["base_seed"]})
+        save(proj)
     return run
 
 
@@ -250,10 +309,15 @@ def promote(slug: str, image: str, asset: str, note: str | None = None, as_ref: 
     came from a project pass, else the current one), which is what staleness is measured against.
     """
     _check_name(asset, "asset")
-    proj = load(slug)
-    src = imagegen.to_linux_path(image)
-    if not src.is_file():
-        raise FileNotFoundError(src)
+    if as_ref:
+        _check_name(as_ref, "ref")
+    src = _image(image, "assets")
+    with locked(slug):
+        return _promote(load(slug), src, asset, note, as_ref, author)
+
+
+def _promote(proj: dict, src: Path, asset: str, note: str | None, as_ref: str | None, author: str) -> dict:
+    slug = proj["slug"]
     meta = imagegen.find_sidecar(src) or {}
     origin = meta.get("project") or {}
     made_from = origin.get("version") if origin.get("slug") == slug else None
@@ -272,7 +336,7 @@ def promote(slug: str, image: str, asset: str, note: str | None = None, as_ref: 
     entry["current"], entry["kept_at"] = n, None
     changed = ["assets"]
     if as_ref:
-        _add_ref(proj, as_ref, str(dest))
+        _add_ref(proj, as_ref, dest)
         changed.append("refs")
     v = _commit(proj, changed, author, note or f"promote {asset} v{n}")
     save(proj)
@@ -281,12 +345,13 @@ def promote(slug: str, image: str, asset: str, note: str | None = None, as_ref: 
 
 def keep(slug: str, asset: str, note: str | None = None, author: str = "human") -> dict:
     """Mark an asset as still fine at the current project version (clears its stale flag)."""
-    proj = load(slug)
-    if asset not in proj["assets"]:
-        raise ValueError(f"no asset '{asset}'")
-    proj["assets"][asset]["kept_at"] = proj["version"]
-    v = _commit(proj, ["assets"], author, note or f"keep {asset} as-is")
-    save(proj)
+    with locked(slug):
+        proj = load(slug)
+        if asset not in proj["assets"]:
+            raise ValueError(f"no asset '{asset}'")
+        proj["assets"][asset]["kept_at"] = proj["version"]
+        v = _commit(proj, ["assets"], author, note or f"keep {asset} as-is")
+        save(proj)
     return v
 
 
@@ -333,16 +398,23 @@ def summary(slug: str, mark_seen: str | None = None, history: int = 5) -> dict:
         "recent_passes": proj["passes"][-history:],
     }
     if mark_seen:
-        seen = proj.setdefault("seen", {}).get(mark_seen)
+        # kept out of project.json so that reading a project never rewrites its state
+        seen_file = d / "seen.json"
+        with locked(slug):
+            try:
+                seen_all = json.loads(seen_file.read_text())
+            except (OSError, ValueError):
+                seen_all = {}
+            seen = seen_all.get(mark_seen)
+            now = {"version": proj["version"], "passes": len(proj["passes"])}
+            if seen != now:
+                _write_json(seen_file, {**seen_all, mark_seen: now})
         if seen is not None:
             out["new_since_last_look"] = {
                 "since": seen,
                 "versions": [{k: v[k] for k in ("version", "author", "note", "changed")}
                              for v in proj["versions"] if v["version"] > seen["version"]],
                 "passes": proj["passes"][seen["passes"]:]}
-        if seen != (now := {"version": proj["version"], "passes": len(proj["passes"])}):
-            proj["seen"][mark_seen] = now
-            save(proj)
     return out
 
 
