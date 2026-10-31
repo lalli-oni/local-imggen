@@ -8,6 +8,7 @@ Usage:
   gen "x" --seed 123 --size 832x1216 --steps 40 --neg "people"
   gen vary PATH -n 4 --strength 0.4             # img2img variations of an image
   gen vary PATH --mask MASK.png --prompt "..."  # inpaint: repaint only the white part of MASK
+  gen edit PATH "make it wave, side view"      # instruction edit (FLUX.1 Kontext, opt-in models)
   gen cutout PATH                               # remove the background -> PATH-transparent.png
   gen presets                                   # list presets
   gen recent [N]                                # last N runs
@@ -55,6 +56,11 @@ def load_config() -> dict:
     if v := os.environ.get("IMAGEGEN_COMFY_URL"):
         cfg["comfy_url"] = v
     return cfg
+
+
+# Preset keys that are not workflow values (generate() drops them before filling the workflow).
+NOT_PARAMS = {"workflow", "img2img_workflow", "inpaint_workflow", "edit_workflow", "description",
+              "suffix", "negative_extra", "post"}
 
 
 def list_presets() -> dict[str, dict]:
@@ -172,13 +178,26 @@ def _source_size(w: int, h: int) -> tuple[int, int]:
     return max(64, round(w * k / 64) * 64), max(64, round(h * k / 64) * 64)
 
 
-def prepare_source(path: Path, mask: Path | None = None) -> tuple[bytes, bytes | None, tuple[int, int]]:
+# Kontext's preferred sizes (ComfyUI's FluxKontextImageScale picks the closest aspect ratio from these).
+KONTEXT_SIZES = [(672, 1568), (688, 1504), (720, 1456), (752, 1392), (800, 1328), (832, 1248), (880, 1184),
+                 (944, 1104), (1024, 1024), (1104, 944), (1184, 880), (1248, 832), (1328, 800), (1392, 752),
+                 (1456, 720), (1504, 688), (1568, 672)]
+
+
+def kontext_size(w: int, h: int) -> tuple[int, int]:
+    """The Kontext size with the closest aspect ratio, so FluxKontextImageScale leaves the image as is."""
+    return min(KONTEXT_SIZES, key=lambda s: abs(s[0] / s[1] - w / h))
+
+
+def prepare_source(path: Path, mask: Path | None = None,
+                   size_fn=None) -> tuple[bytes, bytes | None, tuple[int, int]]:
     """Load the source (and optional mask) as PNG bytes at an SDXL-friendly size.
 
     Transparency is flattened onto white, so icons and cut-outs work as sources.
     Mask: white = repaint, black = keep. It is resized to the source's size and its edge is
     feathered by MASK_FEATHER px, so pixels just outside the white area blend a little.
-    Output is at this ~1 MP size, not the source's resolution.
+    Output is at this ~1 MP size, not the source's resolution. size_fn(w, h) picks another size
+    (edit uses kontext_size).
     """
     from PIL import Image  # lazy: only img2img needs it
 
@@ -194,7 +213,7 @@ def prepare_source(path: Path, mask: Path | None = None) -> tuple[bytes, bytes |
         bg = Image.new("RGB", im.size, (255, 255, 255))
         bg.paste(im, mask=im.getchannel("A"))
         im = bg
-    size = _source_size(*im.size)
+    size = (size_fn or _source_size)(*im.size)
     src = png(im.convert("RGB").resize(size, Image.LANCZOS))
     m = None
     if mask is not None:
@@ -249,9 +268,10 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
              negative: str | None = None, width: int | None = None, height: int | None = None,
              steps: int | None = None, cfg: float | None = None, label: str | None = None,
              source_image: str | None = None, mask: str | None = None,
-             denoise: float | None = None) -> dict:
+             denoise: float | None = None, edit: bool = False, guidance: float | None = None) -> dict:
     """txt2img by default. With source_image: img2img (denoise = how much may change, 0-1).
-    With source_image + mask: inpaint, only the white part of the mask is repainted."""
+    With source_image + mask: inpaint, only the white part of the mask is repainted.
+    With source_image + edit=True: the prompt is an edit instruction for the preset's edit_workflow."""
     conf = load_config()
     presets = conf["presets"]
     if preset not in presets:
@@ -260,13 +280,31 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
     count = max(1, int(count))
     if mask is not None and source_image is None:
         raise ValueError("a mask needs a source image")
+    if edit:
+        if source_image is None:
+            raise ValueError("edit needs a source image")
+        if mask is not None:
+            raise ValueError("edit takes no mask (describe what to change instead)")
+        ignored = [k for k, v in (("negative", negative), ("denoise", denoise), ("cfg", cfg),
+                                  ("width", width), ("height", height)) if v is not None]
+        if ignored:  # the Kontext graph has none of these (cfg is fixed at 1, size follows the source)
+            raise ValueError(f"edit does not take {', '.join(ignored)}")
+        if "edit_workflow" not in p:
+            edit_presets = [n for n, q in presets.items() if "edit_workflow" in q]
+            raise ValueError(f"preset '{preset}' can't edit; edit presets: {', '.join(edit_presets) or 'none'}")
+    elif "workflow" not in p:
+        raise ValueError(f"preset '{preset}' is edit-only: use gen edit IMAGE \"instruction\"")
 
-    workflow = p["workflow"]
+    workflow = p.get("workflow")
     src_path = mask_path = None
     if source_image is not None:
         src_path = to_linux_path(source_image)
         if not src_path.is_file():
             raise FileNotFoundError(src_path)
+    if edit:
+        workflow = p["edit_workflow"]
+        src_png, mask_png, src_size = prepare_source(src_path, size_fn=kontext_size)
+    elif src_path is not None:
         if mask is not None:
             mask_path = to_linux_path(mask)
             if not mask_path.is_file():
@@ -281,14 +319,14 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
     template = json.loads((ROOT / "workflows" / workflow).read_text())
     base_seed = seed if seed is not None else random.randrange(MAX_SEED)
     full_prompt = prompt + p.get("suffix", "")
-    full_negative = (negative if negative is not None else conf.get("default_negative", "")) \
-        + p.get("negative_extra", "")
+    full_negative = "" if edit else (negative if negative is not None else conf.get("default_negative", "")) \
+        + p.get("negative_extra", "")  # edit workflows (Kontext, cfg 1) have no negative
 
-    params = {k: v for k, v in p.items() if k not in ("workflow", "img2img_workflow", "inpaint_workflow",
-                                                      "description", "suffix", "negative_extra", "post")}
-    params.update(checkpoint=p.get("checkpoint", conf["checkpoint"]),
-                  prompt=full_prompt, negative=full_negative)
-    for k, v in (("width", width), ("height", height), ("steps", steps), ("cfg", cfg)):
+    params = {k: v for k, v in p.items() if k not in NOT_PARAMS}
+    params.update(prompt=full_prompt, negative=full_negative)
+    if not edit:
+        params["checkpoint"] = p.get("checkpoint", conf["checkpoint"])
+    for k, v in (("width", width), ("height", height), ("steps", steps), ("cfg", cfg), ("guidance", guidance)):
         if v is not None:
             params[k] = v
 
@@ -305,12 +343,14 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
         # content-addressed names: re-running on the same source/mask overwrites instead of piling up
         def name(kind: str, data: bytes) -> str:
             return f"imagegen-{kind}-{hashlib.sha1(data).hexdigest()[:16]}.png"
-        params.update(image=comfy.upload(src_png, name("src", src_png)), denoise=denoise,
+        params.update(image=comfy.upload(src_png, name("src", src_png)),
                       width=src_size[0], height=src_size[1])
+        if not edit:
+            params["denoise"] = denoise
         if mask_png is not None:
             params["mask"] = comfy.upload(mask_png, name("mask", mask_png))
         source = {"source_image": str(src_path), "mask": str(mask_path) if mask_path else None,
-                  "denoise": denoise}
+                  "denoise": None if edit else denoise, "edit": edit}
 
     # queue everything up front; ComfyUI works through it while we wait
     jobs = []
@@ -364,6 +404,10 @@ def vary(path: str, count: int = 4, strength: float | None = None, prompt: str |
     if not src.is_file():
         raise FileNotFoundError(src)
     meta = find_sidecar(src) or {}
+    if meta.get("edit"):  # an edit's prompt is an instruction and its preset is edit-only: not reusable here
+        if prompt is None:
+            raise ValueError(f"{src.name} came from gen edit, so its prompt is an instruction; pass a prompt")
+        meta = {}
     if prompt is None:
         prompt = meta.get("prompt")
         if prompt is None:
@@ -376,8 +420,26 @@ def vary(path: str, count: int = 4, strength: float | None = None, prompt: str |
                     source_image=str(src), mask=mask, denoise=strength)
 
 
+EDIT_PRESET = "kontext"
+
+
+def edit(path: str, instruction: str, count: int = 1, preset: str = EDIT_PRESET, seed: int | None = None,
+         steps: int | None = None, guidance: float | None = None, label: str | None = None) -> dict:
+    """Edit an image by instruction ("make it wave, keep the same character"). Output is ~1 MP
+    at the Kontext size closest to the source's aspect ratio.
+
+    Each image is a fresh edit of the source with its own seed, not a chain of edits.
+    """
+    if not instruction.strip():
+        raise ValueError("edit needs an instruction")
+    stem = Path(path.replace("\\", "/")).stem
+    return generate(instruction, preset, count, seed, steps=steps, guidance=guidance,
+                    label=label or f"edit-{slug(stem, 20)}-{slug(instruction, 20)}",
+                    source_image=path, edit=True)
+
+
 SHEET_TEMPLATE = ROOT / "templates" / "contact_sheet.html"
-SHEET_PARAMS = ("width", "height", "steps", "cfg")  # shown per image when the sidecar has them
+SHEET_PARAMS = ("width", "height", "steps", "cfg", "guidance")  # shown per image when the sidecar has them
 
 
 def write_contact_sheet(run_dir: Path, run: dict) -> Path:
@@ -402,7 +464,7 @@ def write_contact_sheet(run_dir: Path, run: dict) -> Path:
             "count": run["count"], "transparent": transparent, "images": images,
             "negative": (first or {}).get("negative"),
             "source_image": Path(run["source_image"]).name if run.get("source_image") else None,
-            "mask": bool(run.get("mask")), "denoise": run.get("denoise")}
+            "mask": bool(run.get("mask")), "denoise": run.get("denoise"), "edit": bool(run.get("edit"))}
     # "<" escaped so no value can close the <script> block it is inlined into
     fills = {"TITLE": html.escape(run["prompt"][:60]),
              "RUN_JSON": json.dumps(data, ensure_ascii=False).replace("<", "\\u003c")}
@@ -497,7 +559,7 @@ def main(argv: list[str]) -> int:
     import argparse
     if argv and argv[0] == "presets":
         for name, p in list_presets().items():
-            print(f"{name:22} {p.get('description', '')}")
+            print(f"{name:22} {'(gen edit only) ' if 'workflow' not in p else ''}{p.get('description', '')}")
         return 0
     if argv and argv[0] == "recent":
         for r in recent_runs(int(argv[1]) if len(argv) > 1 else 5):
@@ -525,6 +587,24 @@ def main(argv: list[str]) -> int:
         a = vp.parse_args(argv[1:])
         run = vary(a.path, a.count, a.strength, a.prompt, a.negative, a.preset, a.mask,
                    a.seed, a.steps, a.cfg, a.label)
+        _print_run(run, a.open)
+        return 0
+    if argv and argv[0] == "edit":
+        ep = argparse.ArgumentParser(
+            prog="gen edit", description="Edit an image by instruction (FLUX.1 Kontext). "
+            "Say what to change and what to keep, e.g. \"Make the character wave with one tentacle, "
+            "seen from the side. Keep the same character design, colors and art style.\"")
+        ep.add_argument("path")
+        ep.add_argument("instruction")
+        ep.add_argument("-n", "--count", type=int, default=1, help="edits to make, one seed each (default 1)")
+        ep.add_argument("-p", "--preset", default=EDIT_PRESET)
+        ep.add_argument("--seed", type=int)
+        ep.add_argument("--steps", type=int, help="default from the preset (20)")
+        ep.add_argument("-g", "--guidance", type=float, help="how strongly to follow the text (default 2.5)")
+        ep.add_argument("--label", help="folder name instead of edit-<image>-<instruction>")
+        ep.add_argument("--open", action="store_true", help="open contact sheet in Windows browser")
+        a = ep.parse_args(argv[1:])
+        run = edit(a.path, a.instruction, a.count, a.preset, a.seed, a.steps, a.guidance, a.label)
         _print_run(run, a.open)
         return 0
     if argv and argv[0] == "cutout":

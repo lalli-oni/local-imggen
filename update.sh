@@ -194,7 +194,7 @@ show_incoming() {
     any=1; echo "  - (update.sh itself changes; the new version runs from next time)"
   fi
   [ $any -eq 0 ] && echo "  - nothing beyond updating the files"
-  echo "  Scripts in windows/ and setup.sh are never run automatically."
+  echo "  Scripts in windows/, models/ and setup.sh are never run automatically."
   echo
 }
 

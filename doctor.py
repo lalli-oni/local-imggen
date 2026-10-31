@@ -22,15 +22,23 @@ COMFY_VENV_PY = Path.home() / "venvs" / "comfy" / "bin" / "python"
 EXPECTED_TORCH = "2.9.1+rocm7.2.0"
 LIMITS_DROPIN = Path("/etc/systemd/system/comfyui.service.d/zz-imagegen-limits.conf")
 # Keys generate() drops from a preset before filling the workflow, plus the ones it always adds.
-NOT_PARAMS = {"workflow", "img2img_workflow", "inpaint_workflow", "description", "suffix",
-              "negative_extra", "post"}
+NOT_PARAMS = imagegen.NOT_PARAMS
 STANDARD_PARAMS = {"seed", "prompt", "negative", "checkpoint"}
 # Each mode a preset can run in: (preset key, default workflow, extra params generate() adds).
 MODES = [("workflow", None, set()),
          ("img2img_workflow", "sdxl_img2img.json", {"image", "denoise"}),
          ("inpaint_workflow", "sdxl_inpaint.json", {"image", "denoise", "mask"})]
+# Edit-only presets (edit_workflow, no workflow) run in this mode instead.
+EDIT_MODE = ("edit_workflow", None, {"image", "width", "height"})
 # Which ComfyUI model folder each model-like preset key lives in.
-MODEL_KEYS = {"checkpoint": "checkpoints", "upscale_model": "upscale_models"}
+MODEL_KEYS = {"checkpoint": "checkpoints", "upscale_model": "upscale_models", "unet": "diffusion_models",
+              "clip_l": "text_encoders", "t5": "text_encoders", "vae": "vae"}
+OPT_IN_MODELS = "~/imagegen/models/flux-kontext.sh"
+
+
+def _modes(p: dict) -> list[tuple[str, str | None, set[str]]]:
+    """The modes a preset runs in: text/img2img/inpaint if it has a workflow, edit if it has an edit_workflow."""
+    return (MODES if "workflow" in p else []) + ([EDIT_MODE] if "edit_workflow" in p else [])
 
 
 def _check(name: str, status: str, detail: str, fix: str | None = None) -> dict:
@@ -120,23 +128,42 @@ def _model_names(url: str, folder: str, api_up: bool) -> tuple[set[str], str]:
     return names, str(d)
 
 
+def _placeholders(p: dict, edit: bool) -> set[str]:
+    """{{keys}} used by the preset's edit workflow (edit=True) or by its other workflows."""
+    keys: set[str] = set()
+    for key, default, _ in _modes(p):
+        if (key == EDIT_MODE[0]) == edit:
+            try:
+                keys |= set(imagegen._PLACEHOLDER.findall((imagegen.ROOT / "workflows" / p.get(key, default)).read_text()))
+            except OSError:
+                pass  # check_workflows reports it
+    return keys
+
+
 def check_models(conf: dict, api_up: bool) -> list[dict]:
     url = conf["comfy_url"]
-    wanted: dict[str, set[str]] = {}
+    # folder -> model -> required. Models only an edit workflow uses are opt-in downloads: missing = warn.
+    wanted: dict[str, dict[str, bool]] = {}
     for p in conf["presets"].values():
+        edit_only_keys = _placeholders(p, edit=True) - _placeholders(p, edit=False)
         for key, folder in MODEL_KEYS.items():
-            name = p.get(key, conf.get("checkpoint") if key == "checkpoint" else None)
+            required = "workflow" in p and key not in edit_only_keys
+            name = p.get(key, conf.get("checkpoint") if key == "checkpoint" and "workflow" in p else None)
             if name:
-                wanted.setdefault(folder, set()).add(name)
+                names = wanted.setdefault(folder, {})
+                names[name] = names.get(name, False) or required
     out = []
     for folder, names in sorted(wanted.items()):
         have, source = _model_names(url, folder, api_up)
-        for name in sorted(names):
+        for name, required in sorted(names.items()):
             if name in have:
                 out.append(_check(f"model {name}", "ok", f"found in {folder} ({source})"))
-            else:
+            elif required:
                 out.append(_check(f"model {name}", "fail", f"missing from {folder} ({source})",
                                   f"put it in {COMFY_DIR / 'models' / folder}/ (setup.sh fetches the upscaler)"))
+            else:
+                out.append(_check(f"model {name}", "warn", f"missing from {folder} ({source}); "
+                                  "only gen edit needs it", f"opt-in download: {OPT_IN_MODELS}"))
     # rembg: used by the icon preset's remove_bg step and by `gen cutout`
     u2 = Path(os.environ.get("U2NET_HOME", Path.home() / ".u2net")).expanduser() / "u2net.onnx"
     if u2.is_file():
@@ -149,13 +176,17 @@ def check_models(conf: dict, api_up: bool) -> list[dict]:
 
 
 def check_workflows(conf: dict) -> list[dict]:
-    """Every {{key}} in each workflow a preset can use (text, img2img, inpaint) must get a value."""
+    """Every {{key}} in each workflow a preset can use (text, img2img, inpaint, edit) must get a value."""
     out = []
     for name, p in conf["presets"].items():
         have = (set(p) - NOT_PARAMS) | STANDARD_PARAMS
         problems, used = [], []
-        for key, default, extra in MODES:
+        if not _modes(p):
+            problems.append("no workflow or edit_workflow set")
+        for key, default, extra in _modes(p):
             wf_name = p.get(key, default)
+            # generate() adds checkpoint only outside edit mode (unless the preset sets it)
+            mode_have = have - {"checkpoint"} if key == EDIT_MODE[0] and "checkpoint" not in p else have
             if not wf_name:
                 problems.append(f"no {key} set")
                 continue
@@ -167,7 +198,7 @@ def check_workflows(conf: dict) -> list[dict]:
                 problems.append(f"{wf_name}: {e}")
                 continue
             used.append(wf_name)
-            missing = sorted(set(imagegen._PLACEHOLDER.findall(text)) - have - extra)
+            missing = sorted(set(imagegen._PLACEHOLDER.findall(text)) - mode_have - extra)
             if missing:
                 problems.append(f"{wf_name}: no value for {', '.join('{{' + k + '}}' for k in missing)}")
         bad_post = [s for s in p.get("post", []) if s not in imagegen.POST]
@@ -179,6 +210,39 @@ def check_workflows(conf: dict) -> list[dict]:
         else:
             out.append(_check(f"preset {name}", "ok", f"{', '.join(used)}: all placeholders filled"))
     return out
+
+
+def check_nodes(conf: dict, url: str) -> dict:
+    """Every node type the presets' workflows use must exist in this ComfyUI (Kontext needs a mid-2025+ one).
+
+    Missing nodes that only edit workflows use are a warning: gen edit is opt-in.
+    """
+    classes: dict[str, set[str]] = {}  # class_type -> workflows using it
+    required: set[str] = set()  # class_types some non-edit workflow uses
+    for p in conf["presets"].values():
+        for key, default, _ in _modes(p):
+            wf_name = p.get(key, default)
+            try:
+                wf = json.loads((imagegen.ROOT / "workflows" / wf_name).read_text())
+            except Exception:
+                continue  # check_workflows reports it
+            for node in wf.values():
+                if isinstance(node, dict) and "class_type" in node:
+                    classes.setdefault(node["class_type"], set()).add(wf_name)
+                    if key != EDIT_MODE[0]:
+                        required.add(node["class_type"])
+    try:
+        available = _get_json(f"{url.rstrip('/')}/object_info", timeout=30)
+        missing = {c: wfs for c, wfs in classes.items() if c not in available}
+    except Exception as e:
+        return _check("ComfyUI nodes", "warn", f"could not list nodes ({e})")
+    if not missing:
+        return _check("ComfyUI nodes", "ok", f"all {len(classes)} node types the workflows use are available")
+    detail = "; ".join(f"{c} (in {', '.join(sorted(w))})" for c, w in sorted(missing.items()))
+    return _check("ComfyUI nodes", "fail" if required & set(missing) else "warn", f"missing: {detail}",
+                  "update ComfyUI: cd ~/comfyui && git pull, then pip install its requirements.txt into "
+                  "~/venvs/comfy with torch/torchvision/torchaudio/triton filtered out; "
+                  "then sudo systemctl restart comfyui")
 
 
 def check_output_dir(conf: dict) -> dict:
@@ -230,6 +294,8 @@ def run_checks(include_mcp: bool = True) -> list[dict]:
     checks.append(check_torch())
     checks += check_models(conf, api_up=stats is not None)
     checks += check_workflows(conf)
+    if stats is not None:
+        checks.append(check_nodes(conf, conf["comfy_url"]))
     checks.append(check_output_dir(conf))
     if include_mcp:
         checks.append(check_mcp_import())

@@ -1,0 +1,15 @@
+{
+  "37": {"class_type": "UNETLoader", "inputs": {"unet_name": "{{unet}}", "weight_dtype": "default"}},
+  "38": {"class_type": "DualCLIPLoader", "inputs": {"clip_name1": "{{clip_l}}", "clip_name2": "{{t5}}", "type": "flux"}},
+  "39": {"class_type": "VAELoader", "inputs": {"vae_name": "{{vae}}"}},
+  "13": {"class_type": "LoadImage", "inputs": {"image": "{{image}}"}},
+  "42": {"class_type": "FluxKontextImageScale", "inputs": {"image": ["13", 0]}},
+  "5": {"class_type": "VAEEncode", "inputs": {"pixels": ["42", 0], "vae": ["39", 0]}},
+  "6": {"class_type": "CLIPTextEncode", "inputs": {"text": "{{prompt}}", "clip": ["38", 0]}},
+  "40": {"class_type": "ReferenceLatent", "inputs": {"conditioning": ["6", 0], "latent": ["5", 0]}},
+  "35": {"class_type": "FluxGuidance", "inputs": {"conditioning": ["40", 0], "guidance": "{{guidance}}"}},
+  "41": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["6", 0]}},
+  "3": {"class_type": "KSampler", "inputs": {"seed": "{{seed}}", "steps": "{{steps}}", "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0, "model": ["37", 0], "positive": ["35", 0], "negative": ["41", 0], "latent_image": ["5", 0]}},
+  "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["39", 0]}},
+  "9": {"class_type": "SaveImage", "inputs": {"filename_prefix": "imagegen", "images": ["8", 0]}}
+}
