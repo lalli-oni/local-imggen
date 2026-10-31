@@ -403,7 +403,9 @@ def write_contact_sheet(run_dir: Path, run: dict) -> Path:
             "count": run["count"], "transparent": transparent, "images": images,
             "negative": (first or {}).get("negative"),
             "source_image": Path(run["source_image"]).name if run.get("source_image") else None,
-            "mask": bool(run.get("mask")), "denoise": run.get("denoise")}
+            "source_file": _sheet_source(run_dir, run.get("source_image")),
+            "mask": bool(run.get("mask")), "denoise": run.get("denoise"),
+            "run_dir": str(run_dir), "project": run.get("project")}
     # "<" escaped so no value can close the <script> block it is inlined into
     fills = {"TITLE": html.escape(run["prompt"][:60]),
              "RUN_JSON": json.dumps(data, ensure_ascii=False).replace("<", "\\u003c")}
@@ -411,6 +413,22 @@ def write_contact_sheet(run_dir: Path, run: dict) -> Path:
     out = run_dir / "index.html"
     out.write_text(page, encoding="utf-8")
     return out
+
+
+def _sheet_source(run_dir: Path, source: str | None) -> str | None:
+    """The input image of an img2img/inpaint run, copied next to the sheet as source.<ext>.
+
+    A copy rather than a link: file:// pages cannot reach WSL paths, and the original may change later.
+    """
+    if not source:
+        return None
+    src = Path(source)
+    dest = run_dir / f"source{src.suffix.lower() or '.png'}"
+    if not dest.is_file():
+        if not src.is_file():
+            return None  # moved or deleted since the run; the header still names it
+        shutil.copy2(src, dest)
+    return dest.name
 
 
 def find_run_files(path: str | None = None) -> list[Path]:
