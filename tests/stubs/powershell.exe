@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Fake powershell.exe: records the call (set_wallpaper sends an -EncodedCommand), does nothing.
+. "$(dirname "$0")/_log.sh"

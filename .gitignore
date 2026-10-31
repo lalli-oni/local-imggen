@@ -11,3 +11,5 @@ venv/
 *.onnx
 # outputs (normally on the Windows side anyway)
 outputs/
+.pytest_cache/
+.venv-test/

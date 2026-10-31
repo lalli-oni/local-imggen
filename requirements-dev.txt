@@ -1,0 +1,7 @@
+# Test-only dependencies for ./test.sh (installed into .venv-test, never into ~/venvs/comfy).
+# Never add torch, torchvision, torchaudio or triton here.
+# rembg is left out on purpose: the tests stub it (it pulls onnxruntime and a 170 MB model).
+mcp>=2,<3
+pillow
+pytest>=8
+shellcheck-py
