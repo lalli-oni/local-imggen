@@ -312,6 +312,10 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
             params["mask"] = comfy.upload(mask_png, name("mask", mask_png))
         source = {"source_image": str(src_path), "mask": str(mask_path) if mask_path else None,
                   "denoise": denoise}
+        try:  # exactly what the model got, for the contact sheet's input card
+            (run_dir / SHEET_SOURCE).write_bytes(src_png)
+        except OSError as e:
+            log(f"warning: could not save {SHEET_SOURCE}: {e}")
 
     # queue everything up front; ComfyUI works through it while we wait
     jobs = []
@@ -378,6 +382,7 @@ def vary(path: str, count: int = 4, strength: float | None = None, prompt: str |
 
 
 SHEET_TEMPLATE = ROOT / "templates" / "contact_sheet.html"
+SHEET_SOURCE = "source.png"  # an img2img/inpaint run's input as the model got it, shown on the sheet
 SHEET_PARAMS = ("width", "height", "steps", "cfg")  # shown per image when the sidecar has them
 
 
@@ -403,7 +408,9 @@ def write_contact_sheet(run_dir: Path, run: dict) -> Path:
             "count": run["count"], "transparent": transparent, "images": images,
             "negative": (first or {}).get("negative"),
             "source_image": Path(run["source_image"]).name if run.get("source_image") else None,
-            "mask": bool(run.get("mask")), "denoise": run.get("denoise")}
+            "source_file": _sheet_source(run_dir, run.get("source_image")),
+            "mask": bool(run.get("mask")), "denoise": run.get("denoise"),
+            "run_dir": str(run_dir), "project": run.get("project")}
     # "<" escaped so no value can close the <script> block it is inlined into
     fills = {"TITLE": html.escape(run["prompt"][:60]),
              "RUN_JSON": json.dumps(data, ensure_ascii=False).replace("<", "\\u003c")}
@@ -411,6 +418,25 @@ def write_contact_sheet(run_dir: Path, run: dict) -> Path:
     out = run_dir / "index.html"
     out.write_text(page, encoding="utf-8")
     return out
+
+
+def _sheet_source(run_dir: Path, source: str | None) -> str | None:
+    """The input image of an img2img/inpaint run, as the source.png that generate() saves next to the sheet.
+
+    A copy rather than a link: file:// pages cannot reach WSL paths, and the original may change later.
+    Runs made before generate() saved it get one made from the original now (same ~1 MP prep the model
+    got; it may differ if the original changed since).
+    """
+    if not source:
+        return None
+    dest = run_dir / SHEET_SOURCE
+    if not dest.is_file():
+        try:
+            dest.write_bytes(prepare_source(Path(source))[0])
+        except Exception as e:  # moved, deleted, unreadable: the header still names the source
+            log(f"note: no input image for the sheet ({type(e).__name__}: {e})")
+            return None
+    return dest.name
 
 
 def find_run_files(path: str | None = None) -> list[Path]:

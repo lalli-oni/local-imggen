@@ -7,7 +7,10 @@
   Contact sheet for one imagegen run. Written by imagegen.write_contact_sheet(), which fills
   RUN_JSON below. Static and self-contained (opened via file://): no fetches, no libraries.
   Keys: f = fit all / grid, + / - = size, click = view, Ctrl/Shift-click = pick for compare,
-  in a viewer: Esc close, arrows step, c pick, s side-by-side / w wipe, x swap.
+  in a viewer: Esc close, arrows step, c pick, i compare with the input image, p copy promote command,
+  s side-by-side / w wipe, x swap.
+  img2img/inpaint runs show their input image (source.png, saved by generate) as the
+  first card; project runs get a "promote" button that copies the `gen project promote` command.
 -->
 <style>
 :root {
@@ -52,7 +55,10 @@ figure.a img { outline-color: var(--pick-a); }
 figure.b img { outline-color: var(--pick-b); }
 figcaption { height: var(--cap); display: flex; align-items: center; gap: 8px; padding: 0 2px;
   color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; }
-figcaption .pick { margin-left: auto; padding: 0 8px; font-size: 11px; line-height: 16px; }
+figcaption button { padding: 0 8px; font-size: 11px; line-height: 16px; }
+figcaption .pick { margin-left: auto; }
+figure.src img { outline: 2px dashed var(--line); }
+figure.src figcaption b { color: var(--text); font-weight: 500; }
 figure.a .pick { border-color: var(--pick-a); color: var(--pick-a); }
 figure.b .pick { border-color: var(--pick-b); color: var(--pick-b); }
 .seed { cursor: copy; }
@@ -103,7 +109,7 @@ figure.b .pick { border-color: var(--pick-b); color: var(--pick-b); }
   <label title="Thumbnail size, switches to Grid (+ / -)">Size <input id="size" type="range" min="120" max="1200" step="20"></label>
   <button id="compare" disabled title="Ctrl/Shift-click two images, or use their 'compare' buttons">Compare</button>
   <button id="clear" hidden>Clear picks</button>
-  <span class="hint">click: view · Ctrl/Shift-click: pick for compare · click a seed to copy it</span>
+  <span class="hint">click: view · Ctrl/Shift-click: pick for compare · click a seed to copy it · in a viewer: i = vs input, p = copy promote</span>
 </div>
 
 <main id="grid"></main>
@@ -117,6 +123,8 @@ figure.b .pick { border-color: var(--pick-b); color: var(--pick-b); }
     </span>
     <button id="swap" title="Swap A and B (x)">Swap</button>
     <button id="view-pick" title="Pick for compare (c)">Pick</button>
+    <button id="view-vs" title="Compare with the input image (i)">vs input</button>
+    <button id="view-promote" title="Copy the gen project promote command (p)">Copy promote</button>
     <a id="view-open" target="_blank"><button tabindex="-1">Open PNG</button></a>
     <button id="view-close" title="Close (Esc)">Close</button>
   </div>
@@ -139,6 +147,19 @@ const store = {  // per-viewer settings; file:// storage can be missing or throw
 };
 
 const images = RUN.images.map((im, i) => ({ ...im, n: i + 1, src: encodeURIComponent(im.file) }));
+// the input image of an img2img/inpaint run goes first, so it is easy to compare against
+const SRC = RUN.source_file ? 0 : -1;
+if (RUN.source_file) images.unshift({ file: RUN.source_file, source: true, n: 0, src: encodeURIComponent(RUN.source_file) });
+const shq = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'";  // POSIX shell single quotes
+function promoteCmd(im) {
+  const p = RUN.project;
+  return `gen project promote ${p.slug} ${shq(RUN.run_dir.replace(/\/+$/, "") + "/" + im.file)}` +
+    ` --asset ${p.slug} --note ${shq(`v${p.version}${p.ref ? ` from ${p.ref}` : ""} #${im.n} seed ${im.seed}`)}`;
+}
+const label = (i) => images[i].source ? "input" : `#${images[i].n} · seed ${images[i].seed}`;
+function copyPromote(im) {
+  copy(promoteCmd(im), `promote command for #${im.n} copied (change --asset if needed)`);
+}
 const bgClass = RUN.transparent ? "checker" : "plain";
 const state = {
   layout: store.get("layout", "fit"),   // "fit" | "grid"
@@ -154,11 +175,12 @@ const state = {
 $("prompt").textContent = RUN.prompt;
 {
   const parts = [["preset", RUN.preset], [null, `${RUN.count} image(s)`], ["base seed", RUN.base_seed]];
-  const p0 = images[0] || {};
+  const p0 = images[SRC + 1] || {};
   if (p0.width && p0.height) parts.push([null, `${p0.width}×${p0.height}`]);
   if (p0.steps != null) parts.push(["steps", p0.steps]);
   if (p0.cfg != null) parts.push(["cfg", p0.cfg]);
   if (RUN.source_image) parts.push([RUN.mask ? "inpaint from" : "img2img from", `${RUN.source_image} @ ${RUN.denoise}`]);
+  if (RUN.project) parts.push(["project", `${RUN.project.slug} v${RUN.project.version}`]);
   $("meta").append(...parts.flatMap(([k, v], i) => [
     i ? " · " : "", k ? `${k} ` : "", el("b", { textContent: String(v) })]));
   if (RUN.negative) {
@@ -170,9 +192,9 @@ $("prompt").textContent = RUN.prompt;
 /* ---------- grid ---------- */
 const grid = $("grid");
 const cards = images.map((im, i) => {
-  const img = el("img", { src: im.src, alt: `#${im.n} seed ${im.seed}`, className: bgClass, loading: "lazy", decoding: "async" });
+  const img = el("img", { src: im.src, alt: label(i), className: bgClass, loading: "lazy", decoding: "async" });
   img.addEventListener("load", () => {
-    if (!state.aspectKnown && img.naturalHeight) {  // a run's images share one size
+    if (!im.source && !state.aspectKnown && img.naturalHeight) {  // a run's outputs share one size
       state.aspect = img.naturalWidth / img.naturalHeight;
       state.aspectKnown = true;
       layout();
@@ -185,11 +207,28 @@ const cards = images.map((im, i) => {
     if (e.ctrlKey || e.metaKey || e.shiftKey) togglePick(i);
     else openOne(i);
   });
-  const seed = el("span", { className: "seed", textContent: `seed ${im.seed}`, title: "copy seed" });
-  seed.addEventListener("click", () => copy(String(im.seed), `seed ${im.seed} copied`));
   const pick = el("button", { className: "pick", textContent: "compare", title: "pick for compare" });
   pick.addEventListener("click", () => togglePick(i));
-  const fig = el("figure", {}, a, el("figcaption", {}, `#${im.n}`, seed, pick));
+  let cap;
+  if (im.source) {
+    cap = el("figcaption", {}, el("b", { textContent: "input" }),
+      RUN.denoise != null ? `strength ${RUN.denoise}` : "", pick);
+  } else {
+    const seed = el("span", { className: "seed", textContent: `seed ${im.seed}`, title: "copy seed" });
+    seed.addEventListener("click", () => copy(String(im.seed), `seed ${im.seed} copied`));
+    cap = el("figcaption", {}, `#${im.n}`, seed, pick);
+    if (SRC >= 0) {
+      const vs = el("button", { textContent: "vs input", title: "compare with the input image" });
+      vs.addEventListener("click", () => compareWithInput(i));
+      cap.append(vs);
+    }
+    if (RUN.project) {
+      const pr = el("button", { textContent: "promote", title: "copy the gen project promote command" });
+      pr.addEventListener("click", () => copyPromote(im));
+      cap.append(pr);
+    }
+  }
+  const fig = el("figure", { className: im.source ? "src" : "" }, a, cap);
   fig.title = im.file;
   grid.append(fig);
   return fig;
@@ -263,11 +302,16 @@ function renderPicks() {
   $("clear").hidden = n === 0;
 }
 $("compare").onclick = openTwo;
+function compareWithInput(i) {  // input as A, this image as B
+  if (SRC < 0 || i === SRC) return;
+  state.picks = [SRC, i];
+  renderPicks();
+  openTwo();
+}
 $("clear").onclick = () => { state.picks = []; renderPicks(); };
 
 /* ---------- viewer ---------- */
 const view = $("view"), stage = $("stage");
-const label = (i) => `#${images[i].n} · seed ${images[i].seed}`;
 
 function openOne(i) { state.view = { kind: "one", i }; renderView(); }
 function openTwo() { if (state.picks.length === 2) { state.view = { kind: "two" }; renderView(); } }
@@ -279,14 +323,16 @@ function renderView() {
   stage.className = "stage" + (RUN.transparent ? " checkered" : "");
   const two = v.kind === "two";
   $("view-modes").hidden = $("swap").hidden = !two;
-  $("view-pick").hidden = $("view-open").hidden = two;
+  $("view-pick").hidden = $("view-open").hidden = $("view-vs").hidden = $("view-promote").hidden = two;
   if (!two) {
     const im = images[v.i];
     const k = state.picks.indexOf(v.i);
-    $("view-title").replaceChildren(el("b", { textContent: label(v.i) }), `  ${im.file}  (${v.i + 1}/${images.length}, ← →)`);
+    $("view-title").replaceChildren(el("b", { textContent: label(v.i) }), `  ${im.file}  (${im.source ? "input" : `${im.n}/${RUN.images.length}`}, ← →)`);
     $("view-pick").textContent = k === 0 ? "Picked A" : k === 1 ? "Picked B" : "Pick";
     $("view-pick").setAttribute("aria-pressed", k >= 0);
     $("view-open").href = im.src;
+    $("view-vs").hidden = SRC < 0 || im.source;
+    $("view-promote").hidden = !RUN.project || im.source;
     stage.replaceChildren(pane(v.i));
     return;
   }
@@ -326,6 +372,8 @@ function setCompareMode(m) { state.compareMode = m; store.set("compareMode", m);
 view.querySelectorAll("#view-modes button").forEach((btn) => btn.onclick = () => setCompareMode(btn.dataset.mode));
 $("swap").onclick = () => { state.picks.reverse(); renderPicks(); renderView(); };
 $("view-pick").onclick = () => togglePick(state.view.i);
+$("view-vs").onclick = () => compareWithInput(state.view.i);
+$("view-promote").onclick = () => copyPromote(images[state.view.i]);
 $("view-close").onclick = closeView;
 
 /* ---------- keys ---------- */
@@ -338,6 +386,8 @@ addEventListener("keydown", (e) => {
       v.i = (v.i + (k === "ArrowRight" ? 1 : -1) + images.length) % images.length;
       renderView();
     } else if (v.kind === "one" && k === "c") togglePick(v.i);
+    else if (v.kind === "one" && k === "i" && !$("view-vs").hidden) compareWithInput(v.i);
+    else if (v.kind === "one" && k === "p" && !$("view-promote").hidden) copyPromote(images[v.i]);
     else if (v.kind === "two" && k === "s") setCompareMode("side");
     else if (v.kind === "two" && k === "w") setCompareMode("wipe");
     else if (v.kind === "two" && k === "x") $("swap").click();
