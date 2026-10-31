@@ -7,7 +7,10 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
 - `config.toml`: ComfyUI URL, `output_dir` (Windows side, `/mnt/c/Users/lalli/Pictures/imagegen`), presets
 - `workflows/*.json`: ComfyUI **API-format** workflows; string values `"{{key}}"` are filled from preset/args
 - `imagegen.py`: core + `gen` CLI (`gen --help`, `gen presets`, `gen recent`, `gen set-wallpaper PATH`,
-  `gen vary PATH [--mask M] [-s 0.4]` for img2img/inpaint, `gen cutout PATH` for background removal)
+  `gen vary PATH [--mask M] [-s 0.4]` for img2img/inpaint, `gen cutout PATH` for background removal,
+  `gen sheet RUN_DIR` to rebuild a run's contact sheet)
+- `templates/contact_sheet.html`: the per-run `index.html` viewer (fit-all / size slider, A/B compare).
+  Static, no build, opened via file://; `write_contact_sheet` inlines the run data as JSON.
 - `mcp_server.py`: MCP tools (generate, get_job, vary, cutout, list_presets, recent_runs, view_image, set_wallpaper,
   open_contact_sheet)
 - `comfy/`: opt-in resource limits for the comfyui service, **off by default**. `comfy/limits.sh on|off|status`
