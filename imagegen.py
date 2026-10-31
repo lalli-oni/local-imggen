@@ -341,9 +341,9 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
         log(f"  [{i}/{count}] seed {s} done in {time.time() - t0:.1f}s")
 
     run = {"preset": preset, "prompt": prompt, "base_seed": base_seed, "count": count,
-           "run_dir": str(run_dir), "images": images, **(source or {})}
+           "run_dir": str(run_dir), "images": images, "transparent": bool(p.get("post")), **(source or {})}
     (run_dir / "run.json").write_text(json.dumps(run, indent=2))
-    sheet = write_contact_sheet(run_dir, run, transparent=bool(p.get("post")))
+    sheet = write_contact_sheet(run_dir, run)
     run["contact_sheet"] = str(sheet)
     run["contact_sheet_windows"] = to_windows_path(sheet)
     run["run_dir_windows"] = to_windows_path(run_dir)
@@ -379,21 +379,24 @@ SHEET_TEMPLATE = ROOT / "templates" / "contact_sheet.html"
 SHEET_PARAMS = ("width", "height", "steps", "cfg")  # shown per image when the sidecar has them
 
 
-def write_contact_sheet(run_dir: Path, run: dict, transparent: bool | None = None) -> Path:
+def write_contact_sheet(run_dir: Path, run: dict) -> Path:
     """Write <run_dir>/index.html: the viewer in templates/contact_sheet.html with this run's data inlined.
 
-    transparent=None guesses from the file names (rembg output ends in -transparent.png).
+    Checkerboard background when run["transparent"]; older run.json files lack it, so then
+    it is guessed from the file names (rembg output ends in -transparent.png).
     """
-    images = []
+    images, first = [], None
     for im in run["images"]:
         path = Path(im["path"])
+        meta = find_sidecar(run_dir / path.name) or {}
+        first = first if first is not None else meta
         entry = {"file": path.name, "seed": im["seed"]}
-        params = (find_sidecar(run_dir / path.name) or {}).get("params") or {}
+        params = meta.get("params") or {}
         entry.update({k: params[k] for k in SHEET_PARAMS if k in params})
         images.append(entry)
+    transparent = run.get("transparent")
     if transparent is None:
         transparent = any(e["file"].endswith("-transparent.png") for e in images)
-    first = find_sidecar(run_dir / images[0]["file"]) if images else None
     data = {"prompt": run["prompt"], "preset": run["preset"], "base_seed": run["base_seed"],
             "count": run["count"], "transparent": transparent, "images": images,
             "negative": (first or {}).get("negative"),
@@ -411,7 +414,7 @@ def write_contact_sheet(run_dir: Path, run: dict, transparent: bool | None = Non
 def rebuild_contact_sheet(path: str) -> Path:
     """Re-write an existing run's index.html from its run.json (path: the run folder, run.json or index.html)."""
     p = to_linux_path(path)
-    run_json = p if p.name == "run.json" else (p.parent if p.is_file() else p) / "run.json"
+    run_json = p if p.name == "run.json" else (p.parent if p.suffix else p) / "run.json"
     if not run_json.is_file():
         raise FileNotFoundError(run_json)
     return write_contact_sheet(run_json.parent, json.loads(run_json.read_text()))
@@ -509,9 +512,16 @@ def main(argv: list[str]) -> int:
         if len(argv) < 2:
             print("usage: gen sheet RUN_DIR... (rebuild index.html from run.json)", file=sys.stderr)
             return 2
+        status = 0
         for d in argv[1:]:
-            print(to_windows_path(out := rebuild_contact_sheet(d)) or out)
-        return 0
+            try:
+                out = rebuild_contact_sheet(d)
+            except (FileNotFoundError, KeyError, ValueError) as e:  # ValueError covers bad JSON
+                print(f"{d}: cannot rebuild ({type(e).__name__}: {e})", file=sys.stderr)
+                status = 1
+                continue
+            print(to_windows_path(out) or out)
+        return status
     if argv and argv[0] == "set-wallpaper":
         print("wallpaper set:", set_wallpaper(argv[1]))
         return 0

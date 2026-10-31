@@ -16,6 +16,7 @@
   --gap: 12px; --pad: 16px; --cap: 22px; --thumb: 320px;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, sans-serif; }
 button { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line);
   border-radius: 6px; padding: 3px 10px; cursor: pointer; }
@@ -99,7 +100,7 @@ figure.b .pick { border-color: var(--pick-b); color: var(--pick-b); }
     <button id="mode-fit" title="Fit all images in the window (f)">Fit all</button>
     <button id="mode-grid" title="Grid with a set thumbnail size (f)">Grid</button>
   </span>
-  <label title="+ / -">Size <input id="size" type="range" min="120" max="1200" step="20"></label>
+  <label title="Thumbnail size, switches to Grid (+ / -)">Size <input id="size" type="range" min="120" max="1200" step="20"></label>
   <button id="compare" disabled title="Ctrl/Shift-click two images, or use their 'compare' buttons">Compare</button>
   <button id="clear" hidden>Clear picks</button>
   <span class="hint">click: view · Ctrl/Shift-click: pick for compare · click a seed to copy it</span>
@@ -150,7 +151,6 @@ const state = {
 };
 
 /* ---------- header ---------- */
-document.title = RUN.prompt.slice(0, 60) || "imagegen";
 $("prompt").textContent = RUN.prompt;
 {
   const parts = [["preset", RUN.preset], [null, `${RUN.count} image(s)`], ["base seed", RUN.base_seed]];
@@ -170,7 +170,7 @@ $("prompt").textContent = RUN.prompt;
 /* ---------- grid ---------- */
 const grid = $("grid");
 const cards = images.map((im, i) => {
-  const img = el("img", { src: im.src, alt: `#${im.n} seed ${im.seed}`, className: bgClass, decoding: "async" });
+  const img = el("img", { src: im.src, alt: `#${im.n} seed ${im.seed}`, className: bgClass, loading: "lazy", decoding: "async" });
   img.addEventListener("load", () => {
     if (!state.aspectKnown && img.naturalHeight) {  // a run's images share one size
       state.aspect = img.naturalWidth / img.naturalHeight;
@@ -213,7 +213,6 @@ function layout() {
   $("mode-fit").setAttribute("aria-pressed", fit);
   $("mode-grid").setAttribute("aria-pressed", !fit);
   $("size").value = state.thumb;
-  $("size").disabled = fit;
   grid.classList.toggle("fit", fit);
   document.documentElement.style.setProperty("--thumb", state.thumb + "px");
   if (!fit) { grid.style.gridTemplateColumns = ""; return; }
@@ -237,6 +236,7 @@ $("mode-fit").onclick = () => setLayout("fit");
 $("mode-grid").onclick = () => setLayout("grid");
 $("size").oninput = (e) => setThumb(+e.target.value);
 addEventListener("resize", () => state.layout === "fit" && layout());
+$("neg").addEventListener("toggle", () => state.layout === "fit" && layout());
 
 /* ---------- compare picks ---------- */
 function togglePick(i) {
