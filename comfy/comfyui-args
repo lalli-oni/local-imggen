@@ -1,0 +1,8 @@
+# Extra ComfyUI flags, appended to the service's own ExecStart by comfy/limits.sh on.
+# One flag (with its value) per line. Lines starting with # are ignored.
+#
+# Keep 2 GB of VRAM free for the Windows desktop (shares the RX 9070 XT). SDXL fits in the other 14 GB.
+--reserve-vram 2
+# Unload models after each job so VRAM goes back to Windows when idle. Costs a few seconds per run.
+--disable-smart-memory
+# Not used: --lowvram (much slower). Try it only if the above isn't enough.

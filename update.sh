@@ -75,7 +75,7 @@ main() {
 
   if has '^comfy/'; then
     if [ "$(comfy_step "$new")" = install ]; then
-      echo "==> ComfyUI service settings changed: reinstalling drop-in (asks for sudo, restarts comfyui)"
+      echo "==> ComfyUI settings changed: running comfy/install.sh"
       ./comfy/install.sh
     else
       echo "==> ComfyUI files changed: restarting comfyui (asks for sudo)"
@@ -184,7 +184,8 @@ show_incoming() {
   if grep -qE '^comfy/' <<<"$changed"; then
     any=1
     if [ "$(comfy_step "$new")" = install ]; then
-      echo "  ${Y}- run comfy/install.sh (sudo: systemd drop-in, daemon-reload, restart comfyui)${N}"
+      echo "  ${Y}- run comfy/install.sh: re-applies resource limits only if they are already on${N}"
+      echo "  ${Y}  (then: sudo, systemd drop-in, restart comfyui); if limits are off it does nothing${N}"
     else
       echo "  ${Y}- sudo systemctl restart comfyui${N}"
     fi
