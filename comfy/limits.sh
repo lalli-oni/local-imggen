@@ -5,6 +5,7 @@
 #   comfy/limits.sh on       # install the drop-in, restart comfyui (sudo)
 #   comfy/limits.sh off      # remove it, restart comfyui (sudo)
 #   comfy/limits.sh status   # show whether limits are on and the flags in effect
+#   add -y to skip the "restart comfyui?" prompt
 #
 # What "on" applies: the flags in comfy/comfyui-args plus the systemd settings in comfy/limits.conf,
 # as /etc/systemd/system/comfyui.service.d/zz-imagegen-limits.conf ("zz-" so it applies after any
@@ -33,6 +34,26 @@ wait_healthy() {
   die "ComfyUI did not come up. Logs: journalctl -u comfyui -n 50. Turn limits off: $0 off"
 }
 
+# Restarting cancels a running job, so ask first (unless -y). No terminal means no.
+confirm() {
+  [ "$ASSUME_YES" = 1 ] && return 0
+  local q running pending answer=''
+  if q=$(curl -fsS --max-time 3 "$COMFY_URL/queue" 2>/dev/null); then
+    running=$(python3 -c 'import json,sys; d=json.load(sys.stdin); print(len(d.get("queue_running",[])), len(d.get("queue_pending",[])))' <<<"$q" 2>/dev/null || echo "0 0")
+    read -r running pending <<<"$running"
+    if [ "${running:-0}" -gt 0 ] || [ "${pending:-0}" -gt 0 ]; then
+      echo "!! ComfyUI is busy: $running running, $pending queued. Restarting will cancel them."
+    fi
+  fi
+  if { exec 3</dev/tty; } 2>/dev/null; then
+    printf '%s' "$1 This restarts comfyui. Continue? [y/N] "
+    read -r answer <&3 || answer=''
+    exec 3<&-
+  fi
+  case "$answer" in [yY]|[yY][eE][sS]) return 0 ;; esac
+  echo "Nothing changed."; exit 0
+}
+
 restart() { sudo systemctl daemon-reload && sudo systemctl restart comfyui && wait_healthy; }
 
 cmd_status() {
@@ -43,6 +64,7 @@ cmd_status() {
 
 cmd_on() {
   systemctl cat comfyui >/dev/null 2>&1 || die "no comfyui systemd service found"
+  if [ -f "$DROPIN" ]; then confirm "Re-apply resource limits?"; else confirm "Turn resource limits ON?"; fi
   local extra base new
   extra=$( { grep -vE '^[[:space:]]*(#|$)' "$HERE/comfyui-args" || true; } | tr '\n' ' ' | sed 's/ *$//')
   # Read the base command with our drop-in out of the way, so flags never stack.
@@ -66,14 +88,20 @@ cmd_on() {
 
 cmd_off() {
   if [ ! -f "$DROPIN" ]; then echo "Limits are already off. Nothing to do."; return 0; fi
+  confirm "Turn resource limits OFF?"
   sudo rm -f "$DROPIN"
   echo "==> Removed $DROPIN"
   restart
 }
 
+ASSUME_YES=0
+args=()
+for a in "$@"; do case "$a" in -y|--yes) ASSUME_YES=1 ;; *) args+=("$a") ;; esac; done
+set -- "${args[@]+"${args[@]}"}"
+
 case "${1:-status}" in
   on) cmd_on ;;
   off) cmd_off ;;
   status) cmd_status ;;
-  *) echo "usage: $0 on|off|status" >&2; exit 2 ;;
+  *) echo "usage: $0 [-y] on|off|status" >&2; exit 2 ;;
 esac
