@@ -31,8 +31,12 @@ if has '^requirements\.txt$'; then
 fi
 
 if has '^comfy/'; then
-  echo "==> ComfyUI files changed: restarting comfyui (asks for sudo)"
-  sudo systemctl restart comfyui
+  echo "==> ComfyUI service settings changed: reinstalling drop-in (asks for sudo, restarts comfyui)"
+  ./comfy/install.sh
+fi
+
+if has '^windows/'; then
+  echo "==> Windows-side files changed. If the commit says so, run: ./windows/install-wslconfig.sh"
 fi
 
 if has '^setup\.sh$'; then

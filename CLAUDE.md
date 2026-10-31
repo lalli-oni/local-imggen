@@ -8,6 +8,10 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
 - `workflows/*.json`: ComfyUI **API-format** workflows; string values `"{{key}}"` are filled from preset/args
 - `imagegen.py`: core + `gen` CLI (`gen --help`, `gen presets`, `gen recent`, `gen set-wallpaper PATH`)
 - `mcp_server.py`: MCP tools (generate, list_presets, recent_runs, view_image, set_wallpaper, open_contact_sheet)
+- `comfy/`: ComfyUI service settings. `comfyui-args` (extra CLI flags) + `limits.conf` (systemd Nice/CPUWeight/IOWeight),
+  installed as `/etc/systemd/system/comfyui.service.d/imagegen.conf` by `comfy/install.sh` (`--remove` to undo).
+  `update.sh` re-runs it whenever `comfy/` changes.
+- `windows/install-wslconfig.sh`: writes `%USERPROFILE%\.wslconfig` (cores/RAM for WSL); never overwrites, needs `wsl --shutdown`.
 - `setup.sh`: idempotent setup (venv `~/venvs/imagegen`, `gen` wrapper, upscaler + rembg models)
 
 ## Rules
