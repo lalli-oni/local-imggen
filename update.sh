@@ -41,12 +41,17 @@ main() {
     exit 1
   fi
 
-  show_incoming "$old" "$new"
+  local changed
+  changed=$(git diff --name-only "$old" "$new")
+  show_incoming "$old" "$new" "$changed"
 
   local answer=''
   # Ask the terminal directly; with no terminal (cron, pipe) the answer is "no".
-  { read -r -p "${B}Apply these changes? [y/N] ${N}" answer </dev/tty; } 2>/dev/null || answer=''
-  [ -t 0 ] || [ -n "$answer" ] || echo
+  if { exec 3</dev/tty; } 2>/dev/null; then
+    printf '%s' "${B}Apply these changes? [y/N] ${N}"
+    read -r answer <&3 || answer=''
+    exec 3<&-
+  fi
   case "$answer" in
     [yY]|[yY][eE][sS]) ;;
     *) echo "Nothing applied. (Fetched only; your files are unchanged.)"; exit 0 ;;
@@ -56,8 +61,6 @@ main() {
   git merge --ff-only --quiet "$new"
   echo "${G}==> Updated to $(git log -1 --format='%h %s' "$new")${N}"
 
-  local changed
-  changed=$(git diff --name-only "$old" "$new")
   has() { grep -qE "$1" <<<"$changed"; }
 
   if has '^requirements\.txt$'; then
@@ -71,7 +74,7 @@ main() {
   fi
 
   if has '^comfy/'; then
-    if [ -x comfy/install.sh ]; then
+    if [ "$(comfy_step "$new")" = install ]; then
       echo "==> ComfyUI service settings changed: reinstalling drop-in (asks for sudo, restarts comfyui)"
       ./comfy/install.sh
     else
@@ -98,9 +101,14 @@ main() {
   echo "==> Done. The gen CLI already uses the new code."
 }
 
+# How a comfy/ change gets applied at commit $1: "install" if comfy/install.sh is committed executable.
+comfy_step() {
+  if git ls-tree "$1" -- comfy/install.sh | grep -q '^100755 '; then echo install; else echo restart; fi
+}
+
 # Print what old..new brings in, with risk flags and the follow-up steps update.sh will take.
 show_incoming() {
-  local old=$1 new=$2 line sha subj body num title
+  local old=$1 new=$2 changed=$3 sha subj body num title
 
   echo
   echo "${B}==> Incoming changes${N}"
@@ -117,26 +125,28 @@ show_incoming() {
     fi
   done < <(git log --first-parent --reverse --format=$'%h\t%s' "$old..$new")
   local remote_url
-  remote_url=$(git remote get-url origin 2>/dev/null | sed -E 's#^git@github\.com:#https://github.com/#; s#\.git$##')
+  remote_url=$(git remote get-url origin 2>/dev/null | sed -E 's#^git@github\.com:#https://github.com/#; s#\.git$##' || true)
   [[ $remote_url == https://github.com/* ]] && echo "  (details: $remote_url/pulls?q=is%3Apr+is%3Amerged)"
 
   echo
   echo "${B}==> Files${N}"
   git diff --stat=100 "$old" "$new" | sed 's/^/  /'
 
-  # Risk scan: changed paths + added lines.
-  local changed added flags=()
-  changed=$(git diff --name-only "$old" "$new")
-  added=$(git diff -U0 "$old" "$new" | awk '
-    /^\+\+\+ /{ f=substr($0,7); next }
-    /^\+/   { print f ": " substr($0,2) }')
+  # Risk scan: changed paths + added/removed lines ("file: +line" / "file: -line").
+  local diff dlines flags=()
+  diff=$(git diff -U0 --no-color "$old" "$new")
+  dlines=$(awk '
+    /^diff --git /{ f=$NF; sub(/^b\//, "", f); hdr=1; next }
+    /^@@/         { hdr=0; next }
+    hdr           { next }
+    /^[+-]/       { print f ": " $0 }' <<<"$diff")
 
-  flag() {  # flag "LABEL" "path regex" "added-line regex"
+  flag() {  # flag "LABEL" "path regex" "changed-line regex"
     local label=$1 pre=$2 lre=$3 hits=''
     [ -n "$pre" ] && hits=$(grep -E "$pre" <<<"$changed" | sed 's/^/      file  /' || true)
     if [ -n "$lre" ]; then
       local lines
-      lines=$(grep -E "$lre" <<<"$added" | grep -vE '^[^:]+: *#' | cut -c1-140 | sed 's/^/      +    /' || true)
+      lines=$(grep -E "$lre" <<<"$dlines" | grep -vE '^[^:]+: [+-][[:space:]]*#' | cut -c1-140 | sed 's/^/      line  /' || true)
       hits=$(printf '%s\n%s' "$hits" "$lines" | sed '/^$/d')
     fi
     [ -n "$hits" ] && flags+=("${R}!! $label${N}"$'\n'"$hits")
@@ -169,11 +179,11 @@ show_incoming() {
   local any=0
   if grep -qE '^requirements\.txt$' <<<"$changed"; then
     any=1; echo "  ${Y}- pip install into ~/venvs/imagegen (torch/torchvision/torchaudio/triton filtered out):${N}"
-    git diff -U0 "$old" "$new" -- requirements.txt | grep -E '^[+-][^+-]' | sed 's/^/      /'
+    grep -E '^requirements\.txt: [+-]' <<<"$dlines" | sed 's/^requirements\.txt: /      /' || true
   fi
   if grep -qE '^comfy/' <<<"$changed"; then
     any=1
-    if git cat-file -e "$new:comfy/install.sh" 2>/dev/null; then
+    if [ "$(comfy_step "$new")" = install ]; then
       echo "  ${Y}- run comfy/install.sh (sudo: systemd drop-in, daemon-reload, restart comfyui)${N}"
     else
       echo "  ${Y}- sudo systemctl restart comfyui${N}"
@@ -187,4 +197,4 @@ show_incoming() {
   echo
 }
 
-main "$@"
+main "$@"; exit
