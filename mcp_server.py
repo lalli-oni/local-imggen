@@ -48,10 +48,10 @@ WAIT_S = 45  # the remote bridge times out at ~60s, so never block longer than t
 JOBS: dict[str, dict] = {}
 
 
-def _run_job(job_id: str, kwargs: dict) -> None:
+def _run_job(job_id: str, kwargs: dict, fn=imagegen.generate) -> None:
     job = JOBS[job_id]
     try:
-        job["result"] = imagegen.generate(**kwargs)
+        job["result"] = fn(**kwargs)
         job["status"] = "done"
     except Exception as e:  # surfaced via get_job
         job["error"] = f"{type(e).__name__}: {e}"
@@ -92,13 +92,41 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
     until done. Rough timings: draft ~15-25s/image, icon ~25s, wallpaper ~70s/image.
     Re-use a seed to reproduce or refine an image.
     """
-    job_id = uuid.uuid4().hex[:8]
     kwargs = dict(prompt=prompt, preset=preset, count=min(max(1, count), MAX_COUNT), seed=seed,
                   negative=negative, width=width, height=height, steps=steps)
-    t = threading.Thread(target=_run_job, args=(job_id, kwargs), daemon=True)
+    return _start(imagegen.generate, kwargs, preview)
+
+
+def _start(fn, kwargs: dict, preview: bool) -> list:
+    job_id = uuid.uuid4().hex[:8]
+    t = threading.Thread(target=_run_job, args=(job_id, kwargs, fn), daemon=True)
     JOBS[job_id] = {"status": "running", "thread": t, "started": time.time(), "preview": preview}
     t.start()
     return _wait_and_report(job_id, WAIT_S)
+
+
+@mcp.tool()
+def vary(path: str, count: int = 4, strength: float | None = None, prompt: str | None = None,
+         negative: str | None = None, preset: str | None = None, mask: str | None = None,
+         seed: int | None = None, preview: bool = True) -> list:
+    """Variations of an existing image (img2img), or inpaint with a mask. path/mask: Linux or Windows paths.
+
+    strength = how much may change, 0-1 (default 0.4; 0.85 with a mask). ~0.25 keeps the composition,
+    ~0.6+ reinterprets it. mask: white = repaint, black = keep; pixels away from the (slightly feathered)
+    mask edge are kept. Output is ~1 MP (source aspect), except wallpaper presets which upscale.
+    prompt/preset/negative default to the image's sidecar JSON; an outside image needs a prompt.
+    Same waiting/job_id behaviour as generate.
+    """
+    kwargs = dict(path=path, count=min(max(1, count), MAX_COUNT), strength=strength, prompt=prompt,
+                  negative=negative, preset=preset, mask=mask, seed=seed)
+    return _start(imagegen.vary, kwargs, preview)
+
+
+@mcp.tool()
+def cutout(path: str) -> dict:
+    """Remove an image's background (rembg) -> <name>-transparent.png next to it."""
+    out = imagegen.remove_bg(imagegen.to_linux_path(path))
+    return {"path": str(out), "windows_path": imagegen.to_windows_path(out)}
 
 
 @mcp.tool()
