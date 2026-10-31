@@ -9,6 +9,7 @@ Usage:
   gen presets                                   # list presets
   gen recent [N]                                # last N runs
   gen set-wallpaper PATH                        # set Windows desktop wallpaper
+  gen doctor                                    # health check (service, GPU, torch, models, ...)
 """
 from __future__ import annotations
 
@@ -303,6 +304,9 @@ def main(argv: list[str]) -> int:
         for r in recent_runs(int(argv[1]) if len(argv) > 1 else 5):
             print(f"{r['preset']:12} {r['prompt'][:50]:50} {r['run_dir']}")
         return 0
+    if argv and argv[0] == "doctor":
+        import doctor
+        return doctor.main()
     if argv and argv[0] == "set-wallpaper":
         print("wallpaper set:", set_wallpaper(argv[1]))
         return 0

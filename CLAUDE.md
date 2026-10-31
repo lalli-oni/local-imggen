@@ -6,8 +6,9 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
 ## Layout
 - `config.toml`: ComfyUI URL, `output_dir` (Windows side, `/mnt/c/Users/lalli/Pictures/imagegen`), presets
 - `workflows/*.json`: ComfyUI **API-format** workflows; string values `"{{key}}"` are filled from preset/args
-- `imagegen.py`: core + `gen` CLI (`gen --help`, `gen presets`, `gen recent`, `gen set-wallpaper PATH`)
-- `mcp_server.py`: MCP tools (generate, list_presets, recent_runs, view_image, set_wallpaper, open_contact_sheet)
+- `imagegen.py`: core + `gen` CLI (`gen --help`, `gen presets`, `gen recent`, `gen set-wallpaper PATH`, `gen doctor`)
+- `doctor.py`: read-only health checks behind `gen doctor` and the MCP `doctor` tool
+- `mcp_server.py`: MCP tools (generate, list_presets, doctor, recent_runs, view_image, set_wallpaper, open_contact_sheet)
 - `comfy/`: opt-in resource limits for the comfyui service, **off by default**. `comfy/limits.sh on|off|status`
   installs/removes `/etc/systemd/system/comfyui.service.d/zz-imagegen-limits.conf` built from `comfyui-args`
   (extra CLI flags) + `limits.conf` (Nice/CPUWeight/IOWeight). on/off restarts comfyui (sudo) after a y/N prompt

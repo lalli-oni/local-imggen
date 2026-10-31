@@ -132,5 +132,13 @@ def open_contact_sheet(path: str) -> str:
     return "opened"
 
 
+@mcp.tool()
+def doctor() -> list[dict]:
+    """Health check: comfyui service, GPU, ROCm torch, models, presets, output_dir, limits.
+    Each item has status ok|warn|fail|info and, for problems, a fix hint. Read-only."""
+    import doctor as _doctor
+    return _doctor.run_checks(include_mcp=False)
+
+
 if __name__ == "__main__":
     mcp.run("stdio")
