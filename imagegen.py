@@ -12,6 +12,7 @@ Usage:
   gen presets                                   # list presets
   gen recent [N]                                # last N runs
   gen set-wallpaper PATH                        # set Windows desktop wallpaper
+  gen sheet RUN_DIR                             # rebuild a run's index.html contact sheet
 """
 from __future__ import annotations
 
@@ -374,32 +375,46 @@ def vary(path: str, count: int = 4, strength: float | None = None, prompt: str |
                     source_image=str(src), mask=mask, denoise=strength)
 
 
-def write_contact_sheet(run_dir: Path, run: dict, transparent: bool = False) -> Path:
-    bg = ("background: repeating-conic-gradient(#3a3a3a 0 25%, #2a2a2a 0 50%) 0 0/20px 20px;"
-          if transparent else "background:#111;")
-    cards = "\n".join(
-        f'<figure><a href="{html.escape(Path(im["path"]).name)}"><img src="{html.escape(Path(im["path"]).name)}" '
-        f'loading="lazy"></a><figcaption>#{n} · seed {im["seed"]}</figcaption></figure>'
-        for n, im in enumerate(run["images"], 1))
-    src_note = ""
-    if run.get("source_image"):
-        kind = "inpaint" if run.get("mask") else "img2img"
-        src_note = (f" · {kind} from <b>{html.escape(Path(run['source_image']).name)}</b>"
-                    f" at strength {run['denoise']}")
-    page = f"""<!doctype html><meta charset="utf-8"><title>{html.escape(run['prompt'][:60])}</title>
-<style>
-body{{margin:0;padding:24px;background:#0b0b0c;color:#ddd;font:14px system-ui,sans-serif}}
-h1{{font-size:16px;font-weight:600;margin:0 0 4px}} p{{margin:0 0 20px;color:#888}}
-main{{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px}}
-figure{{margin:0}} img{{width:100%;display:block;border-radius:8px;{bg}}}
-figcaption{{padding:6px 2px;color:#999;font-size:12px}}
-</style>
-<h1>{html.escape(run['prompt'])}</h1>
-<p>preset <b>{html.escape(run['preset'])}</b> · {run['count']} image(s) · base seed {run['base_seed']}{src_note}</p>
-<main>{cards}</main>"""
+SHEET_TEMPLATE = ROOT / "templates" / "contact_sheet.html"
+SHEET_PARAMS = ("width", "height", "steps", "cfg")  # shown per image when the sidecar has them
+
+
+def write_contact_sheet(run_dir: Path, run: dict, transparent: bool | None = None) -> Path:
+    """Write <run_dir>/index.html: the viewer in templates/contact_sheet.html with this run's data inlined.
+
+    transparent=None guesses from the file names (rembg output ends in -transparent.png).
+    """
+    images = []
+    for im in run["images"]:
+        path = Path(im["path"])
+        entry = {"file": path.name, "seed": im["seed"]}
+        params = (find_sidecar(run_dir / path.name) or {}).get("params") or {}
+        entry.update({k: params[k] for k in SHEET_PARAMS if k in params})
+        images.append(entry)
+    if transparent is None:
+        transparent = any(e["file"].endswith("-transparent.png") for e in images)
+    first = find_sidecar(run_dir / images[0]["file"]) if images else None
+    data = {"prompt": run["prompt"], "preset": run["preset"], "base_seed": run["base_seed"],
+            "count": run["count"], "transparent": transparent, "images": images,
+            "negative": (first or {}).get("negative"),
+            "source_image": Path(run["source_image"]).name if run.get("source_image") else None,
+            "mask": bool(run.get("mask")), "denoise": run.get("denoise")}
+    # "<" escaped so no value can close the <script> block it is inlined into
+    fills = {"TITLE": html.escape(run["prompt"][:60]),
+             "RUN_JSON": json.dumps(data, ensure_ascii=False).replace("<", "\\u003c")}
+    page = re.sub(r"\{\{(TITLE|RUN_JSON)\}\}", lambda m: fills[m.group(1)], SHEET_TEMPLATE.read_text(encoding="utf-8"))
     out = run_dir / "index.html"
-    out.write_text(page)
+    out.write_text(page, encoding="utf-8")
     return out
+
+
+def rebuild_contact_sheet(path: str) -> Path:
+    """Re-write an existing run's index.html from its run.json (path: the run folder, run.json or index.html)."""
+    p = to_linux_path(path)
+    run_json = p if p.name == "run.json" else (p.parent if p.is_file() else p) / "run.json"
+    if not run_json.is_file():
+        raise FileNotFoundError(run_json)
+    return write_contact_sheet(run_json.parent, json.loads(run_json.read_text()))
 
 
 def recent_runs(n: int = 5) -> list[dict]:
@@ -489,6 +504,13 @@ def main(argv: list[str]) -> int:
             print(f"not a file: {src}", file=sys.stderr)
             return 1
         print(remove_bg(src))
+        return 0
+    if argv and argv[0] == "sheet":
+        if len(argv) < 2:
+            print("usage: gen sheet RUN_DIR... (rebuild index.html from run.json)", file=sys.stderr)
+            return 2
+        for d in argv[1:]:
+            print(to_windows_path(out := rebuild_contact_sheet(d)) or out)
         return 0
     if argv and argv[0] == "set-wallpaper":
         print("wallpaper set:", set_wallpaper(argv[1]))

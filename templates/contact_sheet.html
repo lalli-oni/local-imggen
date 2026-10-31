@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{TITLE}}</title>
+<!--
+  Contact sheet for one imagegen run. Written by imagegen.write_contact_sheet(), which fills
+  RUN_JSON below. Static and self-contained (opened via file://): no fetches, no libraries.
+  Keys: f = fit all / grid, + / - = size, click = view, Ctrl/Shift-click = pick for compare,
+  in a viewer: Esc close, arrows step, c pick, s side-by-side / w wipe, x swap.
+-->
+<style>
+:root {
+  --bg: #0b0b0c; --panel: #161618; --line: #2a2a2e; --text: #ddd; --muted: #8a8a90;
+  --accent: #7aa2ff; --pick-a: #ffb454; --pick-b: #5ad1c3;
+  --gap: 12px; --pad: 16px; --cap: 22px; --thumb: 320px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, sans-serif; }
+button { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 6px; padding: 3px 10px; cursor: pointer; }
+button:hover { border-color: #444; }
+button[aria-pressed="true"] { background: #23304d; border-color: var(--accent); }
+button:disabled { opacity: .4; cursor: default; }
+
+header { padding: var(--pad) var(--pad) 8px; }
+h1 { font-size: 16px; font-weight: 600; margin: 0 0 4px; overflow-wrap: anywhere; }
+.meta { margin: 0; color: var(--muted); }
+.meta b { color: var(--text); font-weight: 500; }
+details { margin-top: 4px; color: var(--muted); }
+details summary { cursor: pointer; width: max-content; }
+details p { margin: 4px 0 0; overflow-wrap: anywhere; }
+
+.bar { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
+  padding: 8px var(--pad); background: rgba(11, 11, 12, .92); border-bottom: 1px solid var(--line); }
+.seg { display: inline-flex; }
+.seg button { border-radius: 0; }
+.seg button:first-child { border-radius: 6px 0 0 6px; }
+.seg button:last-child { border-radius: 0 6px 6px 0; margin-left: -1px; }
+.bar label { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.bar input[type=range] { width: 160px; }
+.hint { color: var(--muted); font-size: 12px; margin-left: auto; }
+
+main { display: grid; gap: var(--gap); padding: var(--pad);
+  grid-template-columns: repeat(auto-fill, minmax(min(var(--thumb), 100%), 1fr)); }
+main.fit { justify-content: center; align-content: start; }
+figure { margin: 0; min-width: 0; position: relative; }
+figure a { display: block; }
+figure img { width: 100%; display: block; border-radius: 8px; outline: 2px solid transparent; outline-offset: 2px; }
+figure.a img { outline-color: var(--pick-a); }
+figure.b img { outline-color: var(--pick-b); }
+figcaption { height: var(--cap); display: flex; align-items: center; gap: 8px; padding: 0 2px;
+  color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; }
+figcaption .pick { margin-left: auto; padding: 0 8px; font-size: 11px; line-height: 16px; }
+figure.a .pick { border-color: var(--pick-a); color: var(--pick-a); }
+figure.b .pick { border-color: var(--pick-b); color: var(--pick-b); }
+.seed { cursor: copy; }
+.seed:hover { color: var(--text); }
+.checker { background: repeating-conic-gradient(#3a3a3a 0 25%, #2a2a2a 0 50%) 0 0 / 20px 20px; }
+.plain { background: #111; }
+
+/* full-window viewer: one image, or two to compare */
+.view { position: fixed; inset: 0; z-index: 10; display: none; flex-direction: column; background: #000; }
+.view.open { display: flex; }
+.view .top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 12px;
+  background: var(--panel); border-bottom: 1px solid var(--line); }
+.view .top .title { margin-right: auto; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.view .top .title b { color: var(--text); font-weight: 500; }
+.tag-a { color: var(--pick-a); } .tag-b { color: var(--pick-b); }
+.stage { flex: 1; min-height: 0; display: flex; gap: 8px; padding: 8px; }
+.pane { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.pane .box { flex: 1; min-height: 0; position: relative; }
+.pane img, .wipe img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.pane .cap { text-align: center; font-size: 12px; color: var(--muted); }
+.wipe { flex: 1; position: relative; cursor: ew-resize; touch-action: none; }
+.wipe .over { clip-path: inset(0 calc(100% - var(--x, 50%)) 0 0); }
+.wipe .line { position: absolute; top: 0; bottom: 0; left: var(--x, 50%); width: 2px; margin-left: -1px;
+  background: #fff; box-shadow: 0 0 4px #000; pointer-events: none; }
+.wipe .lbl { position: absolute; top: 8px; padding: 2px 8px; border-radius: 4px; background: rgba(0,0,0,.6); font-size: 12px; }
+.wipe .lbl.l { left: 8px; } .wipe .lbl.r { right: 8px; }
+.stage.checkered .box, .stage.checkered.wipe-mode .wipe {
+  background: repeating-conic-gradient(#3a3a3a 0 25%, #2a2a2a 0 50%) 0 0 / 20px 20px; }
+.toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 20; padding: 6px 12px;
+  border-radius: 6px; background: var(--panel); border: 1px solid var(--line); opacity: 0; transition: opacity .2s;
+  pointer-events: none; }
+.toast.show { opacity: 1; }
+</style>
+
+<script id="run-data" type="application/json">{{RUN_JSON}}</script>
+
+<header>
+  <h1 id="prompt"></h1>
+  <p class="meta" id="meta"></p>
+  <details id="neg" hidden><summary>negative prompt</summary><p></p></details>
+</header>
+
+<div class="bar">
+  <span class="seg" role="group" aria-label="layout">
+    <button id="mode-fit" title="Fit all images in the window (f)">Fit all</button>
+    <button id="mode-grid" title="Grid with a set thumbnail size (f)">Grid</button>
+  </span>
+  <label title="+ / -">Size <input id="size" type="range" min="120" max="1200" step="20"></label>
+  <button id="compare" disabled title="Ctrl/Shift-click two images, or use their 'compare' buttons">Compare</button>
+  <button id="clear" hidden>Clear picks</button>
+  <span class="hint">click: view · Ctrl/Shift-click: pick for compare · click a seed to copy it</span>
+</div>
+
+<main id="grid"></main>
+
+<div class="view" id="view" role="dialog" aria-modal="true">
+  <div class="top">
+    <span class="title" id="view-title"></span>
+    <span class="seg" id="view-modes" role="group" aria-label="compare mode">
+      <button data-mode="side" title="Side by side (s)">Side by side</button>
+      <button data-mode="wipe" title="Wipe slider (w)">Wipe</button>
+    </span>
+    <button id="swap" title="Swap A and B (x)">Swap</button>
+    <button id="view-pick" title="Pick for compare (c)">Pick</button>
+    <a id="view-open" target="_blank"><button tabindex="-1">Open PNG</button></a>
+    <button id="view-close" title="Close (Esc)">Close</button>
+  </div>
+  <div class="stage" id="stage"></div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+const RUN = JSON.parse(document.getElementById("run-data").textContent);
+const $ = (id) => document.getElementById(id);
+const el = (tag, props = {}, ...kids) => {
+  const e = Object.assign(document.createElement(tag), props);
+  e.append(...kids);
+  return e;
+};
+const store = {  // per-viewer settings; file:// storage can be missing or throw
+  get(k, d) { try { const v = localStorage.getItem("imagegen-sheet:" + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem("imagegen-sheet:" + k, JSON.stringify(v)); } catch {} },
+};
+
+const images = RUN.images.map((im, i) => ({ ...im, n: i + 1, src: encodeURIComponent(im.file) }));
+const bgClass = RUN.transparent ? "checker" : "plain";
+const state = {
+  layout: store.get("layout", "fit"),   // "fit" | "grid"
+  thumb: store.get("thumb", 320),
+  compareMode: store.get("compareMode", "side"),  // "side" | "wipe"
+  picks: [],      // up to two image indexes; [0] is A, [1] is B
+  view: null,     // null | {kind: "one", i} | {kind: "two"}
+  aspect: 1,      // width / height of the images, from the first one that loads
+  aspectKnown: false,
+};
+
+/* ---------- header ---------- */
+document.title = RUN.prompt.slice(0, 60) || "imagegen";
+$("prompt").textContent = RUN.prompt;
+{
+  const parts = [["preset", RUN.preset], [null, `${RUN.count} image(s)`], ["base seed", RUN.base_seed]];
+  const p0 = images[0] || {};
+  if (p0.width && p0.height) parts.push([null, `${p0.width}×${p0.height}`]);
+  if (p0.steps != null) parts.push(["steps", p0.steps]);
+  if (p0.cfg != null) parts.push(["cfg", p0.cfg]);
+  if (RUN.source_image) parts.push([RUN.mask ? "inpaint from" : "img2img from", `${RUN.source_image} @ ${RUN.denoise}`]);
+  $("meta").append(...parts.flatMap(([k, v], i) => [
+    i ? " · " : "", k ? `${k} ` : "", el("b", { textContent: String(v) })]));
+  if (RUN.negative) {
+    $("neg").hidden = false;
+    $("neg").querySelector("p").textContent = RUN.negative;
+  }
+}
+
+/* ---------- grid ---------- */
+const grid = $("grid");
+const cards = images.map((im, i) => {
+  const img = el("img", { src: im.src, alt: `#${im.n} seed ${im.seed}`, className: bgClass, decoding: "async" });
+  img.addEventListener("load", () => {
+    if (!state.aspectKnown && img.naturalHeight) {  // a run's images share one size
+      state.aspect = img.naturalWidth / img.naturalHeight;
+      state.aspectKnown = true;
+      layout();
+    }
+  }, { once: true });
+  const a = el("a", { href: im.src }, img);
+  a.addEventListener("click", (e) => {
+    if (e.button !== 0 || e.altKey) return;           // middle-click etc: let the browser open it
+    e.preventDefault();
+    if (e.ctrlKey || e.metaKey || e.shiftKey) togglePick(i);
+    else openOne(i);
+  });
+  const seed = el("span", { className: "seed", textContent: `seed ${im.seed}`, title: "copy seed" });
+  seed.addEventListener("click", () => copy(String(im.seed), `seed ${im.seed} copied`));
+  const pick = el("button", { className: "pick", textContent: "compare", title: "pick for compare" });
+  pick.addEventListener("click", () => togglePick(i));
+  const fig = el("figure", {}, a, el("figcaption", {}, `#${im.n}`, seed, pick));
+  fig.title = im.file;
+  grid.append(fig);
+  return fig;
+});
+
+function bestFit(n, W, H, aspect, gap, cap) {
+  // the column count that gives the largest images with all n visible in W x H
+  let best = { cols: n, w: 0 };
+  for (let cols = 1; cols <= n; cols++) {
+    const rows = Math.ceil(n / cols);
+    const byW = (W - gap * (cols - 1)) / cols;
+    const byH = ((H - gap * (rows - 1)) / rows - cap) * aspect;
+    const w = Math.floor(Math.min(byW, byH));
+    if (w > best.w) best = { cols, w };
+  }
+  return best;
+}
+
+function layout() {
+  const fit = state.layout === "fit";
+  $("mode-fit").setAttribute("aria-pressed", fit);
+  $("mode-grid").setAttribute("aria-pressed", !fit);
+  $("size").value = state.thumb;
+  $("size").disabled = fit;
+  grid.classList.toggle("fit", fit);
+  document.documentElement.style.setProperty("--thumb", state.thumb + "px");
+  if (!fit) { grid.style.gridTemplateColumns = ""; return; }
+  const cs = getComputedStyle(document.documentElement);
+  const px = (v) => parseFloat(cs.getPropertyValue(v));
+  const pad = px("--pad"), gap = px("--gap"), cap = px("--cap");
+  const W = grid.clientWidth - 2 * pad;
+  const H = window.innerHeight - grid.getBoundingClientRect().top - window.scrollY - 2 * pad;
+  const { cols, w } = bestFit(images.length || 1, W, Math.max(H, 120), state.aspect, gap, cap);
+  grid.style.gridTemplateColumns = `repeat(${cols}, ${Math.max(w, 60)}px)`;
+}
+
+function setLayout(mode) { state.layout = mode; store.set("layout", mode); layout(); }
+function setThumb(px) {
+  state.thumb = Math.min(1200, Math.max(120, px));
+  store.set("thumb", state.thumb);
+  if (state.layout !== "grid") state.layout = "grid", store.set("layout", "grid");
+  layout();
+}
+$("mode-fit").onclick = () => setLayout("fit");
+$("mode-grid").onclick = () => setLayout("grid");
+$("size").oninput = (e) => setThumb(+e.target.value);
+addEventListener("resize", () => state.layout === "fit" && layout());
+
+/* ---------- compare picks ---------- */
+function togglePick(i) {
+  const at = state.picks.indexOf(i);
+  if (at >= 0) state.picks.splice(at, 1);
+  else {
+    if (state.picks.length === 2) state.picks.shift();
+    state.picks.push(i);
+  }
+  renderPicks();
+  if (state.picks.length === 2 && state.view?.kind !== "two") openTwo();
+  else if (state.view) renderView();
+}
+function renderPicks() {
+  cards.forEach((c, i) => {
+    const k = state.picks.indexOf(i);
+    c.classList.toggle("a", k === 0);
+    c.classList.toggle("b", k === 1);
+    c.querySelector(".pick").textContent = k === 0 ? "A" : k === 1 ? "B" : "compare";
+  });
+  const n = state.picks.length;
+  $("compare").disabled = n !== 2;
+  $("compare").textContent = n === 2 ? "Compare A / B" : `Compare (${n}/2)`;
+  $("clear").hidden = n === 0;
+}
+$("compare").onclick = openTwo;
+$("clear").onclick = () => { state.picks = []; renderPicks(); };
+
+/* ---------- viewer ---------- */
+const view = $("view"), stage = $("stage");
+const label = (i) => `#${images[i].n} · seed ${images[i].seed}`;
+
+function openOne(i) { state.view = { kind: "one", i }; renderView(); }
+function openTwo() { if (state.picks.length === 2) { state.view = { kind: "two" }; renderView(); } }
+function closeView() { state.view = null; view.classList.remove("open"); stage.replaceChildren(); }
+
+function renderView() {
+  const v = state.view;
+  view.classList.add("open");
+  stage.className = "stage" + (RUN.transparent ? " checkered" : "");
+  const two = v.kind === "two";
+  $("view-modes").hidden = $("swap").hidden = !two;
+  $("view-pick").hidden = $("view-open").hidden = two;
+  if (!two) {
+    const im = images[v.i];
+    const k = state.picks.indexOf(v.i);
+    $("view-title").replaceChildren(el("b", { textContent: label(v.i) }), `  ${im.file}  (${v.i + 1}/${images.length}, ← →)`);
+    $("view-pick").textContent = k === 0 ? "Picked A" : k === 1 ? "Picked B" : "Pick";
+    $("view-pick").setAttribute("aria-pressed", k >= 0);
+    $("view-open").href = im.src;
+    stage.replaceChildren(pane(v.i));
+    return;
+  }
+  const [a, b] = state.picks;
+  $("view-title").replaceChildren(el("b", { className: "tag-a", textContent: "A " }), label(a), "   vs   ",
+    el("b", { className: "tag-b", textContent: "B " }), label(b));
+  view.querySelectorAll("#view-modes button").forEach((btn) =>
+    btn.setAttribute("aria-pressed", btn.dataset.mode === state.compareMode));
+  if (state.compareMode === "side") {
+    stage.replaceChildren(pane(a, "A"), pane(b, "B"));
+  } else {
+    stage.classList.add("wipe-mode");
+    const w = el("div", { className: "wipe" },
+      el("img", { src: images[b].src, alt: "B" }),
+      el("img", { src: images[a].src, alt: "A", className: "over" }),
+      el("div", { className: "line" }),
+      el("span", { className: "lbl l tag-a", textContent: "A " + label(a) }),
+      el("span", { className: "lbl r tag-b", textContent: "B " + label(b) }));
+    const move = (e) => {
+      const r = w.getBoundingClientRect();
+      const x = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+      w.style.setProperty("--x", (x * 100).toFixed(2) + "%");
+    };
+    w.addEventListener("pointermove", move);
+    w.addEventListener("pointerdown", (e) => { w.setPointerCapture(e.pointerId); move(e); });
+    stage.replaceChildren(w);
+  }
+}
+function pane(i, tag) {
+  const cap = el("div", { className: "cap" });
+  if (tag) cap.append(el("b", { className: tag === "A" ? "tag-a" : "tag-b", textContent: tag + " " }));
+  cap.append(label(i));
+  return el("div", { className: "pane" },
+    el("div", { className: "box" }, el("img", { src: images[i].src, alt: label(i) })), cap);
+}
+function setCompareMode(m) { state.compareMode = m; store.set("compareMode", m); renderView(); }
+view.querySelectorAll("#view-modes button").forEach((btn) => btn.onclick = () => setCompareMode(btn.dataset.mode));
+$("swap").onclick = () => { state.picks.reverse(); renderPicks(); renderView(); };
+$("view-pick").onclick = () => togglePick(state.view.i);
+$("view-close").onclick = closeView;
+
+/* ---------- keys ---------- */
+addEventListener("keydown", (e) => {
+  if (e.ctrlKey || e.metaKey || e.altKey || e.target.matches?.("input, textarea")) return;
+  const v = state.view, k = e.key;
+  if (v) {
+    if (k === "Escape") closeView();
+    else if (v.kind === "one" && (k === "ArrowRight" || k === "ArrowLeft")) {
+      v.i = (v.i + (k === "ArrowRight" ? 1 : -1) + images.length) % images.length;
+      renderView();
+    } else if (v.kind === "one" && k === "c") togglePick(v.i);
+    else if (v.kind === "two" && k === "s") setCompareMode("side");
+    else if (v.kind === "two" && k === "w") setCompareMode("wipe");
+    else if (v.kind === "two" && k === "x") $("swap").click();
+    else return;
+  } else if (k === "f") setLayout(state.layout === "fit" ? "grid" : "fit");
+  else if (k === "+" || k === "=") setThumb(state.thumb + 40);
+  else if (k === "-") setThumb(state.thumb - 40);
+  else if (k === "Escape" && state.picks.length) $("clear").click();
+  else return;
+  e.preventDefault();
+});
+
+/* ---------- misc ---------- */
+let toastTimer;
+function toast(msg) {
+  $("toast").textContent = msg;
+  $("toast").classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => $("toast").classList.remove("show"), 1400);
+}
+async function copy(text, msg) {
+  try { await navigator.clipboard.writeText(text); toast(msg); }
+  catch { window.prompt("Copy:", text); }
+}
+
+renderPicks();
+layout();
+</script>
+</html>
