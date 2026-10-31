@@ -22,8 +22,13 @@ COMFY_VENV_PY = Path.home() / "venvs" / "comfy" / "bin" / "python"
 EXPECTED_TORCH = "2.9.1+rocm7.2.0"
 LIMITS_DROPIN = Path("/etc/systemd/system/comfyui.service.d/zz-imagegen-limits.conf")
 # Keys generate() drops from a preset before filling the workflow, plus the ones it always adds.
-NOT_PARAMS = {"workflow", "description", "suffix", "negative_extra", "post"}
+NOT_PARAMS = {"workflow", "img2img_workflow", "inpaint_workflow", "description", "suffix",
+              "negative_extra", "post"}
 STANDARD_PARAMS = {"seed", "prompt", "negative", "checkpoint"}
+# Each mode a preset can run in: (preset key, default workflow, extra params generate() adds).
+MODES = [("workflow", None, set()),
+         ("img2img_workflow", "sdxl_img2img.json", {"image", "denoise"}),
+         ("inpaint_workflow", "sdxl_inpaint.json", {"image", "denoise", "mask"})]
 # Which ComfyUI model folder each model-like preset key lives in.
 MODEL_KEYS = {"checkpoint": "checkpoints", "upscale_model": "upscale_models"}
 
@@ -132,39 +137,47 @@ def check_models(conf: dict, api_up: bool) -> list[dict]:
             else:
                 out.append(_check(f"model {name}", "fail", f"missing from {folder} ({source})",
                                   f"put it in {COMFY_DIR / 'models' / folder}/ (setup.sh fetches the upscaler)"))
-    if any("remove_bg" in p.get("post", []) for p in conf["presets"].values()):
-        u2 = Path(os.environ.get("U2NET_HOME", Path.home() / ".u2net")).expanduser() / "u2net.onnx"
-        if u2.is_file():
-            out.append(_check("model rembg u2net", "ok", str(u2)))
-        else:
-            out.append(_check("model rembg u2net", "warn",
-                              f"{u2} missing; the first icon run will download it (~170 MB)",
-                              "re-run ~/imagegen/setup.sh to fetch it now"))
+    # rembg: used by the icon preset's remove_bg step and by `gen cutout`
+    u2 = Path(os.environ.get("U2NET_HOME", Path.home() / ".u2net")).expanduser() / "u2net.onnx"
+    if u2.is_file():
+        out.append(_check("model rembg u2net", "ok", str(u2)))
+    else:
+        out.append(_check("model rembg u2net", "warn",
+                          f"{u2} missing; the first background removal will download it (~170 MB)",
+                          "re-run ~/imagegen/setup.sh to fetch it now"))
     return out
 
 
 def check_workflows(conf: dict) -> list[dict]:
+    """Every {{key}} in each workflow a preset can use (text, img2img, inpaint) must get a value."""
     out = []
     for name, p in conf["presets"].items():
-        wf = imagegen.ROOT / "workflows" / p.get("workflow", "")
-        try:
-            text = wf.read_text()
-            json.loads(text)
-        except Exception as e:
-            out.append(_check(f"preset {name}", "fail", f"workflow {wf.name}: {e}",
-                              "fix the preset's workflow = ... or the JSON file"))
-            continue
-        keys = set(imagegen._PLACEHOLDER.findall(text))
         have = (set(p) - NOT_PARAMS) | STANDARD_PARAMS
-        missing = sorted(keys - have)
+        problems, used = [], []
+        for key, default, extra in MODES:
+            wf_name = p.get(key, default)
+            if not wf_name:
+                problems.append(f"no {key} set")
+                continue
+            wf = imagegen.ROOT / "workflows" / wf_name
+            try:
+                text = wf.read_text()
+                json.loads(text)
+            except Exception as e:
+                problems.append(f"{wf_name}: {e}")
+                continue
+            used.append(wf_name)
+            missing = sorted(set(imagegen._PLACEHOLDER.findall(text)) - have - extra)
+            if missing:
+                problems.append(f"{wf_name}: no value for {', '.join('{{' + k + '}}' for k in missing)}")
         bad_post = [s for s in p.get("post", []) if s not in imagegen.POST]
-        if missing or bad_post:
-            problems = ([f"no value for {', '.join('{{' + k + '}}' for k in missing)}"] if missing else []) \
-                + ([f"unknown post step(s): {', '.join(bad_post)}"] if bad_post else [])
-            out.append(_check(f"preset {name}", "fail", f"{wf.name}: {'; '.join(problems)}",
-                              f"add the key(s) to [presets.{name}] in config.toml"))
+        if bad_post:
+            problems.append(f"unknown post step(s): {', '.join(bad_post)}")
+        if problems:
+            out.append(_check(f"preset {name}", "fail", "; ".join(problems),
+                              f"fix [presets.{name}] in config.toml or the workflow file"))
         else:
-            out.append(_check(f"preset {name}", "ok", f"{wf.name}, all placeholders filled"))
+            out.append(_check(f"preset {name}", "ok", f"{', '.join(used)}: all placeholders filled"))
     return out
 
 

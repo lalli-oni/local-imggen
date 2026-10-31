@@ -6,15 +6,21 @@ Usage:
   gen "misty fjord" -p wallpaper -n 4           # 4 wallpapers (seeds base..base+3)
   gen "rocket" -p icon -n 6 --open              # icons, open contact sheet in browser
   gen "x" --seed 123 --size 832x1216 --steps 40 --neg "people"
+  gen vary PATH -n 4 --strength 0.4             # img2img variations of an image
+  gen vary PATH --mask MASK.png --prompt "..."  # inpaint: repaint only the white part of MASK
+  gen cutout PATH                               # remove the background -> PATH-transparent.png
   gen presets                                   # list presets
   gen recent [N]                                # last N runs
   gen set-wallpaper PATH                        # set Windows desktop wallpaper
   gen doctor                                    # health check (service, GPU, torch, models, ...)
+  gen sheet RUN_DIR                             # rebuild a run's index.html contact sheet
 """
 from __future__ import annotations
 
 import base64
+import hashlib
 import html
+import io
 import json
 import os
 import random
@@ -121,6 +127,22 @@ class Comfy:
             time.sleep(1)
         raise TimeoutError(f"prompt {prompt_id} did not finish in {timeout}s")
 
+    def upload(self, data: bytes, name: str) -> str:
+        """Upload a PNG to ComfyUI's input folder; returns the name LoadImage expects."""
+        boundary = uuid.uuid4().hex
+        body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"image\"; filename=\"{name}\"\r\n"
+                f"Content-Type: image/png\r\n\r\n").encode() + data + \
+            (f"\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"overwrite\"\r\n\r\ntrue"
+             f"\r\n--{boundary}--\r\n").encode()
+        req = urllib.request.Request(self.url + "/upload/image", data=body,
+                                     headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                res = json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(f"ComfyUI rejected the upload: {e.read().decode(errors='replace')[:500]}")
+        return f"{res['subfolder']}/{res['name']}" if res.get("subfolder") else res["name"]
+
     def fetch(self, image: dict) -> bytes:
         q = urllib.parse.urlencode({k: image.get(k, "") for k in ("filename", "subfolder", "type")})
         return self._get(f"/view?{q}", timeout=120)
@@ -136,6 +158,66 @@ def remove_bg(path: Path) -> Path:
 
 
 POST = {"remove_bg": remove_bg}
+
+
+# ---------------------------------------------------------------- source images (img2img / inpaint)
+
+SOURCE_PIXELS = 1024 * 1024  # SDXL's native area; sources are resized to about this
+MASK_FEATHER = 4  # px of blur on mask edges
+
+
+def _source_size(w: int, h: int) -> tuple[int, int]:
+    """Keep the aspect ratio, scale to ~1 MP, round each side to a multiple of 64."""
+    k = (SOURCE_PIXELS / (w * h)) ** 0.5
+    return max(64, round(w * k / 64) * 64), max(64, round(h * k / 64) * 64)
+
+
+def prepare_source(path: Path, mask: Path | None = None) -> tuple[bytes, bytes | None, tuple[int, int]]:
+    """Load the source (and optional mask) as PNG bytes at an SDXL-friendly size.
+
+    Transparency is flattened onto white, so icons and cut-outs work as sources.
+    Mask: white = repaint, black = keep. It is resized to the source's size and its edge is
+    feathered by MASK_FEATHER px, so pixels just outside the white area blend a little.
+    Output is at this ~1 MP size, not the source's resolution.
+    """
+    from PIL import Image  # lazy: only img2img needs it
+
+    def png(im) -> bytes:
+        buf = io.BytesIO()
+        im.save(buf, "PNG")
+        return buf.getvalue()
+
+    from PIL import ImageOps
+    im = ImageOps.exif_transpose(Image.open(path))  # phone photos: apply the EXIF rotation
+    if im.mode in ("RGBA", "LA", "P"):
+        im = im.convert("RGBA")
+        bg = Image.new("RGB", im.size, (255, 255, 255))
+        bg.paste(im, mask=im.getchannel("A"))
+        im = bg
+    size = _source_size(*im.size)
+    src = png(im.convert("RGB").resize(size, Image.LANCZOS))
+    m = None
+    if mask is not None:
+        mk = ImageOps.exif_transpose(Image.open(mask))
+        from PIL import ImageFilter
+        # feather the edge a little so the repainted part blends into the kept part
+        m = png(mk.convert("L").resize(size, Image.LANCZOS)
+                .filter(ImageFilter.GaussianBlur(MASK_FEATHER)).convert("RGB"))
+    return src, m, size
+
+
+def find_sidecar(path: Path) -> dict | None:
+    """The JSON sidecar written next to a generated image (also for -transparent.png files)."""
+    for cand in (path.with_suffix(".json"),
+                 path.with_name(path.stem.removesuffix("-transparent") + ".json")):
+        if cand.is_file():
+            try:
+                meta = json.loads(cand.read_text())
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                continue
+            if isinstance(meta, dict):
+                return meta
+    return None
 
 
 # ---------------------------------------------------------------- helpers
@@ -165,22 +247,45 @@ def to_linux_path(p: str) -> Path:
 
 def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | None = None,
              negative: str | None = None, width: int | None = None, height: int | None = None,
-             steps: int | None = None, cfg: float | None = None, label: str | None = None) -> dict:
+             steps: int | None = None, cfg: float | None = None, label: str | None = None,
+             source_image: str | None = None, mask: str | None = None,
+             denoise: float | None = None) -> dict:
+    """txt2img by default. With source_image: img2img (denoise = how much may change, 0-1).
+    With source_image + mask: inpaint, only the white part of the mask is repainted."""
     conf = load_config()
     presets = conf["presets"]
     if preset not in presets:
         raise ValueError(f"unknown preset '{preset}'. Available: {', '.join(presets)}")
     p = dict(presets[preset])
     count = max(1, int(count))
+    if mask is not None and source_image is None:
+        raise ValueError("a mask needs a source image")
 
-    template = json.loads((ROOT / "workflows" / p["workflow"]).read_text())
+    workflow = p["workflow"]
+    src_path = mask_path = None
+    if source_image is not None:
+        src_path = to_linux_path(source_image)
+        if not src_path.is_file():
+            raise FileNotFoundError(src_path)
+        if mask is not None:
+            mask_path = to_linux_path(mask)
+            if not mask_path.is_file():
+                raise FileNotFoundError(mask_path)
+            workflow = p.get("inpaint_workflow", "sdxl_inpaint.json")
+        else:
+            workflow = p.get("img2img_workflow", "sdxl_img2img.json")
+        denoise = float(denoise if denoise is not None else (0.85 if mask_path else 0.4))
+        if not 0 < denoise <= 1:
+            raise ValueError("strength/denoise must be in (0, 1]")
+        src_png, mask_png, src_size = prepare_source(src_path, mask_path)
+    template = json.loads((ROOT / "workflows" / workflow).read_text())
     base_seed = seed if seed is not None else random.randrange(MAX_SEED)
     full_prompt = prompt + p.get("suffix", "")
     full_negative = (negative if negative is not None else conf.get("default_negative", "")) \
         + p.get("negative_extra", "")
 
-    params = {k: v for k, v in p.items() if k not in ("workflow", "description", "suffix",
-                                                      "negative_extra", "post")}
+    params = {k: v for k, v in p.items() if k not in ("workflow", "img2img_workflow", "inpaint_workflow",
+                                                      "description", "suffix", "negative_extra", "post")}
     params.update(checkpoint=p.get("checkpoint", conf["checkpoint"]),
                   prompt=full_prompt, negative=full_negative)
     for k, v in (("width", width), ("height", height), ("steps", steps), ("cfg", cfg)):
@@ -194,6 +299,18 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
 
     comfy = Comfy(conf["comfy_url"])
     comfy.wait_ready()
+
+    source = None
+    if src_path is not None:
+        # content-addressed names: re-running on the same source/mask overwrites instead of piling up
+        def name(kind: str, data: bytes) -> str:
+            return f"imagegen-{kind}-{hashlib.sha1(data).hexdigest()[:16]}.png"
+        params.update(image=comfy.upload(src_png, name("src", src_png)), denoise=denoise,
+                      width=src_size[0], height=src_size[1])
+        if mask_png is not None:
+            params["mask"] = comfy.upload(mask_png, name("mask", mask_png))
+        source = {"source_image": str(src_path), "mask": str(mask_path) if mask_path else None,
+                  "denoise": denoise}
 
     # queue everything up front; ComfyUI works through it while we wait
     jobs = []
@@ -215,44 +332,93 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
             for step in p.get("post", []):
                 final = POST[step](final)
             meta = {"prompt": prompt, "full_prompt": full_prompt, "negative": full_negative,
+                    "user_negative": negative,
                     "preset": preset, "seed": s, "params": {k: v for k, v in params.items()
                                                             if k not in ("prompt", "negative")},
-                    "file": final.name, "raw_file": path.name, "created": now.isoformat(timespec="seconds")}
+                    "file": final.name, "raw_file": path.name, "created": now.isoformat(timespec="seconds"),
+                    **(source or {})}
             path.with_suffix(".json").write_text(json.dumps(meta, indent=2))
             images.append({"path": str(final), "windows_path": to_windows_path(final), "seed": s})
         log(f"  [{i}/{count}] seed {s} done in {time.time() - t0:.1f}s")
 
     run = {"preset": preset, "prompt": prompt, "base_seed": base_seed, "count": count,
-           "run_dir": str(run_dir), "images": images}
+           "run_dir": str(run_dir), "images": images, "transparent": bool(p.get("post")), **(source or {})}
     (run_dir / "run.json").write_text(json.dumps(run, indent=2))
-    sheet = write_contact_sheet(run_dir, run, transparent=bool(p.get("post")))
+    sheet = write_contact_sheet(run_dir, run)
     run["contact_sheet"] = str(sheet)
     run["contact_sheet_windows"] = to_windows_path(sheet)
     run["run_dir_windows"] = to_windows_path(run_dir)
     return run
 
 
-def write_contact_sheet(run_dir: Path, run: dict, transparent: bool = False) -> Path:
-    bg = ("background: repeating-conic-gradient(#3a3a3a 0 25%, #2a2a2a 0 50%) 0 0/20px 20px;"
-          if transparent else "background:#111;")
-    cards = "\n".join(
-        f'<figure><a href="{html.escape(Path(im["path"]).name)}"><img src="{html.escape(Path(im["path"]).name)}" '
-        f'loading="lazy"></a><figcaption>#{n} · seed {im["seed"]}</figcaption></figure>'
-        for n, im in enumerate(run["images"], 1))
-    page = f"""<!doctype html><meta charset="utf-8"><title>{html.escape(run['prompt'][:60])}</title>
-<style>
-body{{margin:0;padding:24px;background:#0b0b0c;color:#ddd;font:14px system-ui,sans-serif}}
-h1{{font-size:16px;font-weight:600;margin:0 0 4px}} p{{margin:0 0 20px;color:#888}}
-main{{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px}}
-figure{{margin:0}} img{{width:100%;display:block;border-radius:8px;{bg}}}
-figcaption{{padding:6px 2px;color:#999;font-size:12px}}
-</style>
-<h1>{html.escape(run['prompt'])}</h1>
-<p>preset <b>{html.escape(run['preset'])}</b> · {run['count']} image(s) · base seed {run['base_seed']}</p>
-<main>{cards}</main>"""
+def vary(path: str, count: int = 4, strength: float | None = None, prompt: str | None = None,
+         negative: str | None = None, preset: str | None = None, mask: str | None = None,
+         seed: int | None = None, steps: int | None = None, cfg: float | None = None,
+         label: str | None = None) -> dict:
+    """Variations of an existing image (img2img), or inpaint with a mask.
+
+    Prompt, preset and negative default to the image's JSON sidecar when it has one;
+    an outside image (no sidecar) needs a prompt.
+    """
+    src = to_linux_path(path)
+    if not src.is_file():
+        raise FileNotFoundError(src)
+    meta = find_sidecar(src) or {}
+    if prompt is None:
+        prompt = meta.get("prompt")
+        if prompt is None:
+            raise ValueError(f"no sidecar JSON next to {src.name}; pass a prompt")
+    if negative is None:
+        negative = meta.get("user_negative")
+    preset = preset or meta.get("preset") or "draft"
+    return generate(prompt, preset, count, seed, negative, steps=steps, cfg=cfg,
+                    label=label or ("inpaint-" if mask else "vary-") + slug(src.stem, 30),
+                    source_image=str(src), mask=mask, denoise=strength)
+
+
+SHEET_TEMPLATE = ROOT / "templates" / "contact_sheet.html"
+SHEET_PARAMS = ("width", "height", "steps", "cfg")  # shown per image when the sidecar has them
+
+
+def write_contact_sheet(run_dir: Path, run: dict) -> Path:
+    """Write <run_dir>/index.html: the viewer in templates/contact_sheet.html with this run's data inlined.
+
+    Checkerboard background when run["transparent"]; older run.json files lack it, so then
+    it is guessed from the file names (rembg output ends in -transparent.png).
+    """
+    images, first = [], None
+    for im in run["images"]:
+        path = Path(im["path"])
+        meta = find_sidecar(run_dir / path.name) or {}
+        first = first if first is not None else meta
+        entry = {"file": path.name, "seed": im["seed"]}
+        params = meta.get("params") or {}
+        entry.update({k: params[k] for k in SHEET_PARAMS if k in params})
+        images.append(entry)
+    transparent = run.get("transparent")
+    if transparent is None:
+        transparent = any(e["file"].endswith("-transparent.png") for e in images)
+    data = {"prompt": run["prompt"], "preset": run["preset"], "base_seed": run["base_seed"],
+            "count": run["count"], "transparent": transparent, "images": images,
+            "negative": (first or {}).get("negative"),
+            "source_image": Path(run["source_image"]).name if run.get("source_image") else None,
+            "mask": bool(run.get("mask")), "denoise": run.get("denoise")}
+    # "<" escaped so no value can close the <script> block it is inlined into
+    fills = {"TITLE": html.escape(run["prompt"][:60]),
+             "RUN_JSON": json.dumps(data, ensure_ascii=False).replace("<", "\\u003c")}
+    page = re.sub(r"\{\{(TITLE|RUN_JSON)\}\}", lambda m: fills[m.group(1)], SHEET_TEMPLATE.read_text(encoding="utf-8"))
     out = run_dir / "index.html"
-    out.write_text(page)
+    out.write_text(page, encoding="utf-8")
     return out
+
+
+def rebuild_contact_sheet(path: str) -> Path:
+    """Re-write an existing run's index.html from its run.json (path: the run folder, run.json or index.html)."""
+    p = to_linux_path(path)
+    run_json = p if p.name == "run.json" else (p.parent if p.suffix else p) / "run.json"
+    if not run_json.is_file():
+        raise FileNotFoundError(run_json)
+    return write_contact_sheet(run_json.parent, json.loads(run_json.read_text()))
 
 
 def recent_runs(n: int = 5) -> list[dict]:
@@ -294,6 +460,14 @@ def open_in_windows(path: str) -> None:
 
 # ---------------------------------------------------------------- CLI
 
+def _print_run(run: dict, open_sheet: bool) -> None:
+    for im in run["images"]:
+        print(im["windows_path"] or im["path"])
+    print("contact sheet:", run["contact_sheet_windows"] or run["contact_sheet"])
+    if open_sheet:
+        open_in_windows(run["contact_sheet"])
+
+
 def main(argv: list[str]) -> int:
     import argparse
     if argv and argv[0] == "presets":
@@ -307,6 +481,51 @@ def main(argv: list[str]) -> int:
     if argv and argv[0] == "doctor":
         import doctor
         return doctor.main()
+    if argv and argv[0] == "vary":
+        vp = argparse.ArgumentParser(prog="gen vary",
+                                     description="img2img variations of an image, or inpaint with --mask")
+        vp.add_argument("path")
+        vp.add_argument("-n", "--count", type=int, default=4)
+        vp.add_argument("-s", "--strength", type=float,
+                        help="how much may change, 0-1 (default 0.4; 0.85 with --mask)")
+        vp.add_argument("--prompt", help="default: the image's own prompt from its sidecar")
+        vp.add_argument("--neg", dest="negative")
+        vp.add_argument("-p", "--preset", help="default: the image's own preset, else draft")
+        vp.add_argument("--mask", help="PNG, white = repaint, black = keep (any size)")
+        vp.add_argument("--seed", type=int)
+        vp.add_argument("--steps", type=int)
+        vp.add_argument("--cfg", type=float)
+        vp.add_argument("--label", help="folder name instead of vary-<image>")
+        vp.add_argument("--open", action="store_true", help="open contact sheet in Windows browser")
+        a = vp.parse_args(argv[1:])
+        run = vary(a.path, a.count, a.strength, a.prompt, a.negative, a.preset, a.mask,
+                   a.seed, a.steps, a.cfg, a.label)
+        _print_run(run, a.open)
+        return 0
+    if argv and argv[0] == "cutout":
+        if len(argv) != 2:
+            print("usage: gen cutout PATH", file=sys.stderr)
+            return 2
+        src = to_linux_path(argv[1])
+        if not src.is_file():
+            print(f"not a file: {src}", file=sys.stderr)
+            return 1
+        print(remove_bg(src))
+        return 0
+    if argv and argv[0] == "sheet":
+        if len(argv) < 2:
+            print("usage: gen sheet RUN_DIR... (rebuild index.html from run.json)", file=sys.stderr)
+            return 2
+        status = 0
+        for d in argv[1:]:
+            try:
+                out = rebuild_contact_sheet(d)
+            except (FileNotFoundError, KeyError, ValueError) as e:  # ValueError covers bad JSON
+                print(f"{d}: cannot rebuild ({type(e).__name__}: {e})", file=sys.stderr)
+                status = 1
+                continue
+            print(to_windows_path(out) or out)
+        return status
     if argv and argv[0] == "set-wallpaper":
         print("wallpaper set:", set_wallpaper(argv[1]))
         return 0
@@ -328,11 +547,7 @@ def main(argv: list[str]) -> int:
     if a.size:
         w, h = (int(x) for x in a.size.lower().split("x"))
     run = generate(a.prompt, a.preset, a.count, a.seed, a.negative, w, h, a.steps, a.cfg, a.label)
-    for im in run["images"]:
-        print(im["windows_path"] or im["path"])
-    print("contact sheet:", run["contact_sheet_windows"] or run["contact_sheet"])
-    if a.open:
-        open_in_windows(run["contact_sheet"])
+    _print_run(run, a.open)
     if a.wallpaper and run["images"]:
         print("wallpaper set:", set_wallpaper(run["images"][0]["path"]))
     return 0

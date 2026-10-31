@@ -1,0 +1,13 @@
+{
+  "3": {"class_type": "KSampler", "inputs": {"seed": "{{seed}}", "steps": "{{steps}}", "cfg": "{{cfg}}", "sampler_name": "dpmpp_2m", "scheduler": "karras", "denoise": "{{denoise}}", "model": ["4", 0], "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["15", 0]}},
+  "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "{{checkpoint}}"}},
+  "13": {"class_type": "LoadImage", "inputs": {"image": "{{image}}"}},
+  "14": {"class_type": "LoadImageMask", "inputs": {"image": "{{mask}}", "channel": "red"}},
+  "5": {"class_type": "VAEEncode", "inputs": {"pixels": ["13", 0], "vae": ["4", 2]}},
+  "15": {"class_type": "SetLatentNoiseMask", "inputs": {"samples": ["5", 0], "mask": ["14", 0]}},
+  "6": {"class_type": "CLIPTextEncode", "inputs": {"text": "{{prompt}}", "clip": ["4", 1]}},
+  "7": {"class_type": "CLIPTextEncode", "inputs": {"text": "{{negative}}", "clip": ["4", 1]}},
+  "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["4", 2]}},
+  "16": {"class_type": "ImageCompositeMasked", "inputs": {"destination": ["13", 0], "source": ["8", 0], "x": 0, "y": 0, "resize_source": false, "mask": ["14", 0]}},
+  "9": {"class_type": "SaveImage", "inputs": {"filename_prefix": "imagegen", "images": ["16", 0]}}
+}

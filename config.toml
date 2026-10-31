@@ -22,6 +22,8 @@ suffix = ""
 [presets.wallpaper]
 description = "16:9 landscape, upscaled to 4K (3840x2160)"
 workflow = "sdxl_upscale.json"
+img2img_workflow = "sdxl_img2img_upscale.json"
+inpaint_workflow = "sdxl_inpaint_upscale.json"
 width = 1344
 height = 768
 steps = 30
@@ -34,6 +36,8 @@ suffix = ", wallpaper, wide landscape composition, highly detailed"
 [presets.wallpaper_ultrawide]
 description = "21:9 ultrawide, upscaled to 3440x1440"
 workflow = "sdxl_upscale.json"
+img2img_workflow = "sdxl_img2img_upscale.json"
+inpaint_workflow = "sdxl_inpaint_upscale.json"
 width = 1536
 height = 640
 steps = 30
