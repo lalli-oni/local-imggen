@@ -293,7 +293,7 @@ def run_pass(slug: str, count: int = 4, extra: str | None = None, seed: int | No
     _tag_json(rf, tag)
     run["project"] = tag
     try:  # re-write the sheet so it knows the project (its promote buttons need that)
-        imagegen.write_contact_sheet(rf.parent, json.loads(rf.read_text()))
+        imagegen.write_contact_sheet(rf.parent, run)
     except (OSError, ValueError, KeyError) as e:
         imagegen.log(f"warning: could not rebuild the contact sheet: {e}")
 

@@ -9,7 +9,7 @@
   Keys: f = fit all / grid, + / - = size, click = view, Ctrl/Shift-click = pick for compare,
   in a viewer: Esc close, arrows step, c pick, i compare with the input image, p copy promote command,
   s side-by-side / w wipe, x swap.
-  img2img/inpaint runs show their input image (source.<ext>, copied in by write_contact_sheet) as the
+  img2img/inpaint runs show their input image (source.png, saved by generate) as the
   first card; project runs get a "promote" button that copies the `gen project promote` command.
 -->
 <style>
@@ -154,7 +154,7 @@ const shq = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'";  // POSIX shell
 function promoteCmd(im) {
   const p = RUN.project;
   return `gen project promote ${p.slug} ${shq(RUN.run_dir.replace(/\/+$/, "") + "/" + im.file)}` +
-    ` --asset ${p.slug} --note ${shq(`v${p.version} #${im.n} seed ${im.seed}`)}`;
+    ` --asset ${p.slug} --note ${shq(`v${p.version}${p.ref ? ` from ${p.ref}` : ""} #${im.n} seed ${im.seed}`)}`;
 }
 const label = (i) => images[i].source ? "input" : `#${images[i].n} · seed ${images[i].seed}`;
 function copyPromote(im) {
@@ -194,7 +194,7 @@ const grid = $("grid");
 const cards = images.map((im, i) => {
   const img = el("img", { src: im.src, alt: label(i), className: bgClass, loading: "lazy", decoding: "async" });
   img.addEventListener("load", () => {
-    if (!state.aspectKnown && img.naturalHeight) {  // a run's images share one size
+    if (!im.source && !state.aspectKnown && img.naturalHeight) {  // a run's outputs share one size
       state.aspect = img.naturalWidth / img.naturalHeight;
       state.aspectKnown = true;
       layout();
@@ -327,7 +327,7 @@ function renderView() {
   if (!two) {
     const im = images[v.i];
     const k = state.picks.indexOf(v.i);
-    $("view-title").replaceChildren(el("b", { textContent: label(v.i) }), `  ${im.file}  (${v.i + 1}/${images.length}, ← →)`);
+    $("view-title").replaceChildren(el("b", { textContent: label(v.i) }), `  ${im.file}  (${im.source ? "input" : `${im.n}/${RUN.images.length}`}, ← →)`);
     $("view-pick").textContent = k === 0 ? "Picked A" : k === 1 ? "Picked B" : "Pick";
     $("view-pick").setAttribute("aria-pressed", k >= 0);
     $("view-open").href = im.src;

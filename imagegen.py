@@ -312,6 +312,10 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
             params["mask"] = comfy.upload(mask_png, name("mask", mask_png))
         source = {"source_image": str(src_path), "mask": str(mask_path) if mask_path else None,
                   "denoise": denoise}
+        try:  # exactly what the model got, for the contact sheet's input card
+            (run_dir / SHEET_SOURCE).write_bytes(src_png)
+        except OSError as e:
+            log(f"warning: could not save {SHEET_SOURCE}: {e}")
 
     # queue everything up front; ComfyUI works through it while we wait
     jobs = []
@@ -378,6 +382,7 @@ def vary(path: str, count: int = 4, strength: float | None = None, prompt: str |
 
 
 SHEET_TEMPLATE = ROOT / "templates" / "contact_sheet.html"
+SHEET_SOURCE = "source.png"  # an img2img/inpaint run's input as the model got it, shown on the sheet
 SHEET_PARAMS = ("width", "height", "steps", "cfg")  # shown per image when the sidecar has them
 
 
@@ -416,18 +421,21 @@ def write_contact_sheet(run_dir: Path, run: dict) -> Path:
 
 
 def _sheet_source(run_dir: Path, source: str | None) -> str | None:
-    """The input image of an img2img/inpaint run, copied next to the sheet as source.<ext>.
+    """The input image of an img2img/inpaint run, as the source.png that generate() saves next to the sheet.
 
     A copy rather than a link: file:// pages cannot reach WSL paths, and the original may change later.
+    Runs made before generate() saved it get one made from the original now (same ~1 MP prep the model
+    got; it may differ if the original changed since).
     """
     if not source:
         return None
-    src = Path(source)
-    dest = run_dir / f"source{src.suffix.lower() or '.png'}"
+    dest = run_dir / SHEET_SOURCE
     if not dest.is_file():
-        if not src.is_file():
-            return None  # moved or deleted since the run; the header still names it
-        shutil.copy2(src, dest)
+        try:
+            dest.write_bytes(prepare_source(Path(source))[0])
+        except Exception as e:  # moved, deleted, unreadable: the header still names the source
+            log(f"note: no input image for the sheet ({type(e).__name__}: {e})")
+            return None
     return dest.name
 
 
