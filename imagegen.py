@@ -14,6 +14,7 @@ Usage:
   gen set-wallpaper PATH                        # set Windows desktop wallpaper
   gen doctor                                    # health check (service, GPU, torch, models, ...)
   gen sheet [RUN_DIR|DATE]                      # rebuild contact sheet(s); no arg = latest run
+  gen project new|list|status|set|gen|promote|keep ...  # creative projects (see projects.py)
 """
 from __future__ import annotations
 
@@ -503,6 +504,9 @@ def main(argv: list[str]) -> int:
         for r in recent_runs(int(argv[1]) if len(argv) > 1 else 5):
             print(f"{r['preset']:12} {r['prompt'][:50]:50} {r['run_dir']}")
         return 0
+    if argv and argv[0] == "project":
+        import projects
+        return projects.main(argv[1:])
     if argv and argv[0] == "doctor":
         import doctor
         return doctor.main()

@@ -12,7 +12,11 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
 - `templates/contact_sheet.html`: the per-run `index.html` viewer (fit-all / size slider, A/B compare).
   Static, no build, opened via file://; `write_contact_sheet` inlines the run data as JSON.
 - `mcp_server.py`: MCP tools (generate, get_job, vary, cutout, doctor, list_presets, recent_runs, view_image, set_wallpaper,
-  open_contact_sheet)
+  open_contact_sheet, project_*)
+- `projects.py`: creative projects (#22) behind `gen project new|list|status|set|gen|promote|keep` and the MCP
+  `project_*` tools. `<output_dir>/projects/<slug>/project.json` holds the state (prompt, snippets, params,
+  palette, refs), a version per change, named assets with history, and passes (tagged `gen` runs).
+  Assets go stale when a later version changes prompt/negative/snippets/palette/refs.
 - `doctor.py`: read-only health checks behind `gen doctor` and the MCP `doctor` tool
 - `comfy/`: opt-in resource limits for the comfyui service, **off by default**. `comfy/limits.sh on|off|status`
   installs/removes `/etc/systemd/system/comfyui.service.d/zz-imagegen-limits.conf` built from `comfyui-args`
