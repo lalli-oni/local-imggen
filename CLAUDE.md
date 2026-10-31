@@ -25,6 +25,8 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   `update.sh` runs `comfy/install.sh` on comfy/ changes, which re-applies only if limits are already on.
 - `windows/install-wslconfig.sh`: writes `%USERPROFILE%\.wslconfig` (cores/RAM for WSL). Manual, never overwrites,
   always-on once applied (needs `wsl --shutdown`), so it is not part of the on/off toggle.
+- `test.sh` + `tests/`: the test suite (see Testing below). `requirements-dev.txt` / `requirements-browser.txt`
+  hold test-only deps; CI runs it on every PR (`.github/workflows/test.yml`).
 - `setup.sh`: idempotent setup (venv `~/venvs/imagegen`, `gen` wrapper, upscaler + rembg models)
 
 ## Rules
@@ -38,3 +40,27 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
 - Outputs: `<output_dir>/<YYYY-MM-DD>/<HHMMSS>-<preset>-<slug>/` with PNGs, per-image JSON sidecars
   (prompt, seed, params), `run.json` and `index.html` contact sheet.
 - Logs: `journalctl -u comfyui -f`.
+
+## Testing
+Run `./test.sh` before every push (any args go to pytest, e.g. `./test.sh -k projects -x`). It needs no tulu,
+GPU or ComfyUI: the first run makes `.venv-test/` from requirements-dev.txt, and every test is isolated
+(temp output_dir, IMAGEGEN_COMFY_URL on a closed port, rembg stubbed, `tests/stubs/` first on PATH).
+Cloud sessions also run the contact sheet in Chromium (`/opt/pw-browsers`); elsewhere add `--browser`.
+
+What's there to reuse, instead of building a one-off setup:
+- `comfy` fixture (`tests/fake_comfy.py`): a fake ComfyUI HTTP server with canned PNGs. Inspect `comfy.workflows()`,
+  `comfy.uploads`; switch on `reject`, `fail_jobs`, `no_gpu`, `delay` (slow jobs), `queue_running/pending`.
+- `make_run` (a finished run folder: PNGs, sidecars, run.json), `make_image`, `out_dir`, `fake_rembg`, `stub_calls()`
+  (what the fake wslpath/powershell.exe/explorer.exe/systemctl/sudo were called with).
+- Shell scripts: `tests/shell_helpers.run_script()` runs a script with no terminal (y/N prompts read "no")
+  or with `answer="y"` on a pseudo-terminal. See `test_limits_sh.py` (fake systemd drop-in dir) and
+  `test_update_sh.py` (scratch git remote, PRs landed as GitHub-style merge commits).
+
+How a thread tests a change:
+1. Write the test plan first: what could break, and which of it the suite can check.
+2. Add or update tests for new code and for each bug fixed, in the same PR. Extend the fakes rather than
+   mocking around them (e.g. a new ComfyUI endpoint goes into fake_comfy.py).
+3. `./test.sh` green, and CI green on the PR.
+4. Test by hand only what can't reasonably be automated, and list it in the PR under "Needs a check on tulu"
+   for Þór: image quality and model output on the real GPU, timings/VRAM, real systemd/sudo/WSL behaviour,
+   Windows integration (wallpaper, explorer, toasts), the Claude desktop app picking up MCP changes.

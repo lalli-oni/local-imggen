@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Fake wslpath: -w /mnt/c/a/b -> C:\a\b, other Linux paths -> \\wsl.localhost\Ubuntu-24.04\...; -u C:\a -> /mnt/c/a
+. "$(dirname "$0")/_log.sh"
+mode=$1 p=$2
+case "$mode" in
+  -w) if [[ $p =~ ^/mnt/([a-z])(/.*)?$ ]]; then
+        d=${BASH_REMATCH[1]^^}; rest=${BASH_REMATCH[2]}; echo "$d:${rest//\//\\}"
+      else echo "\\\\wsl.localhost\\Ubuntu-24.04${p//\//\\}"; fi ;;
+  -u) if [[ $p =~ ^([A-Za-z]):[\\/](.*)$ ]]; then
+        d=${BASH_REMATCH[1],,}; rest=${BASH_REMATCH[2]//\\//}; echo "/mnt/$d/$rest"
+      else echo "wslpath: $p: not a Windows path" >&2; exit 1; fi ;;
+  *) echo "fake wslpath: unsupported $*" >&2; exit 1 ;;
+esac

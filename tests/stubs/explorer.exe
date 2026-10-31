@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Fake explorer.exe: records the call. The real one exits 1 even on success.
+. "$(dirname "$0")/_log.sh"
+exit 1

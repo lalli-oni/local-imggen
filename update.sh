@@ -108,7 +108,7 @@ comfy_step() {
 
 # Print what old..new brings in, with risk flags and the follow-up steps update.sh will take.
 show_incoming() {
-  local old=$1 new=$2 changed=$3 sha subj body num title
+  local old=$1 new=$2 changed=$3 sha subj num title
 
   echo
   echo "${B}==> Incoming changes${N}"
