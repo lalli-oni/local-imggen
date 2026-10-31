@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+*.log
+# model weights live in ~/comfyui/models, never here
+*.safetensors
+*.ckpt
+*.pth
+*.onnx
+# outputs (normally on the Windows side anyway)
+outputs/

@@ -1,0 +1,55 @@
+# imagegen config. Edit freely; changes apply on the next run.
+# Env overrides for one-off runs: IMAGEGEN_OUTPUT_DIR, IMAGEGEN_COMFY_URL
+
+comfy_url  = "http://127.0.0.1:8188"
+output_dir = "/mnt/c/Users/lalli/Pictures/imagegen"   # change this line to move outputs
+
+checkpoint       = "sd_xl_base_1.0.safetensors"
+default_negative = "blurry, low quality, watermark, text, signature, jpeg artifacts"
+
+# Each preset = a workflow template in workflows/ + the values poured into it.
+# Keys a workflow uses as "{{key}}" must exist here (or come from CLI/MCP args).
+
+[presets.draft]
+description = "Quick square SDXL image for ideas and exploration"
+workflow = "sdxl_base.json"
+width = 1024
+height = 1024
+steps = 25
+cfg = 7.0
+suffix = ""
+
+[presets.wallpaper]
+description = "16:9 landscape, upscaled to 4K (3840x2160)"
+workflow = "sdxl_upscale.json"
+width = 1344
+height = 768
+steps = 30
+cfg = 7.0
+target_width = 3840
+target_height = 2160
+upscale_model = "RealESRGAN_x4plus.pth"
+suffix = ", wallpaper, wide landscape composition, highly detailed"
+
+[presets.wallpaper_ultrawide]
+description = "21:9 ultrawide, upscaled to 3440x1440"
+workflow = "sdxl_upscale.json"
+width = 1536
+height = 640
+steps = 30
+cfg = 7.0
+target_width = 3440
+target_height = 1440
+upscale_model = "RealESRGAN_x4plus.pth"
+suffix = ", ultrawide panoramic wallpaper, highly detailed"
+
+[presets.icon]
+description = "Single centered icon, background removed -> transparent PNG"
+workflow = "sdxl_base.json"
+width = 1024
+height = 1024
+steps = 30
+cfg = 7.0
+suffix = ", app icon, single centered object, flat vector style, bold simple shapes, plain white background"
+negative_extra = ", busy background, multiple objects, photo, text, letters"
+post = ["remove_bg"]
