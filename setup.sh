@@ -27,9 +27,6 @@ mkdir -p "$(dirname "$UP")"
 echo "==> background-removal model (first-use download, ~170 MB)"
 "$VENV/bin/python" -c "from rembg import new_session; new_session('u2net')" >/dev/null
 
-echo "==> ComfyUI resource limits (systemd drop-in, asks for sudo)"
-"$HERE/comfy/install.sh"
-
 echo "==> output folder"
 OUT="$("$VENV/bin/python" -c "import sys; sys.path.insert(0, '$HERE'); import imagegen; print(imagegen.load_config()['output_dir'])")"
 mkdir -p "$OUT" && echo "    $OUT"

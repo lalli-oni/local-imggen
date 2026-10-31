@@ -31,8 +31,13 @@ if has '^requirements\.txt$'; then
 fi
 
 if has '^comfy/'; then
-  echo "==> ComfyUI service settings changed: reinstalling drop-in (asks for sudo, restarts comfyui)"
-  ./comfy/install.sh
+  if [ -f /etc/systemd/system/comfyui.service.d/zz-imagegen-limits.conf ]; then
+    echo "==> Resource-limit settings changed and limits are ON: re-applying (sudo, restarts comfyui)"
+    ./comfy/limits.sh on
+  else
+    echo "==> Resource-limit settings changed. Limits are off, so nothing was installed."
+    echo "    Turn on when the PC is in use: ~/imagegen/comfy/limits.sh on"
+  fi
 fi
 
 if has '^windows/'; then
