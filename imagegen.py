@@ -13,7 +13,7 @@ Usage:
   gen recent [N]                                # last N runs
   gen set-wallpaper PATH                        # set Windows desktop wallpaper
   gen doctor                                    # health check (service, GPU, torch, models, ...)
-  gen sheet RUN_DIR                             # rebuild a run's index.html contact sheet
+  gen sheet [RUN_DIR|DATE]                      # rebuild contact sheet(s); no arg = latest run
 """
 from __future__ import annotations
 
@@ -412,12 +412,35 @@ def write_contact_sheet(run_dir: Path, run: dict) -> Path:
     return out
 
 
-def rebuild_contact_sheet(path: str) -> Path:
-    """Re-write an existing run's index.html from its run.json (path: the run folder, run.json or index.html)."""
+def find_run_files(path: str | None = None) -> list[Path]:
+    """The run.json files a user means by `path`.
+
+    None = the latest run. Otherwise a run folder, its run.json or index.html, or a date folder
+    (all its runs); relative paths are also tried under output_dir, so `2026-10-31` works anywhere.
+    """
+    root = Path(load_config()["output_dir"]).expanduser()
+    if path is None:
+        runs = sorted(root.glob("*/*/run.json"), key=lambda f: f.stat().st_mtime)
+        return runs[-1:]
+    if re.match(r"^[A-Za-z]:[^\\/]", path):  # bash ate the backslashes of an unquoted C:\... path
+        raise FileNotFoundError(f"{path} (put Windows paths in quotes: gen sheet 'C:\\...')")
     p = to_linux_path(path)
-    run_json = p if p.name == "run.json" else (p.parent if p.suffix else p) / "run.json"
-    if not run_json.is_file():
-        raise FileNotFoundError(run_json)
+    # relative: as given, under output_dir, and as absolute (a dropped leading slash: mnt/c/...)
+    for c in (p, root / p, Path("/") / p) if not p.is_absolute() else (p,):
+        if c.name == "run.json" and c.is_file():
+            return [c]
+        if c.suffix and (c.parent / "run.json").is_file():  # index.html or an image
+            return [c.parent / "run.json"]
+        if (c / "run.json").is_file():
+            return [c / "run.json"]
+        if c.is_dir() and (runs := sorted(c.glob("*/run.json"))):  # a date folder
+            return runs
+    raise FileNotFoundError(f"no run.json in or under {p}")
+
+
+def rebuild_contact_sheet(path: str | Path) -> Path:
+    """Re-write a run's index.html from its run.json (path: the run.json, or anything find_run_files takes)."""
+    run_json = Path(path) if str(path).endswith("run.json") and Path(path).is_file() else find_run_files(str(path))[0]
     return write_contact_sheet(run_json.parent, json.loads(run_json.read_text()))
 
 
@@ -513,18 +536,23 @@ def main(argv: list[str]) -> int:
         print(remove_bg(src))
         return 0
     if argv and argv[0] == "sheet":
-        if len(argv) < 2:
-            print("usage: gen sheet RUN_DIR... (rebuild index.html from run.json)", file=sys.stderr)
-            return 2
+        if argv[1:2] in (["-h"], ["--help"]):
+            print("usage: gen sheet [PATH...]  rebuild index.html from run.json\n"
+                  "  PATH: a run folder (or its index.html), or a date folder for all its runs;\n"
+                  "  relative paths are looked up under output_dir. No PATH = the latest run.")
+            return 0
         status = 0
-        for d in argv[1:]:
+        for d in argv[1:] or [None]:
             try:
-                out = rebuild_contact_sheet(d)
+                files = find_run_files(d)
+                if not files:
+                    raise FileNotFoundError("no runs yet")
+                for f in files:
+                    out = write_contact_sheet(f.parent, json.loads(f.read_text()))
+                    print(to_windows_path(out) or out)
             except (FileNotFoundError, KeyError, ValueError) as e:  # ValueError covers bad JSON
-                print(f"{d}: cannot rebuild ({type(e).__name__}: {e})", file=sys.stderr)
+                print(f"{d or 'latest run'}: cannot rebuild ({type(e).__name__}: {e})", file=sys.stderr)
                 status = 1
-                continue
-            print(to_windows_path(out) or out)
         return status
     if argv and argv[0] == "set-wallpaper":
         print("wallpaper set:", set_wallpaper(argv[1]))
