@@ -168,5 +168,84 @@ def doctor() -> list[dict]:
     return _doctor.run_checks(include_mcp=False)
 
 
+# ---------------------------------------------------------------- creative projects (projects.py)
+
+@mcp.tool()
+def project_list() -> list[dict]:
+    """List creative projects (slug, title, current version)."""
+    import projects
+    return [{"slug": s, "title": (p := projects.load(s))["title"], "version": p["version"]}
+            for s in projects.list_projects()]
+
+
+@mcp.tool()
+def project_get(slug: str, preview: bool = False, history: int = 5) -> list:
+    """A project's current state (prompt, snippets, params, palette, refs), its assets with history and
+    stale flags, recent versions and passes, and new_since_last_look: what changed since your previous
+    project_get. preview=True adds thumbnails of the refs and current asset versions.
+    Use this to summarise a project or to decide the next pass."""
+    import projects
+    s = projects.summary(slug, mark_seen="claude", history=history)
+    out: list = [s]
+    if preview:
+        out += [_thumb(r["path"]) for r in s["state"]["refs"].values()]
+        out += [_thumb(a["file"]) for a in s["assets"].values()]
+    return out
+
+
+@mcp.tool()
+def project_new(slug: str, title: str | None = None, brief: str = "", prompt: str | None = None,
+                preset: str | None = None, palette: list[str] | None = None) -> dict:
+    """Create a project (v1). slug: lowercase letters, digits, dashes. Refine it with project_update."""
+    import projects
+    kw = {k: v for k, v in dict(prompt=prompt, preset=preset, palette=palette).items() if v is not None}
+    projects.new(slug, title, brief, "claude", **kw)
+    return projects.summary(slug, mark_seen="claude")
+
+
+@mcp.tool()
+def project_update(slug: str, note: str, prompt: str | None = None, negative: str | None = None,
+                   preset: str | None = None, params: dict | None = None, snippets: dict | None = None,
+                   palette: list[str] | None = None, refs: dict | None = None,
+                   drop_refs: list[str] | None = None) -> dict:
+    """Change a project's state; creates a new project version with your note (say why).
+    params: {width, height, steps, cfg, strength}; snippets: {name: text}, appended to the prompt in order;
+    a null value removes a param or snippet. palette: hex list (replaces it). refs: {name: image path}.
+    Changing prompt, negative, snippets, palette or refs makes existing assets stale."""
+    import projects
+    kw = {k: v for k, v in dict(prompt=prompt, negative=negative, preset=preset, params=params,
+                                snippets=snippets, palette=palette, refs=refs,
+                                drop_refs=drop_refs).items() if v is not None}
+    return projects.set_state(slug, note, "claude", **kw)
+
+
+@mcp.tool()
+def project_generate(slug: str, count: int = 4, extra: str | None = None, seed: int | None = None,
+                     ref: str | None = None, strength: float | None = None, preview: bool = True) -> list:
+    """A pass: generate from the project's current state (prompt + snippets, preset, params).
+    extra is appended to the prompt for this pass only. ref = img2img from one of the project's refs
+    (strength defaults to the project's strength param, else 0.4). The images record the project version.
+    Same waiting/job_id behaviour as generate."""
+    import projects
+    kwargs = dict(slug=slug, count=min(max(1, count), MAX_COUNT), extra=extra, seed=seed, ref=ref,
+                  strength=strength, author="claude")
+    return _start(projects.run_pass, kwargs, preview)
+
+
+@mcp.tool()
+def project_promote(slug: str, image: str, asset: str, note: str, as_ref: str | None = None) -> dict:
+    """Make an image the next version of a named asset (e.g. "tulu", "icon/folder"); creates a project
+    version. as_ref also makes it a project reference image. Only promote what the user picked."""
+    import projects
+    return projects.promote(slug, image, asset, note, as_ref, "claude")
+
+
+@mcp.tool()
+def project_keep(slug: str, asset: str, note: str) -> dict:
+    """Mark a stale asset as fine as-is at the current project version (only when the user says so)."""
+    import projects
+    return projects.keep(slug, asset, note, "claude")
+
+
 if __name__ == "__main__":
     mcp.run("stdio")
