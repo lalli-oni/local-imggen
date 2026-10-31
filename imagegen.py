@@ -438,10 +438,12 @@ def find_run_files(path: str | None = None) -> list[Path]:
     raise FileNotFoundError(f"no run.json in or under {p}")
 
 
-def rebuild_contact_sheet(path: str | Path) -> Path:
-    """Re-write a run's index.html from its run.json (path: the run.json, or anything find_run_files takes)."""
-    run_json = Path(path) if str(path).endswith("run.json") and Path(path).is_file() else find_run_files(str(path))[0]
-    return write_contact_sheet(run_json.parent, json.loads(run_json.read_text()))
+def rebuild_contact_sheets(path: str | None = None) -> list[Path]:
+    """Re-write index.html from run.json for every run find_run_files(path) finds; returns the sheets."""
+    files = find_run_files(path)
+    if not files:
+        raise FileNotFoundError("no runs yet")
+    return [write_contact_sheet(f.parent, json.loads(f.read_text())) for f in files]
 
 
 def recent_runs(n: int = 5) -> list[dict]:
@@ -544,11 +546,7 @@ def main(argv: list[str]) -> int:
         status = 0
         for d in argv[1:] or [None]:
             try:
-                files = find_run_files(d)
-                if not files:
-                    raise FileNotFoundError("no runs yet")
-                for f in files:
-                    out = write_contact_sheet(f.parent, json.loads(f.read_text()))
+                for out in rebuild_contact_sheets(d):
                     print(to_windows_path(out) or out)
             except (FileNotFoundError, KeyError, ValueError) as e:  # ValueError covers bad JSON
                 print(f"{d or 'latest run'}: cannot rebuild ({type(e).__name__}: {e})", file=sys.stderr)
