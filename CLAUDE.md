@@ -6,8 +6,10 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
 ## Layout
 - `config.toml`: ComfyUI URL, `output_dir` (Windows side, `/mnt/c/Users/lalli/Pictures/imagegen`), presets
 - `workflows/*.json`: ComfyUI **API-format** workflows; string values `"{{key}}"` are filled from preset/args
-- `imagegen.py`: core + `gen` CLI (`gen --help`, `gen presets`, `gen recent`, `gen set-wallpaper PATH`)
-- `mcp_server.py`: MCP tools (generate, list_presets, recent_runs, view_image, set_wallpaper, open_contact_sheet)
+- `imagegen.py`: core + `gen` CLI (`gen --help`, `gen presets`, `gen recent`, `gen set-wallpaper PATH`,
+  `gen vary PATH [--mask M] [-s 0.4]` for img2img/inpaint, `gen cutout PATH` for background removal)
+- `mcp_server.py`: MCP tools (generate, get_job, vary, cutout, list_presets, recent_runs, view_image, set_wallpaper,
+  open_contact_sheet)
 - `comfy/`: opt-in resource limits for the comfyui service, **off by default**. `comfy/limits.sh on|off|status`
   installs/removes `/etc/systemd/system/comfyui.service.d/zz-imagegen-limits.conf` built from `comfyui-args`
   (extra CLI flags) + `limits.conf` (Nice/CPUWeight/IOWeight). on/off restarts comfyui (sudo) after a y/N prompt
@@ -22,7 +24,9 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   it holds AMD's ROCm wheels and a generic torch would replace them.
 - Models: `~/comfyui/models/{checkpoints,upscale_models,...}`.
 - Adding a preset = new `[presets.x]` table in config.toml (+ a workflow JSON if the graph differs).
-  Every `{{key}}` in the workflow must be a preset key, or one of: seed, prompt, negative, checkpoint.
+  Every `{{key}}` in the workflow must be a preset key, or one of: seed, prompt, negative, checkpoint,
+  and for img2img/inpaint workflows also image, mask, denoise (width/height then come from the source).
+  A preset picks those graphs with `img2img_workflow` / `inpaint_workflow` (defaults: sdxl_img2img.json, sdxl_inpaint.json).
 - Outputs: `<output_dir>/<YYYY-MM-DD>/<HHMMSS>-<preset>-<slug>/` with PNGs, per-image JSON sidecars
   (prompt, seed, params), `run.json` and `index.html` contact sheet.
 - Logs: `journalctl -u comfyui -f`.
