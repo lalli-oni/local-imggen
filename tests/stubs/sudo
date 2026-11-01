@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Fake sudo: records the call, runs the command as the current user.
+. "$(dirname "$0")/_log.sh"
+exec "$@"

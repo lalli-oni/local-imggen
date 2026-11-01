@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Fake systemctl for the comfyui service.
+#   FAKE_COMFYUI_STATE   is-active answer (default active)
+#   FAKE_NO_SERVICE=1    `systemctl cat comfyui` fails
+#   FAKE_DROPIN_DIR      where comfyui.service.d drop-ins live (limits.sh tests point it at a temp dir)
+#   FAKE_BASE_EXEC       the unit's own ExecStart command line
+. "$(dirname "$0")/_log.sh"
+base=${FAKE_BASE_EXEC:-/home/tulu/venvs/comfy/bin/python /home/tulu/comfyui/main.py --listen 127.0.0.1 --port 8188}
+# the last ExecStart= / Nice= ... from the drop-ins, like systemd merges them
+setting() {
+  local key=$1 val=$2 f
+  for f in "${FAKE_DROPIN_DIR:-/nonexistent}"/*.conf; do
+    [ -f "$f" ] || continue
+    while IFS= read -r line; do
+      [[ $line == "$key="* ]] && val=${line#"$key="}
+    done < "$f"
+  done
+  printf '%s' "$val"
+}
+case "$1" in
+  is-active)
+    state=${FAKE_COMFYUI_STATE:-active}
+    [ "$2" = --quiet ] || echo "$state"
+    [ "$state" = active ] ;;
+  cat) [ -z "${FAKE_NO_SERVICE:-}" ] && echo "# /etc/systemd/system/comfyui.service" ;;
+  show)
+    if [ "$2" = -P ] && [ "$3" = ExecStart ]; then
+      cmd=$(setting ExecStart "$base")
+      [ -n "$cmd" ] && echo "{ path=${cmd%% *} ; argv[]=$cmd ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }"
+    else
+      for k in Nice CPUWeight IOWeight; do
+        case "$*" in *"-p $k"*) echo "$k=$(setting "$k" "$([ $k = Nice ] && echo 0 || echo '[not set]')")" ;; esac
+      done
+    fi ;;
+  daemon-reload|restart|start|stop) ;;
+  *) echo "fake systemctl: unsupported $*" >&2; exit 1 ;;
+esac
