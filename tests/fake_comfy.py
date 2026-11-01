@@ -70,6 +70,8 @@ class FakeComfy:
         self.ws_clients: dict[str, "_WS"] = {}  # client_id -> socket
         self.ws_sent: list[dict] = []       # every message sent on a websocket
         self.ws_received: list[tuple[int, bytes]] = []  # (opcode, data) of every client frame
+        self.ws_end_lag = 0.0  # /history shows the job done this long before the socket's last frames
+        self.outputs_per_job = 1
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self._server.daemon_threads = True
         self.url = f"http://127.0.0.1:{self._server.server_address[1]}"
@@ -116,6 +118,13 @@ class FakeComfy:
                 continue
             emit("executing", {"node": node, "display_node": node})
             time.sleep(self.node_s.get(job["workflow"][node]["class_type"], 0))
+        if self.ws_end_lag:
+            msgs.append(["execution_success", {"prompt_id": pid, "timestamp": int(time.time() * 1000)}])
+            job["done"] = True
+            time.sleep(self.ws_end_lag)
+            emit("executing", {"node": None})
+            emit("execution_success", {})
+            return
         emit("executing", {"node": None})
         emit("execution_success", {}, history=True)
         job["done"] = True
@@ -127,8 +136,9 @@ class FakeComfy:
         if self.fail_jobs:
             return {pid: {"status": {"status_str": "error", "messages": [["execution_error", {"m": "boom"}]]},
                           "outputs": {}}}
+        extra = [{"filename": f"imagegen_{pid}.png", "subfolder": "", "type": "output"}] * (self.outputs_per_job - 1)
         return {pid: {"status": {"status_str": "success", "messages": job["messages"]}, "outputs": {"9": {"images": [
-            {"filename": f"imagegen_{pid}.png", "subfolder": "", "type": "output"},
+            *extra, {"filename": f"imagegen_{pid}.png", "subfolder": "", "type": "output"},
             {"filename": f"preview_{pid}.png", "subfolder": "", "type": "temp"}]}}}}
 
     def _view(self, filename: str) -> bytes:

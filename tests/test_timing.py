@@ -96,6 +96,32 @@ def test_without_websocket_falls_back_to_history(comfy):
     assert "no websocket" in run["timing"]["note"]
 
 
+def test_socket_end_arriving_after_history_keeps_the_split(comfy):
+    """/history can show the job done before the socket's last frames are read."""
+    comfy.node_s = {"KSampler": 0.2}
+    comfy.ws_end_lag = 1.2  # past imagegen's 1s /history poll, so the poll sees it first
+    run = imagegen.generate("a fox", "draft", seed=1)
+    t = _sidecar(run["images"][0])["timing"]
+    assert "nodes" in t and t["sample_s"] >= 0.18
+
+
+def test_job_with_two_outputs_counts_comfy_once(comfy):
+    comfy.node_s = {"KSampler": 0.3}
+    comfy.outputs_per_job = 2
+    run = imagegen.generate("a fox", "draft", seed=1)
+    first, second = (im["timing"] for im in run["images"])
+    assert first["total_s"] >= 0.3 > second["total_s"]
+    assert run["timing"]["sample_s"] == first["sample_s"]  # once per job, not per image
+
+
+def test_broken_timing_does_not_lose_images(comfy, monkeypatch):
+    def boom(*a):
+        raise TypeError("odd event")
+    monkeypatch.setattr(imagegen, "job_timing", boom)
+    run = imagegen.generate("a fox", "draft", seed=1)
+    assert Path(run["images"][0]["path"]).is_file() and (Path(run["run_dir"]) / "run.json").is_file()
+
+
 def test_websocket_ping_is_answered_and_socket_closed(comfy):
     imagegen.generate("a fox", "draft", seed=1)
     received = _closed(comfy)
@@ -140,6 +166,12 @@ def test_job_timing_socket_dropped_uses_history():
     assert t == {"queue_s": 1.0, "comfy_s": 50.0}
 
 
+def test_job_timing_odd_history_shapes():
+    hist = {"status": {"messages": [["execution_start"], "junk", ["execution_start", {"timestamp": None}],
+                                    ["execution_success", {"timestamp": 5000}]]}}
+    assert imagegen.job_timing(WF, 0, None, hist) == {}
+
+
 def test_job_timing_unknown_node_is_other():
     ev = _ev((0, "execution_start", {}), (0, "executing", {"node": "77"}), (1, "execution_success", {}))
     assert imagegen.job_timing(WF, 0, ev, {})["other_s"] == 1
@@ -154,6 +186,8 @@ def test_stage_of():
     assert imagegen.stage_of("KSamplerAdvanced") == "sample"
     assert imagegen.stage_of("VAEEncodeForInpaint") == "encode"
     assert imagegen.stage_of("ImageCompositeMasked") == "other"
+    assert imagegen.stage_of("FluxKontextImageScale") == "other"  # a resize of the input, not an upscale
+    assert imagegen.stage_of("LoadImage") == "load" and imagegen.stage_of("ImageScale") == "upscale"
 
 
 def test_summary_line():

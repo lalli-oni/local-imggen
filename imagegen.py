@@ -133,6 +133,11 @@ class Comfy:
         return any(item[1] == prompt_id for k in ("queue_running", "queue_pending") for item in q.get(k, []))
 
     def wait(self, prompt_id: str, timeout: float = 1800) -> dict:
+        """The job's outputs, once it is done."""
+        return self.wait_entry(prompt_id, timeout).get("outputs", {})
+
+    def wait_entry(self, prompt_id: str, timeout: float = 1800) -> dict:
+        """The job's whole /history entry (outputs, status messages with timestamps), once it is done."""
         t0 = time.time()
         down_since = None  # set while ComfyUI is unreachable (crashed, systemd restarting it)
         while time.time() - t0 < timeout:
@@ -152,7 +157,7 @@ class Comfy:
                 status = entry.get("status", {})
                 if status.get("status_str") == "error":
                     raise RuntimeError(f"ComfyUI failed: {json.dumps(status.get('messages'))[:2000]}")
-                return entry.get("outputs", {})
+                return entry
             time.sleep(1)
         raise TimeoutError(f"prompt {prompt_id} did not finish in {timeout}s")
 
@@ -176,13 +181,6 @@ class Comfy:
         q = urllib.parse.urlencode({k: image.get(k, "") for k in ("filename", "subfolder", "type")})
         return self._get(f"/view?{q}", timeout=120)
 
-    def history(self, prompt_id: str) -> dict:
-        """The /history entry of a finished job (status messages with timestamps, outputs)."""
-        try:
-            return json.loads(self._get(f"/history/{prompt_id}")).get(prompt_id, {})
-        except Exception:  # timing is best effort
-            return {}
-
 
 # ---------------------------------------------------------------- timing (per stage, from ComfyUI events)
 
@@ -199,9 +197,12 @@ class Events:
         self.by_prompt: dict[str, list[tuple[float, str, dict]]] = {}
         self.ok = False
         self._sock = None
+        self._alive = False
+        self._send_lock = threading.Lock()
+        self._changed = threading.Condition()
         try:
             self._sock = self._connect(url, client_id, timeout)
-            self.ok = True
+            self.ok = self._alive = True
             threading.Thread(target=self._loop, daemon=True).start()
         except Exception as e:
             log(f"note: no ComfyUI websocket, timing has no per-stage split ({type(e).__name__}: {e})")
@@ -253,6 +254,20 @@ class Events:
                     parts = []
         except Exception:
             pass  # closed by us or by ComfyUI: keep what was recorded
+        finally:
+            with self._changed:
+                self._alive = False
+                self._changed.notify_all()
+
+    def wait_done(self, prompt_id: str, timeout: float = 2.0) -> list | None:
+        """The job's events, once the socket has its end too. /history can show a job as done a moment
+        before its last websocket frame is read; waiting briefly here keeps the per-node split."""
+        def done() -> bool:
+            return any(kind == "execution_success" or (kind == "executing" and d.get("node") is None)
+                       for _, kind, d in self.by_prompt.get(prompt_id, []))
+        with self._changed:
+            self._changed.wait_for(lambda: done() or not self._alive, timeout)
+        return self.by_prompt.get(prompt_id)
 
     def _frame(self) -> tuple[bool, int, bytes]:
         b1, b2 = self._sock.read(2)
@@ -268,9 +283,12 @@ class Events:
         return bool(b1 & 0x80), b1 & 0x0F, data
 
     def _send(self, op: int, data: bytes = b"") -> None:
-        mask = os.urandom(4)  # client frames must be masked
-        self._sock.sendall(bytes([0x80 | op, 0x80 | len(data)]) + mask +
-                           bytes(c ^ mask[i % 4] for i, c in enumerate(data)))
+        """One masked frame (client frames must be); only pong and close, so always under 126 bytes."""
+        mask = os.urandom(4)
+        with self._send_lock:  # the reader thread answers pings while close() may run on the main one
+            if self._sock is not None:
+                self._sock.sendall(bytes([0x80 | op, 0x80 | len(data[:125])]) + mask +
+                                   bytes(c ^ mask[i % 4] for i, c in enumerate(data[:125])))
 
     def _record(self, raw: bytes) -> None:
         t = time.time()
@@ -278,7 +296,9 @@ class Events:
             msg = json.loads(raw)
             data = msg.get("data") or {}
             if pid := data.get("prompt_id"):
-                self.by_prompt.setdefault(pid, []).append((t, msg.get("type", ""), data))
+                with self._changed:
+                    self.by_prompt.setdefault(pid, []).append((t, msg.get("type", ""), data))
+                    self._changed.notify_all()
         except (ValueError, AttributeError):
             pass
 
@@ -289,13 +309,14 @@ class Events:
         self.close()
 
     def close(self) -> None:
-        if self._sock is not None:
-            try:
-                self._send(8)
-            except Exception:
-                pass
-            self._sock.close()
-            self._sock = None
+        try:
+            self._send(8)
+        except Exception:
+            pass
+        with self._send_lock:
+            if self._sock is not None:
+                self._sock.close()
+                self._sock = None
 
 
 class _Buffered:
@@ -326,15 +347,20 @@ class _Buffered:
 
 # Node class -> stage. Loaders read weights from disk; moving them onto the GPU happens inside the
 # sampler, so a cold start shows up in sample_s as well as load_s.
+# Exact class names first, then substrings (so UNETLoader, KSamplerAdvanced, VAEEncodeForInpaint match).
+STAGE_CLASSES = {"LoadImage": "load", "LoadImageMask": "load",
+                 "ImageUpscaleWithModel": "upscale", "ImageScale": "upscale", "ImageScaleBy": "upscale",
+                 "LatentUpscale": "upscale", "LatentUpscaleBy": "upscale",
+                 "SaveImage": "save", "PreviewImage": "save"}
 STAGES = (("load", ("Loader",)), ("sample", ("KSampler", "SamplerCustom")),
-          ("encode", ("CLIPTextEncode", "VAEEncode")), ("decode", ("VAEDecode",)),
-          ("upscale", ("ImageUpscaleWithModel", "ImageScale", "LatentUpscale")),
-          ("save", ("SaveImage", "PreviewImage")))
+          ("encode", ("CLIPTextEncode", "VAEEncode")), ("decode", ("VAEDecode",)))
 STAGE_ORDER = ("queue", "load", "encode", "sample", "decode", "upscale", "save", "other", "fetch")
 COMFY_STAGES = tuple(f"{st}_s" for st in STAGE_ORDER[1:-1])  # the parts of comfy_s
 
 
 def stage_of(class_type: str) -> str:
+    if class_type in STAGE_CLASSES:
+        return STAGE_CLASSES[class_type]
     for stage, keys in STAGES:
         if any(k in class_type for k in keys):
             return stage
@@ -350,17 +376,19 @@ def job_timing(workflow: dict, queued_at: float, events: list | None, history: d
     def secs(x: float) -> float:
         return round(max(0.0, x), 2)
 
-    hist = {name: data for name, data in (history.get("status") or {}).get("messages") or []
-            if isinstance(data, dict)}
+    hist = {m[0]: m[1] for m in (history.get("status") or {}).get("messages") or []
+            if isinstance(m, (list, tuple)) and len(m) == 2 and isinstance(m[1], dict)}
     ev = events or []
     start = next((t for t, kind, _ in ev if kind == "execution_start"), None)
     end = next((t for t, kind, d in ev if kind == "execution_success"
                 or (kind == "executing" and d.get("node") is None)), None)
-    if start is None and "timestamp" in hist.get("execution_start", {}):
-        start = hist["execution_start"]["timestamp"] / 1000
-    if end is None and "timestamp" in hist.get("execution_success", {}):
-        end = hist["execution_success"]["timestamp"] / 1000
-        ev = []  # the socket missed the end: its node times would be cut off
+    if end is None:  # the socket missed the end (or there is none): /history's start and end, same clock
+        ev, start = [], None
+        h_start, h_end = (hist.get(k, {}).get("timestamp") for k in ("execution_start", "execution_success"))
+        if isinstance(h_start, (int, float)):
+            start = h_start / 1000
+            if isinstance(h_end, (int, float)):
+                end = h_end / 1000
 
     out: dict = {}
     if start is not None:
@@ -385,8 +413,14 @@ def job_timing(workflow: dict, queued_at: float, events: list | None, history: d
     return out
 
 
+def _flat(t: dict) -> dict:
+    """A timing dict without its node lists (what run.json keeps per image)."""
+    return {k: v for k, v in t.items() if k not in ("nodes", "cached")}
+
+
 def _stage_parts(t: dict) -> list[str]:
-    keys = [k[:-2] for k in t if k.endswith("_s") and k not in ("total_s", "comfy_s", "setup_s")]
+    """ "sample 41.2s" etc. for each stage in t, in pipeline order (not the totals or the queue wait)."""
+    keys = [k[:-2] for k in t if k.endswith("_s") and k not in ("total_s", "comfy_s", "setup_s", "queue_s")]
     keys.sort(key=lambda k: (STAGE_ORDER.index(k) if k in STAGE_ORDER else len(STAGE_ORDER), k))
     return [f"{k} {t[k + '_s']:.1f}s" for k in keys if t[k + "_s"] >= 0.05]
 
@@ -398,7 +432,7 @@ def timing_summary(run_timing: dict, image_timings: list[dict]) -> str:
     per = [t["total_s"] for t in image_timings if "total_s" in t]
     if len(per) > 1:
         head += f" (first {per[0]:.1f}s, then ~{sum(per[1:]) / (len(per) - 1):.1f}s each)"
-    parts = _stage_parts({k: v for k, v in run_timing.items() if k != "queue_s"})
+    parts = _stage_parts(run_timing)
     return head + (": " + ", ".join(parts) if parts else "")
 
 
@@ -615,39 +649,45 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
         log(f"queued {count} x {preset} (seeds {base_seed}..) -> {run_dir}")
 
         images, job_timings = [], []
+        t_wait = time.time()
         for i, (s, pid, queued_at, wf) in enumerate(jobs, 1):
-            outputs = comfy.wait(pid)
-            jt = job_timing(wf, queued_at, events.by_prompt.get(pid), comfy.history(pid))
+            entry = comfy.wait_entry(pid)
+            outputs = entry.get("outputs", {})
+            try:  # best effort: a surprise in the events must not lose the finished images
+                jt = job_timing(wf, queued_at, events.wait_done(pid), entry)
+            except Exception as e:
+                log(f"note: no timing for seed {s} ({type(e).__name__}: {e})")
+                jt = {}
             job_timings.append(jt)
             outs = [im for o in outputs.values() for im in o.get("images", []) if im.get("type") == "output"]
-            img_total = 0.0
             for j, im in enumerate(outs):
                 name = f"{i:02d}-seed{s}" + (f"-{j}" if len(outs) > 1 else "") + ".png"
                 path = run_dir / name
                 t0 = time.time()
                 path.write_bytes(comfy.fetch(im))
-                timing = {**{k: v for k, v in jt.items() if k not in ("nodes", "cached")},
-                          "fetch_s": round(time.time() - t0, 2)}
+                timing = {**_flat(jt), "fetch_s": round(time.time() - t0, 2)}
                 final = path
                 for step in p.get("post", []):
                     t0 = time.time()
                     final = POST[step](final)
                     timing[f"{step}_s"] = round(time.time() - t0, 2)
-                # this image's own time: ComfyUI's work on it plus fetch and post steps (not the queue wait)
-                timing["total_s"] = round(sum(v for k, v in timing.items() if k not in ("queue_s",) + COMFY_STAGES), 2)
-                img_total += timing["total_s"]
-                timing.update({k: jt[k] for k in ("nodes", "cached") if k in jt})
+                # this image's own time: ComfyUI's work (counted on a job's first image only) + fetch + post
+                own = [v for k, v in timing.items() if k not in ("queue_s", "comfy_s") + COMFY_STAGES]
+                timing["total_s"] = round(sum(own) + (jt.get("comfy_s", 0) if j == 0 else 0), 2)
                 meta = {"prompt": prompt, "full_prompt": full_prompt, "negative": full_negative,
                         "user_negative": negative,
                         "preset": preset, "seed": s, "params": {k: v for k, v in params.items()
                                                                 if k not in ("prompt", "negative")},
                         "file": final.name, "raw_file": path.name, "created": now.isoformat(timespec="seconds"),
-                        "timing": timing, **(source or {})}
+                        "timing": {**timing, **{k: jt[k] for k in ("nodes", "cached") if k in jt}},
+                        **(source or {})}
                 path.with_suffix(".json").write_text(json.dumps(meta, indent=2))
                 images.append({"path": str(final), "windows_path": to_windows_path(final), "seed": s,
-                               "timing": {k: v for k, v in timing.items() if k not in ("nodes", "cached")}})
-            parts = _stage_parts({k: v for k, v in (images[-1]["timing"] if outs else jt).items() if k != "queue_s"})
-            log(f"  [{i}/{count}] seed {s} done in {img_total:.1f}s" + (f" ({', '.join(parts)})" if parts else ""))
+                               "timing": timing})
+            parts = _stage_parts(images[-1]["timing"] if outs else jt)
+            log(f"  [{i}/{count}] seed {s} done in {time.time() - t_wait:.1f}s"
+                + (f" ({', '.join(parts)})" if parts else ""))
+            t_wait = time.time()
 
         run_timing = {"total_s": round(time.time() - t_start, 2), "setup_s": round(t_queue - t_start, 2)}
         if job_timings and "queue_s" in job_timings[0]:
@@ -741,7 +781,7 @@ def write_contact_sheet(run_dir: Path, run: dict) -> Path:
         timing = im.get("timing") or meta.get("timing") or {}
         if "total_s" in timing:
             entry["time_s"] = timing["total_s"]
-            entry["timing"] = ", ".join(_stage_parts({k: v for k, v in timing.items() if k != "queue_s"}))
+            entry["timing"] = ", ".join(_stage_parts(timing))
         params = meta.get("params") or {}
         entry.update({k: params[k] for k in SHEET_PARAMS if k in params})
         images.append(entry)
