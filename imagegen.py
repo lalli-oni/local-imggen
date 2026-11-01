@@ -259,8 +259,9 @@ def keep_largest(path: Path) -> Path:
 
 
 def trim(path: Path) -> Path:
-    """Crop a cut-out to its content, centre it on a square with a TRIM_MARGIN border and scale it
-    back to the original canvas size, so a set of icons comes out the same size. Rewrites path in place.
+    """Crop a cut-out to its content, centre it on a square with a TRIM_MARGIN border and scale it to
+    the canvas's shorter side (1024 for icons), so a set of icons comes out the same size. A non-square
+    canvas becomes square. Rewrites path in place.
     Runs after remove_bg (and keep_largest); an image without transparency is left as it is."""
     from PIL import Image
     im = _rgba(path)

@@ -42,7 +42,7 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   and for img2img/inpaint workflows also image, mask, denoise (width/height then come from the source).
   A preset picks those graphs with `img2img_workflow` / `inpaint_workflow` (defaults: sdxl_img2img.json, sdxl_inpaint.json).
   Post steps (`post = [...]`, see `POST` in imagegen.py) run on each output in order: `remove_bg`, then the
-  optional `keep_largest` (drop stray shapes) and `trim` (crop + centre on a square); the last two rewrite the
+  optional `keep_largest` (drop stray shapes) and `trim` (crop + centre on a square of the shorter side); the last two rewrite the
   transparent PNG in place and skip images without transparency.
   An edit preset has `edit_workflow` (gets image, width/height; no checkpoint/negative); without `workflow` it is edit-only.
 - Outputs: `<output_dir>/<YYYY-MM-DD>/<HHMMSS>-<preset>-<slug>/` with PNGs, per-image JSON sidecars

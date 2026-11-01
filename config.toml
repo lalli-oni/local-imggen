@@ -57,7 +57,7 @@ cfg = 7.0
 suffix = ", app icon, single centered object, isolated on a plain pure white background, flat vector style, bold simple shapes, no shadow, no scenery"
 negative_extra = ", busy background, multiple objects, photo, text, letters, frame, border, scattered elements, confetti, drop shadow, cast shadow, vignette, scenery, ground, gradient background, patterned background"
 # remove_bg: rembg cut-out. keep_largest: drop stray shapes around the subject (anything under a
-# quarter of its size). trim: crop to the subject, centre it on a square, same canvas size.
+# quarter of its size). trim: crop to the subject, centre it on a square (the canvas's shorter side).
 post = ["remove_bg", "keep_largest", "trim"]
 
 # Edit-only preset: `gen edit IMAGE "instruction"` / MCP edit. Not usable for gen "prompt" or gen vary.
