@@ -141,7 +141,8 @@ def edit(path: str, instruction: str, count: int = 1, seed: int | None = None, s
     Name things concretely ("the small green octopus creature") rather than "it". One change per edit
     works best; chain edits by editing a result. count 1-4: each is a fresh edit of the source with
     its own seed. guidance (default 2.5): higher follows the text harder. Output is ~1 MP.
-    Slow (likely 1-3 min per image): same waiting/job_id behaviour as generate, so poll get_job.
+    Slow: ~75-85s per image on tulu once the model is loaded, ~3 min for the first image of a session
+    (loading ~17 GB). Same waiting/job_id behaviour as generate, so poll get_job.
     Needs the opt-in Kontext models (doctor shows them as warn if missing).
     """
     kwargs = dict(path=path, instruction=instruction, count=min(max(1, count), MAX_EDITS), seed=seed,
