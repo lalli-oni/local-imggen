@@ -6,7 +6,7 @@ import pytest
 
 from conftest import REPO
 
-SCRIPTS = sorted(p for p in [*REPO.glob("*.sh"), *REPO.glob("comfy/*.sh"), *REPO.glob("windows/*.sh"),
+SCRIPTS = sorted(p for p in [*REPO.glob("*.sh"), *REPO.glob("comfy/*.sh"), *REPO.glob("windows/*.sh"), *REPO.glob("models/*.sh"),
                              *(REPO / "tests" / "stubs").iterdir()] if p.is_file())
 
 
