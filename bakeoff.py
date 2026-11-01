@@ -31,6 +31,8 @@ from pathlib import Path
 import imagegen
 
 DEFAULT_PRESETS = ("kontext", "klein", "qwen")
+SETTLE_MAX = 20.0   # seconds to wait for /free to take effect before a preset starts
+SETTLE_STEP = 0.5
 GIB = 1024 ** 3
 PROC = Path("/proc")  # tests point this at a fake /proc
 
@@ -111,8 +113,28 @@ class Sampler:
         return {k: round(v, 2) for k, v in self.peak.items()}
 
 
-def _check_presets(presets: list[str]) -> None:
-    conf = imagegen.load_config()["presets"]
+def _vram_used(comfy: imagegen.Comfy) -> float | None:
+    try:
+        dev = next(d for d in comfy.system_stats().get("devices", []) if "vram_total" in d)
+        return (dev["vram_total"] - dev["vram_free"]) / GIB
+    except Exception:
+        return None
+
+
+def _unload(comfy: imagegen.Comfy) -> None:
+    """/free only sets flags that ComfyUI's worker acts on a moment later: wait until VRAM use stops
+    falling, so the next preset's numbers don't include the previous model."""
+    comfy.free()
+    t0, last = time.time(), _vram_used(comfy)
+    while time.time() - t0 < SETTLE_MAX:
+        time.sleep(SETTLE_STEP)
+        now = _vram_used(comfy)
+        if now is None or last is None or (now >= last - 0.05 and time.time() - t0 >= 2 * SETTLE_STEP):
+            return
+        last = now
+
+
+def _check_presets(presets: list[str], conf: dict) -> None:
     bad = [p for p in presets if "edit_workflow" not in conf.get(p, {})]
     if bad:
         edit_presets = [n for n, q in conf.items() if "edit_workflow" in q]
@@ -129,13 +151,13 @@ def bakeoff(path: str, instructions: list[str], presets: list[str] | tuple[str, 
     instructions = [i.strip() for i in instructions]
     if not instructions or not all(instructions):
         raise ValueError("bakeoff needs at least one instruction (and no empty ones)")
-    _check_presets(presets)
+    conf = imagegen.load_config()
+    _check_presets(presets, conf["presets"])
     src = imagegen.to_linux_path(path)
     if not src.is_file():
         raise FileNotFoundError(src)
     count = max(1, int(count))
     base_seed = seed if seed is not None else random.randrange(imagegen.MAX_SEED)
-    conf = imagegen.load_config()
     comfy = imagegen.Comfy(conf["comfy_url"])
     comfy.wait_ready()
 
@@ -152,7 +174,7 @@ def bakeoff(path: str, instructions: list[str], presets: list[str] | tuple[str, 
         imagegen.log(f"== {preset}")
         try:
             if free:
-                comfy.free()
+                _unload(comfy)
         except Exception as e:
             imagegen.log(f"   could not unload models first ({e}); load times may be off")
         sampler = Sampler(comfy, interval).start()
@@ -164,7 +186,8 @@ def bakeoff(path: str, instructions: list[str], presets: list[str] | tuple[str, 
                 res["runs"].append(run["run_dir"])
                 entries = copied.setdefault((n, preset), [])
                 for im in run["images"]:
-                    res["seconds"].append(im.get("seconds"))
+                    if im.get("seconds") is not None:  # one per job (a job may save several images)
+                        res["seconds"].append(im["seconds"])
                     p = Path(im["path"])
                     dest = out / f"{n:02d}-{preset}-{p.name}"
                     shutil.copy2(p, dest)
@@ -180,18 +203,18 @@ def bakeoff(path: str, instructions: list[str], presets: list[str] | tuple[str, 
             imagegen.log(f"   {preset} failed: {res['error']}")
         res["total_seconds"] = round(time.time() - t0, 1)
         res["peak"] = sampler.stop()
-        secs = [s for s in res["seconds"] if s is not None]
+        secs = res["seconds"]
         res["first_seconds"] = secs[0] if secs else None  # includes loading the model
         res["median_seconds"] = statistics.median(secs[1:]) if len(secs) > 1 else None
-        res["images"] = len(secs)
+        res["images"] = sum(len(v) for (_, p), v in copied.items() if p == preset)
 
     # instruction-major order: each instruction's images from every preset sit together
     images = [e for n in range(1, len(instructions) + 1) for p in presets for e in copied.get((n, p), [])]
     run = {"preset": "bakeoff: " + " vs ".join(presets),
            "prompt": " | ".join(f"{n}. {i}" for n, i in enumerate(instructions, 1)),
-           "base_seed": base_seed, "count": count, "run_dir": str(out), "images": images,
+           "base_seed": base_seed, "count": len(images), "run_dir": str(out), "images": images,
            "transparent": False, "source_image": str(src), "mask": None, "denoise": None, "edit": True,
-           "bakeoff": {"instructions": instructions, "presets": results}}
+           "bakeoff": {"instructions": instructions, "count": count, "presets": results}}
     (out / "bakeoff.json").write_text(json.dumps(run["bakeoff"], indent=2))
     (out / "run.json").write_text(json.dumps(run, indent=2))
     sheet = imagegen.write_contact_sheet(out, run)
@@ -205,12 +228,12 @@ def table(run: dict) -> str:
     """The numbers as a plain-text table (also what gen bakeoff prints)."""
     def f(v, unit=""):
         return "-" if v is None else f"{v:.1f}{unit}"
-    rows = [("preset", "images", "first (s)", "median (s)", "VRAM GiB", "comfy RSS", "comfy swap",
+    rows = [("preset", "images", "first (s)", "median (s)", "VRAM GiB", "sys RAM", "comfy RSS", "comfy swap",
              "sys swap", "error")]
     for r in run["bakeoff"]["presets"]:
         pk = r.get("peak", {})
         rows.append((r["preset"], str(r.get("images", 0)), f(r.get("first_seconds")), f(r.get("median_seconds")),
-                     f(pk.get("vram_gib")), f(pk.get("comfy_rss_gib")), f(pk.get("comfy_swap_gib")),
+                     f(pk.get("vram_gib")), f(pk.get("ram_gib")), f(pk.get("comfy_rss_gib")), f(pk.get("comfy_swap_gib")),
                      f(pk.get("swap_gib")), (r.get("error") or "")[:80]))
     w = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
     return "\n".join("  ".join(c.ljust(w[i]) for i, c in enumerate(row)).rstrip() for row in rows)

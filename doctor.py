@@ -150,7 +150,10 @@ def check_models(conf: dict, api_up: bool) -> list[dict]:
     wanted: dict[str, dict[str, tuple[bool, set[str]]]] = {}
     for p in conf["presets"].values():
         edit_only_keys = _placeholders(p, edit=True) - _placeholders(p, edit=False)
+        uses_checkpoint = "checkpoint" in _placeholders(p, edit=False) | _placeholders(p, edit=True)
         for key, folder in MODEL_KEYS.items():
+            if key == "checkpoint" and not uses_checkpoint:
+                continue  # Flux/Qwen presets load a unet instead of the global SDXL checkpoint
             required = "workflow" in p and key not in edit_only_keys and "download" not in p
             name = p.get(key, conf.get("checkpoint") if key == "checkpoint" and "workflow" in p else None)
             if name:

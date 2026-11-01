@@ -74,13 +74,22 @@ def test_unet_presets_have_no_vary(comfy, make_image):
                                   "img2img_workflow") == "b.json"
 
 
-def test_overrides_the_workflow_cannot_use_are_errors(comfy, make_image):
-    src = str(make_image())
-    with pytest.raises(ValueError, match="'klein'.*does not take guidance"):
-        imagegen.edit(src, "x", preset="klein", guidance=3.0)
-    with pytest.raises(ValueError, match="does not take cfg"):
-        imagegen.generate("x", "klein", cfg=3.0)
-    assert comfy.workflows() == []
+def test_overrides_the_workflow_cannot_use_are_noted_and_ignored(comfy, make_image, capsys):
+    """Not an error: a project keeps its cfg/negative when switched to klein, and must still run."""
+    imagegen.edit(str(make_image()), "x", preset="klein", guidance=3.0)
+    assert "flux2_klein_edit.json has no guidance, ignoring it" in capsys.readouterr().err
+    imagegen.generate("x", "klein", cfg=3.0, negative="fog")
+    assert "flux2_klein_t2i.json has no cfg, negative, ignoring them" in capsys.readouterr().err
+    assert len(comfy.workflows()) == 2
+
+
+def test_vary_of_a_klein_image_falls_back_to_draft(comfy, capsys):
+    run = imagegen.generate("a fox", "klein", seed=1)
+    run2 = imagegen.vary(run["images"][0]["path"], count=1)
+    assert run2["preset"] == "draft" and run2["prompt"] == "a fox"
+    assert "preset 'klein' has no img2img, using draft" in capsys.readouterr().err
+    with pytest.raises(ValueError, match="no img2img"):  # but an explicit -p klein is an error
+        imagegen.vary(run["images"][0]["path"], preset="klein")
 
 
 def test_cli_edit_with_preset(comfy, make_image, capsys):
@@ -98,6 +107,9 @@ def test_doctor_opt_in_presets(comfy):
     qwen = checks["model qwen3vl_8b_bf16.safetensors"]
     assert qwen["status"] == "warn" and "qwen-image-2.1.sh" in qwen["fix"]
     assert checks["model sd_xl_base_1.0.safetensors"]["status"] == "ok"
+    # klein/qwen don't use the global SDXL checkpoint, so it isn't checked (or blamed on their scripts) for them
+    only = {**conf, "presets": {k: conf["presets"][k] for k in ("klein", "qwen")}}
+    assert not any("sd_xl" in c["name"] for c in doctor.check_models(only, api_up=True))
     # nodes only opt-in presets use: a warning, even in their text-to-image workflows
     comfy.nodes -= {"TextEncodeQwenImage21", "Flux2Scheduler"}
     c = doctor.check_nodes(conf, comfy.url)

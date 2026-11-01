@@ -113,14 +113,14 @@ def test_bakeoff_sheet_shows_tags_and_numbers(make_run, open_sheet):
     run["images"][0]["seconds"] = 81.5
     run["bakeoff"] = {"instructions": ["make it wave"], "presets": [
         {"preset": "kontext", "images": 1, "first_seconds": 180.2, "median_seconds": None, "error": None,
-         "peak": {"vram_gib": 14.25, "comfy_rss_gib": 15.5, "swap_gib": 3.0}},
+         "peak": {"vram_gib": 14.25, "ram_gib": 20.0, "comfy_rss_gib": 15.5, "swap_gib": 3.0}},
         {"preset": "klein", "images": 1, "first_seconds": None, "error": "RuntimeError: <b>crashed</b>", "peak": {}}]}
     page, errors = open_sheet(run)
     assert page.locator("#prompt").inner_text() == "bakeoff: kontext vs klein"
     assert page.locator("#bake li").all_inner_texts() == ["make it wave"]
     rows = page.locator("#bake tr")
     assert rows.count() == 3
-    assert rows.nth(1).locator("td").all_inner_texts()[:6] == ["kontext", "1", "180.2", "-", "14.3", "15.5"]
+    assert rows.nth(1).locator("td").all_inner_texts()[:7] == ["kontext", "1", "180.2", "-", "14.3", "20.0", "15.5"]
     assert rows.nth(2).locator("td.err").inner_text() == "RuntimeError: <b>crashed</b>"  # text, not HTML
     caps = page.locator("#grid figcaption").all_inner_texts()
     assert caps[0].startswith("kontext · 1") and "81.5s" in caps[0] and caps[1].startswith("klein · 1")

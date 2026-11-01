@@ -9,6 +9,11 @@ import bakeoff
 import imagegen
 
 
+@pytest.fixture(autouse=True)
+def fast_settle(monkeypatch):
+    monkeypatch.setattr(bakeoff, "SETTLE_STEP", 0.01)
+
+
 @pytest.fixture
 def fake_proc(tmp_path, monkeypatch):
     """A /proc with meminfo and a comfyui process (pid 4242) at the given kB values."""
@@ -60,8 +65,9 @@ def test_bakeoff_runs_every_instruction_through_every_preset(comfy, make_image, 
         assert Path(im["path"]).with_suffix(".json").is_file()
     assert (out / imagegen.SHEET_SOURCE).is_file()
 
+    assert run["count"] == 12  # images on the sheet; per instruction and preset it is 2
     stats = json.loads((out / "bakeoff.json").read_text())
-    assert stats["instructions"] == ["make it wave", "side view"]
+    assert stats["instructions"] == ["make it wave", "side view"] and stats["count"] == 2
     k = stats["presets"][0]
     assert k["preset"] == "kontext" and k["error"] is None and k["images"] == 4
     assert k["first_seconds"] is not None and k["median_seconds"] is not None
@@ -94,6 +100,20 @@ def test_no_process_and_no_free(comfy, make_image, monkeypatch, tmp_path):
     peak = run["bakeoff"]["presets"][0]["peak"]
     assert comfy.frees == 0
     assert set(peak) == {"vram_gib", "vram_total_gib", "ram_gib"}
+
+
+def test_unload_waits_until_vram_stops_falling(comfy, monkeypatch):
+    seen = []
+    levels = iter([10, 6, 2, 2, 2])  # GiB free goes up as ComfyUI unloads, then holds
+
+    def stats():
+        free = next(levels, 2)
+        seen.append(free)
+        return {"devices": [{"vram_total": 16 * bakeoff.GIB, "vram_free": (16 - free) * bakeoff.GIB}]}
+    c = imagegen.Comfy(comfy.url)
+    monkeypatch.setattr(c, "system_stats", stats)
+    bakeoff._unload(c)
+    assert comfy.frees == 1 and seen[:4] == [10, 6, 2, 2]
 
 
 def test_bad_args(comfy, make_image):

@@ -202,12 +202,12 @@ $("prompt").textContent = RUN.prompt;
     $("bake").hidden = false;
     $("bake").querySelector("ol").append(...RUN.bakeoff.instructions.map((t) => el("li", { textContent: t })));
     const num = (v, d = 1) => (v == null ? "-" : Number(v).toFixed(d));
-    const head = ["preset", "images", "first s (with load)", "median s", "VRAM GiB", "comfy RAM GiB",
+    const head = ["preset", "images", "first s (with load)", "median s", "VRAM GiB", "system RAM GiB", "comfy RAM GiB",
       "comfy swap GiB", "system swap GiB", "error"];
     const rows = RUN.bakeoff.presets.map((r) => {
       const pk = r.peak || {};
       return el("tr", {}, ...[r.preset, r.images ?? 0, num(r.first_seconds), num(r.median_seconds),
-        num(pk.vram_gib), num(pk.comfy_rss_gib), num(pk.comfy_swap_gib), num(pk.swap_gib)]
+        num(pk.vram_gib), num(pk.ram_gib), num(pk.comfy_rss_gib), num(pk.comfy_swap_gib), num(pk.swap_gib)]
         .map((v) => el("td", { textContent: String(v) })), el("td", { className: "err", textContent: r.error || "" }));
     });
     $("bake").querySelector("table").append(

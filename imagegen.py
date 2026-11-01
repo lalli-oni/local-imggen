@@ -365,10 +365,10 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
         src_png, mask_png, src_size = prepare_source(src_path, mask_path)
     template_text = (ROOT / "workflows" / workflow).read_text()
     template = json.loads(template_text)
-    unused = [k for k, v in (("steps", steps), ("cfg", cfg), ("guidance", guidance))
+    unused = [k for k, v in (("steps", steps), ("cfg", cfg), ("guidance", guidance), ("negative", negative))
               if v is not None and "{{" + k + "}}" not in template_text]
-    if unused:  # e.g. -g on a model without guidance: say so instead of silently ignoring it
-        raise ValueError(f"preset '{preset}' ({workflow}) does not take {', '.join(unused)}")
+    if unused:  # e.g. -g on klein, or a project's cfg after switching it to klein: say so, then go on
+        log(f"note: {workflow} has no {', '.join(unused)}, ignoring {'it' if len(unused) == 1 else 'them'}")
     base_seed = seed if seed is not None else random.randrange(MAX_SEED)
     full_prompt = prompt + p.get("suffix", "")
     full_negative = "" if edit else (negative if negative is not None else conf.get("default_negative", "")) \
@@ -436,7 +436,7 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
                     **(source or {})}
             path.with_suffix(".json").write_text(json.dumps(meta, indent=2))
             images.append({"path": str(final), "windows_path": to_windows_path(final), "seed": s,
-                           "seconds": secs})
+                           "seconds": secs if j == 0 else None})  # per job, not per output
         log(f"  [{i}/{count}] seed {s} done in {secs:.1f}s")
 
     run = {"preset": preset, "prompt": prompt, "base_seed": base_seed, "count": count,
@@ -472,7 +472,12 @@ def vary(path: str, count: int = 4, strength: float | None = None, prompt: str |
             raise ValueError(f"no sidecar JSON next to {src.name}; pass a prompt")
     if negative is None:
         negative = meta.get("user_negative")
-    preset = preset or meta.get("preset") or "draft"
+    if preset is None:
+        preset = meta.get("preset") or "draft"
+        key = "inpaint_workflow" if mask else "img2img_workflow"
+        if mode_workflow(list_presets().get(preset, {}), key) is None:  # e.g. made with klein/qwen/kontext
+            log(f"note: preset '{preset}' has no {key.split('_')[0]}, using draft (pick one with -p)")
+            preset = "draft"
     return generate(prompt, preset, count, seed, negative, steps=steps, cfg=cfg,
                     label=label or ("inpaint-" if mask else "vary-") + slug(src.stem, 30),
                     source_image=str(src), mask=mask, denoise=strength)

@@ -45,7 +45,8 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   A preset picks those graphs with `img2img_workflow` / `inpaint_workflow` (defaults: sdxl_img2img.json, sdxl_inpaint.json).
   An edit preset has `edit_workflow` (gets image, width/height; no checkpoint/negative); without `workflow` it is edit-only.
   A preset with `unet` (Flux/Qwen diffusion model) gets no default img2img/inpaint graph (`imagegen.mode_workflow`).
-  steps/cfg/guidance overrides the chosen workflow has no `{{key}}` for are an error, not silently ignored.
+  steps/cfg/guidance/negative the chosen workflow has no `{{key}}` for are ignored with a note on stderr
+  (`gen vary` on a klein/qwen image falls back to draft unless -p is given).
 - Outputs: `<output_dir>/<YYYY-MM-DD>/<HHMMSS>-<preset>-<slug>/` with PNGs, per-image JSON sidecars
   (prompt, seed, params), `run.json` and `index.html` contact sheet.
 - Logs: `journalctl -u comfyui -f`.
