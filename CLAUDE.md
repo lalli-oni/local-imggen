@@ -24,6 +24,7 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   (extra CLI flags) + `limits.conf` (Nice/CPUWeight/IOWeight). on/off restarts comfyui (sudo) after a y/N prompt
   that warns if a job is running (`-y` skips it; no terminal = no).
   `update.sh` runs `comfy/install.sh` on comfy/ changes, which re-applies only if limits are already on.
+  It applies steps from the last applied commit (`.git/imagegen-applied`), so a manual `git pull` is still caught; `--since REV` overrides.
 - `windows/install-wslconfig.sh`: writes `%USERPROFILE%\.wslconfig` (cores/RAM for WSL). Manual, never overwrites,
   always-on once applied (needs `wsl --shutdown`), so it is not part of the on/off toggle.
 - `models/flux-kontext.sh`: opt-in download (~17.7 GB, asks y/N) of the Kontext fp8 model + Flux text encoders

@@ -65,7 +65,10 @@ class Repos:
         self.git(self.dev, "push", "-q", "origin", "main")
 
     def update(self, answer=None):
-        return run_script([str(self.work / "update.sh")], {**self.env, "HOME": str(self.tmp / "home")},
+        return self.update_args([], answer=answer)
+
+    def update_args(self, args, answer=None):
+        return run_script([str(self.work / "update.sh"), *args], {**self.env, "HOME": str(self.tmp / "home")},
                           cwd=self.tmp, answer=answer)
 
     def head(self):
@@ -161,3 +164,108 @@ def test_local_commits_refuse(repos):
     repos.pr(15, "x", {"a.txt": "a\n"})
     r = repos.update(answer="y")
     assert r.code == 1 and "Local commits not on" in r.out
+
+
+# --- remembering the last applied commit (#41) ---
+
+def state(repos):
+    f = repos.work / ".git" / "imagegen-applied"
+    return f.read_text().strip() if f.exists() else None
+
+
+def test_up_to_date_records_baseline_without_dirtying(repos):
+    repos.update()
+    assert state(repos) == repos.head()
+    assert repos.git(repos.work, "status", "--porcelain") == ""
+
+
+def test_manual_pull_still_previews_and_applies(repos):
+    repos.update()  # baseline
+    repos.pr(20, "Better MCP", {"mcp_server.py": "# v2\n", "requirements.txt": "mcp>=2,<3\npillow\nrich\n"})
+    repos.git(repos.work, "pull", "-q", "--ff-only")
+    pulled = repos.head()
+
+    r = repos.update()  # no terminal: preview only
+    assert r.code == 0 and "Already up to date." not in r.out
+    assert "PR #20: Better MCP" in r.out and "follow-up steps not run yet: 1 of the changes above" in r.out
+    assert "Nothing applied" in r.out and repos.calls() == "" and state(repos) != pulled
+
+    r = repos.update(answer="y")
+    assert r.code == 0, r.out
+    assert "quit and reopen the Claude app" in r.out and "rich" in repos.calls()
+    assert repos.head() == pulled and state(repos) == pulled
+    assert "Already up to date." in repos.update().out
+
+
+def test_pulled_plus_incoming_covers_both(repos):
+    repos.update()
+    repos.pr(21, "Comfy tweak", {"comfy/limits.conf": "Nice=5\n"})
+    repos.git(repos.work, "pull", "-q", "--ff-only")
+    repos.pr(22, "MCP", {"mcp_server.py": "# v3\n"})
+    r = repos.update(answer="y")
+    assert r.code == 0, r.out
+    assert "PR #21" in r.out and "PR #22" in r.out and "follow-up steps not run yet: 1 of" in r.out
+    assert "install.sh ran" in repos.calls() and "quit and reopen the Claude app" in r.out
+    assert repos.head() == repos.git(repos.dev, "rev-parse", "HEAD") == state(repos)
+
+
+def test_failed_step_is_offered_again(repos):
+    repos.update()
+    start = state(repos)
+    pip = repos.tmp / "home" / "venvs" / "imagegen" / "bin" / "pip"
+    good = pip.read_text()
+    pip.write_text("#!/bin/sh\nexit 1\n")
+    repos.pr(23, "Deps", {"requirements.txt": "rich\n"})
+    r = repos.update(answer="y")
+    assert r.code != 0 and state(repos) == start
+    pip.write_text(good)
+    r = repos.update(answer="y")
+    assert r.code == 0, r.out
+    assert "PR #23" in r.out and "rich" in repos.calls() and state(repos) == repos.head()
+
+
+def test_since_reapplies_steps(repos):
+    # No state file (e.g. pulled by hand before this version of update.sh existed).
+    repos.pr(24, "MCP", {"mcp_server.py": "# v2\n"})
+    repos.git(repos.work, "pull", "-q", "--ff-only")
+    assert "Already up to date." in repos.update().out
+    r = repos.update_args(["--since", "HEAD~1"], answer="y")
+    assert r.code == 0, r.out
+    assert "PR #24: MCP" in r.out and "quit and reopen the Claude app" in r.out
+    assert "Files already at" in r.out and "Updated to" not in r.out
+
+
+def test_first_run_hints_at_since(repos):
+    assert "update.sh --since REV" in repos.update().out
+    assert "First run" not in repos.update().out
+
+
+def test_pulled_update_sh_is_not_from_next_time(repos):
+    repos.update()
+    repos.pr(25, "update.sh tweak", {"update.sh": (REPO / "update.sh").read_text() + "# tweak\n"})
+    repos.git(repos.work, "pull", "-q", "--ff-only")
+    r = repos.update()
+    assert "PR #25" in r.out and "runs from next time" not in r.out
+
+
+@pytest.mark.parametrize("args, msg", [
+    (["--since", "nope"], "no such commit"),
+    (["--since"], "needs a commit"),
+    (["--since="], "needs a commit"),
+    (["--bogus"], "Unknown option"),
+])
+def test_bad_args(repos, args, msg):
+    r = repos.update_args(args)
+    assert r.code == 2 and msg in r.out
+
+
+def test_stale_state_falls_back_to_current_files(repos):
+    (repos.work / ".git" / "imagegen-applied").write_text("0" * 40 + "\n")
+    r = repos.update()
+    assert r.code == 0 and "isn't behind your current files" in r.out and "Already up to date." in r.out
+    assert state(repos) == repos.head()
+
+
+def test_help(repos):
+    r = repos.update_args(["--help"])
+    assert r.code == 0 and "--since REV" in r.out and "main()" not in r.out

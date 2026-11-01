@@ -4,13 +4,28 @@
 #   2. show the incoming PRs/commits/files, and flag sudo, systemd, .wslconfig, dependency and download changes
 #   3. ask y/N, then fast-forward to exactly the commit that was shown
 #   4. do only the follow-up steps the change needs
-# Usage: ~/imagegen/update.sh
+# Usage: ~/imagegen/update.sh [--since REV]
+#
+# update.sh remembers the last commit whose follow-up steps it applied (.git/imagegen-applied), so
+# changes you pulled by hand with `git pull` still get previewed and their steps applied.
+# --since REV: treat REV as the last applied commit (re-run the steps for everything after it).
 #
 # The whole script is wrapped in main() so bash parses it fully before running:
 # the fast-forward may rewrite this very file, and bash reads scripts lazily.
 set -euo pipefail
 
 main() {
+  local since=''
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --since) [ $# -ge 2 ] || { echo "!! --since needs a commit, e.g. --since HEAD~3"; exit 2; }
+               since=$2; shift 2 ;;
+      --since=*) since=${1#--since=}; [ -n "$since" ] || { echo "!! --since needs a commit"; exit 2; }; shift ;;
+      -h|--help) sed -n '2,/^# The whole script/{/^# The whole script/d;s/^# \{0,1\}//;p}' "$0"; exit 0 ;;
+      *) echo "!! Unknown option: $1 (try --help)"; exit 2 ;;
+    esac
+  done
+
   cd "$(dirname "$(readlink -f "$0")")"
   local VENV="$HOME/venvs/imagegen"
 
@@ -32,18 +47,50 @@ main() {
 
   echo "==> Checking $upstream for updates..."
   git fetch --quiet
-  local old new
-  old=$(git rev-parse HEAD)
+  local cur new old state
+  cur=$(git rev-parse HEAD)
   new=$(git rev-parse '@{u}')
-  [ "$old" = "$new" ] && { echo "Already up to date."; exit 0; }
-  if ! git merge-base --is-ancestor "$old" "$new"; then
+  state=$(git rev-parse --git-path imagegen-applied)
+  if ! git merge-base --is-ancestor "$cur" "$new"; then
     echo "!! Local commits not on $upstream. Not touching anything; sort it out with git first."
     exit 1
   fi
 
+  # old = the last commit whose follow-up steps ran. Usually HEAD, but older after a manual git pull.
+  if [ -n "$since" ]; then
+    old=$(git rev-parse -q --verify "$since^{commit}") \
+      || { echo "!! --since: no such commit: $since"; exit 2; }
+    git merge-base --is-ancestor "$old" "$cur" \
+      || { echo "!! --since: $since is not in this branch's history."; exit 2; }
+  elif [ -f "$state" ]; then
+    old=$(git rev-parse -q --verify "$(head -c 64 "$state")^{commit}" 2>/dev/null) || old=''
+    if [ -z "$old" ] || ! git merge-base --is-ancestor "$old" "$cur"; then
+      echo "${Y}!! The last applied commit isn't behind your current files (reset or checkout?); starting from them.${N}"
+      echo "   (To re-run the steps for older changes: update.sh --since REV)"
+      old=$cur
+    fi
+  else
+    old=$cur  # first run with this version: nothing to go on, so trust the current files
+    echo "${Y}==> First run that keeps track of applied changes: taking your current files as applied.${N}"
+    echo "   If you pulled by hand before this, re-run the steps with: update.sh --since REV (see git reflog)"
+  fi
+
+  if [ "$old" = "$new" ]; then
+    echo "Already up to date."
+    echo "$cur" > "$state" 2>/dev/null || true  # baseline for next time; not worth failing over
+    exit 0
+  fi
+
   local changed
   changed=$(git diff --name-only "$old" "$new")
-  show_incoming "$old" "$new" "$changed"
+  show_incoming "$old" "$new" "$changed" "$cur"
+  if [ "$old" != "$cur" ]; then
+    local pulled
+    pulled=$(git rev-list --first-parent --count "$old..$cur")
+    echo "${Y}==> Already in your files, but follow-up steps not run yet: $pulled of the changes above${N}"
+    echo "${Y}    (pulled by hand, or picked with --since)${N}"
+    echo
+  fi
 
   local answer=''
   # Ask the terminal directly; with no terminal (cron, pipe) the answer is "no".
@@ -58,8 +105,12 @@ main() {
   esac
 
   # Apply exactly what was shown, even if the remote moved in the meantime.
-  git merge --ff-only --quiet "$new"
-  echo "${G}==> Updated to $(git log -1 --format='%h %s' "$new")${N}"
+  if [ "$cur" = "$new" ]; then
+    echo "${G}==> Files already at $(git log -1 --format='%h %s' "$new"); running the follow-up steps${N}"
+  else
+    git merge --ff-only --quiet "$new"
+    echo "${G}==> Updated to $(git log -1 --format='%h %s' "$new")${N}"
+  fi
 
   has() { grep -qE "$1" <<<"$changed"; }
 
@@ -68,9 +119,12 @@ main() {
     # Guard: torch & co never belong here (only ~/venvs/comfy has the ROCm builds).
     local reqs
     reqs=$(mktemp)
+    # shellcheck disable=SC2064  # expand now: $reqs is a local, gone by the time EXIT fires
+    trap "rm -f '$reqs'" EXIT  # also if pip fails (mktemp paths have no quotes)
     grep -viE '^[[:space:]]*(torch|torchvision|torchaudio|triton)([^a-z0-9_-]|$)' requirements.txt > "$reqs" || true
     "$VENV/bin/pip" install -q -r "$reqs"
     rm -f "$reqs"
+    trap - EXIT
   fi
 
   if has '^comfy/'; then
@@ -98,6 +152,8 @@ main() {
     echo "############################################################"
   fi
 
+  # Only now: if a step above failed (set -e), the next run offers the same steps again.
+  echo "$new" > "$state"
   echo "==> Done. The gen CLI already uses the new code."
 }
 
@@ -108,7 +164,7 @@ comfy_step() {
 
 # Print what old..new brings in, with risk flags and the follow-up steps update.sh will take.
 show_incoming() {
-  local old=$1 new=$2 changed=$3 sha subj num title
+  local old=$1 new=$2 changed=$3 cur=$4 sha subj num title
 
   echo
   echo "${B}==> Incoming changes${N}"
@@ -190,7 +246,7 @@ show_incoming() {
       echo "  ${Y}- sudo systemctl restart comfyui${N}"
     fi
   fi
-  if grep -qE '^update\.sh$' <<<"$changed"; then
+  if git diff --quiet "$cur" "$new" -- update.sh; then :; else
     any=1; echo "  - (update.sh itself changes; the new version runs from next time)"
   fi
   [ $any -eq 0 ] && echo "  - nothing beyond updating the files"
