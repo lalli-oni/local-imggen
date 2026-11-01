@@ -54,9 +54,11 @@ width = 1024
 height = 1024
 steps = 30
 cfg = 7.0
-suffix = ", app icon, single centered object, flat vector style, bold simple shapes, plain white background"
-negative_extra = ", busy background, multiple objects, photo, text, letters"
-post = ["remove_bg"]
+suffix = ", app icon, single centered object, isolated on a plain pure white background, flat vector style, bold simple shapes, no shadow, no scenery"
+negative_extra = ", busy background, multiple objects, photo, text, letters, frame, border, scattered elements, confetti, drop shadow, cast shadow, vignette, scenery, ground, gradient background, patterned background"
+# remove_bg: rembg cut-out. keep_largest: drop stray shapes around the subject (anything under a
+# quarter of its size). trim: crop to the subject, centre it on a square (the canvas's shorter side).
+post = ["remove_bg", "keep_largest", "trim"]
 
 # Opt-in model presets: `download` names the script in models/ that fetches their models (gen doctor
 # shows them as warn until then). Presets that load a diffusion model (`unet`) have no img2img/inpaint

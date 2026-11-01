@@ -23,7 +23,7 @@ gen "misty fjord at sunrise" -p wallpaper --open
 |---|---|
 | `gen "prompt" [-p PRESET] [-n 4] [--open]` | Text to image with a preset (`gen presets` lists them) |
 | `gen vary PATH [--mask M] [-s 0.4]` | img2img variations, or inpaint with a mask |
-| `gen cutout PATH` | Remove the background (transparent PNG) |
+| `gen cutout PATH [--clean]` | Remove the background (transparent PNG); `--clean` also drops stray shapes and centres it on a square |
 | `gen edit PATH "instruction" [-p kontext\|klein\|qwen]` | Edit with a plain-language instruction; FLUX.1 Kontext by default, opt-in models (`models/*.sh`) |
 | `gen bakeoff PATH "instr" ["instr"...] [-p kontext,klein,qwen] [-n 2]` | The same edits through several edit models (same seeds), time/VRAM/RAM per model, one contact sheet |
 | `gen project new\|list\|status\|set\|gen\|promote\|keep` | Creative projects: versioned prompt/palette/refs, named assets |
@@ -51,6 +51,9 @@ a `job_id` to poll with `get_job` (the remote bridge times out at about 60s). Re
 It fetches, shows the incoming PRs and files, flags risky changes (sudo, systemd, `.wslconfig`, dependencies,
 downloads), asks y/N, then fast-forwards to exactly what it showed. It reinstalls the venv only when
 `requirements.txt` changed and tells you when to restart the Claude app. It never downloads models.
+
+It remembers the last commit it applied, so if you `git pull` by hand first, the next `update.sh` still
+shows those changes and runs their steps. `update.sh --since REV` re-runs the steps for everything after REV.
 
 ## Tests
 

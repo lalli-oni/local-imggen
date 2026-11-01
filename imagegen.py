@@ -10,7 +10,8 @@ Usage:
   gen vary PATH --mask MASK.png --prompt "..."  # inpaint: repaint only the white part of MASK
   gen edit PATH "make it wave, side view"      # instruction edit (FLUX.1 Kontext, opt-in models)
   gen bakeoff PATH "instr" ["instr"...]         # same edits through kontext, klein, qwen; time/VRAM/RAM
-  gen cutout PATH                               # remove the background -> PATH-transparent.png
+  gen cutout PATH [--clean]                     # remove the background -> PATH-transparent.png
+                                                #   --clean: also drop stray shapes, centre on a square
   gen presets                                   # list presets
   gen recent [N]                                # last N runs
   gen set-wallpaper PATH                        # set Windows desktop wallpaper
@@ -206,7 +207,108 @@ def remove_bg(path: Path) -> Path:
     return out
 
 
-POST = {"remove_bg": remove_bg}
+def cutout(path: Path, clean: bool = False) -> Path:
+    """remove_bg, then with clean also the CLEANUP steps (drop stray shapes, centre on a square)."""
+    out = remove_bg(path)
+    for step in CLEANUP if clean else []:
+        out = POST[step](out)
+    return out
+
+
+ALPHA_SOLID = 8         # alpha above this counts as part of a shape
+ISLAND_GRID = 256       # keep_largest finds shapes on a grid this big (fast in pure Python, no numpy)
+ISLAND_KEEP = 0.25      # keep_largest keeps every shape at least this share of the largest one
+TRIM_MARGIN = 0.06      # trim leaves this share of the canvas free on each side
+
+
+def _rgba(path: Path):
+    """The image as RGBA, or None if it has no transparency to work with (nothing to clean)."""
+    from PIL import Image
+    with Image.open(path) as im:
+        im.load()
+    if im.mode not in ("RGBA", "LA", "PA") and "transparency" not in im.info:
+        return None
+    return im.convert("RGBA")
+
+
+def keep_largest(path: Path) -> Path:
+    """Drop stray shapes around a cut-out: keep the largest connected opaque shape, plus any other
+    shape at least ISLAND_KEEP of its size (so a two-part icon survives). Rewrites path in place.
+    Runs after remove_bg; an image without transparency is left as it is."""
+    from PIL import Image, ImageChops, ImageFilter
+    im = _rgba(path)
+    if im is None:
+        return path
+    alpha = im.getchannel("A")
+    w, h = im.size
+    k = min(1.0, ISLAND_GRID / max(w, h))
+    gw, gh = max(1, round(w * k)), max(1, round(h * k))
+    # BOX keeps thin connecting lines as low (but non-zero) alpha, so shapes don't fall apart
+    grid = alpha.resize((gw, gh), Image.BOX).tobytes()
+    labels = [0] * (gw * gh)
+    sizes = [0]  # sizes[label]
+    for start in range(gw * gh):
+        if labels[start] or grid[start] <= ALPHA_SOLID:
+            continue
+        label = len(sizes)
+        labels[start] = label
+        stack, n = [start], 0
+        while stack:
+            i = stack.pop()
+            n += 1
+            y, x = divmod(i, gw)
+            for ny in (y - 1, y, y + 1):
+                if 0 <= ny < gh:
+                    for nx in (x - 1, x, x + 1):
+                        j = ny * gw + nx
+                        if 0 <= nx < gw and not labels[j] and grid[j] > ALPHA_SOLID:
+                            labels[j] = label
+                            stack.append(j)
+        sizes.append(n)
+    if len(sizes) <= 2:  # zero or one shape: nothing to drop
+        return path
+    keep_min = max(sizes) * ISLAND_KEEP
+    removed = sum(1 for n in sizes[1:] if n < keep_min)
+    if not removed:
+        return path
+    keep = bytes(255 if sizes[lb] >= keep_min else 0 for lb in labels)
+    mask = Image.frombytes("L", (gw, gh), keep).resize((w, h), Image.NEAREST)
+    cell = max(1, round(1 / k))
+    mask = mask.filter(ImageFilter.MaxFilter(2 * cell + 1))  # grow by a grid cell: keeps soft edges
+    im.putalpha(ImageChops.darker(alpha, mask))
+    im.save(path)
+    log(f"  keep_largest: dropped {removed} stray shape(s) from {path.name}")
+    return path
+
+
+def trim(path: Path) -> Path:
+    """Crop a cut-out to its content, centre it on a square with a TRIM_MARGIN border and scale it to
+    the canvas's shorter side (1024 for icons), so a set of icons comes out the same size. A non-square
+    canvas becomes square. Rewrites path in place.
+    Runs after remove_bg (and keep_largest); an image without transparency is left as it is."""
+    from PIL import Image
+    im = _rgba(path)
+    if im is None:
+        return path
+    box = im.getchannel("A").point(lambda v: 255 if v > ALPHA_SOLID else 0).getbbox()
+    if box is None:  # fully transparent: nothing to centre
+        return path
+    w, h = im.size
+    content = im.crop(box)
+    side = max(content.size)
+    canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+    canvas.paste(content, ((side - content.width) // 2, (side - content.height) // 2))
+    out_side = min(w, h)
+    inner = max(1, round(out_side * (1 - 2 * TRIM_MARGIN)))
+    out = Image.new("RGBA", (out_side, out_side), (0, 0, 0, 0))
+    off = (out_side - inner) // 2
+    out.paste(canvas.resize((inner, inner), resample=Image.LANCZOS), (off, off))
+    out.save(path)
+    return path
+
+
+POST = {"remove_bg": remove_bg, "keep_largest": keep_largest, "trim": trim}
+CLEANUP = ["keep_largest", "trim"]  # what `gen cutout --clean` runs after remove_bg
 
 
 # ---------------------------------------------------------------- source images (img2img / inpaint)
@@ -701,14 +803,17 @@ def main(argv: list[str]) -> int:
         import bakeoff  # lazy: only gen bakeoff needs it
         return bakeoff.main(argv[1:])
     if argv and argv[0] == "cutout":
-        if len(argv) != 2:
-            print("usage: gen cutout PATH", file=sys.stderr)
-            return 2
-        src = to_linux_path(argv[1])
+        cp = argparse.ArgumentParser(prog="gen cutout",
+                                     description="Remove the background -> PATH-transparent.png")
+        cp.add_argument("path")
+        cp.add_argument("--clean", action="store_true",
+                        help="also drop stray shapes and centre the result on a square (like the icon preset)")
+        a = cp.parse_args(argv[1:])
+        src = to_linux_path(a.path)
         if not src.is_file():
             print(f"not a file: {src}", file=sys.stderr)
             return 1
-        print(remove_bg(src))
+        print(cutout(src, a.clean))
         return 0
     if argv and argv[0] == "sheet":
         if argv[1:2] in (["-h"], ["--help"]):
