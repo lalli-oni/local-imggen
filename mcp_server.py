@@ -78,7 +78,7 @@ def _wait_and_report(job_id: str, wait: float) -> list:
     run = job["result"]
     summary = {"job_id": job_id, "status": "done", "elapsed_s": round(time.time() - job["started"]),
                "run_dir_windows": run["run_dir_windows"], "contact_sheet_windows": run["contact_sheet_windows"],
-               "base_seed": run["base_seed"],
+               "base_seed": run["base_seed"], "timing": (run.get("timing") or {}).get("summary"),
                "images": [{"path": im["path"], "windows_path": im["windows_path"], "seed": im["seed"]}
                           for im in run["images"]]}
     out: list = [summary]

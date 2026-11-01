@@ -105,3 +105,14 @@ def test_project_run_has_promote_buttons(make_run, open_sheet):
 def test_transparent_run_uses_checkerboard(make_run, open_sheet):
     page, _ = open_sheet(make_run(n=1, transparent=True))
     assert "checker" in page.locator("#grid img").first.get_attribute("class")
+
+
+def test_timing_shown(make_run, open_sheet):
+    run = make_run(n=2, timing={"summary": "2 images in 90.0s: sample 80.0s"})
+    for im, s in zip(run["images"], (50.0, 40.0)):
+        im["timing"] = {"total_s": s, "sample_s": s - 5, "comfy_s": s}
+    page, errors = open_sheet(run)
+    assert "2 images in 90.0s" in page.locator("#meta").inner_text()
+    first = page.locator("#grid figcaption .time").first
+    assert first.inner_text() == "50.0s" and first.get_attribute("title") == "sample 45.0s"
+    assert not errors, errors

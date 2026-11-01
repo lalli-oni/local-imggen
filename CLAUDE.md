@@ -43,7 +43,11 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   A preset picks those graphs with `img2img_workflow` / `inpaint_workflow` (defaults: sdxl_img2img.json, sdxl_inpaint.json).
   An edit preset has `edit_workflow` (gets image, width/height; no checkpoint/negative); without `workflow` it is edit-only.
 - Outputs: `<output_dir>/<YYYY-MM-DD>/<HHMMSS>-<preset>-<slug>/` with PNGs, per-image JSON sidecars
-  (prompt, seed, params), `run.json` and `index.html` contact sheet.
+  (prompt, seed, params, timing), `run.json` and `index.html` contact sheet.
+- Timing (#2): `Events` in imagegen.py listens on ComfyUI's `/ws` (stdlib websocket client) and `job_timing`
+  turns the `executing` events into `<stage>_s` seconds (stages from the node class, `STAGES`). Without the
+  socket it falls back to `/history` timestamps (queue_s and comfy_s only). `run.json` `timing.summary` is the
+  one-line breakdown that `gen`, the MCP result and the contact sheet show.
 - Logs: `journalctl -u comfyui -f`.
 
 ## Testing
@@ -55,6 +59,7 @@ Cloud sessions also run the contact sheet in Chromium (`/opt/pw-browsers`); else
 What's there to reuse, instead of building a one-off setup:
 - `comfy` fixture (`tests/fake_comfy.py`): a fake ComfyUI HTTP server with canned PNGs. Inspect `comfy.workflows()`,
   `comfy.uploads`; switch on `reject`, `fail_jobs`, `no_gpu`, `delay` (slow jobs), `queue_running/pending`.
+  It also plays the websocket events per node: `node_s` (seconds per class_type), `cached`, `ws = False`.
 - `make_run` (a finished run folder: PNGs, sidecars, run.json), `make_image`, `out_dir`, `fake_rembg`, `stub_calls()`
   (what the fake wslpath/powershell.exe/explorer.exe/systemctl/sudo were called with).
 - Shell scripts: `tests/shell_helpers.run_script()` runs a script with no terminal (y/N prompts read "no")

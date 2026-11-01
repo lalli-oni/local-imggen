@@ -25,8 +25,9 @@ def test_presets(capsys):
 def test_generate_prints_paths(comfy, capsys):
     code, out, _ = run_main(["a fox", "-n", "2", "--seed", "4", "--size", "512x256"], capsys)
     lines = out.splitlines()
-    assert code == 0 and len(lines) == 3
-    assert lines[-1].startswith("contact sheet: \\\\wsl.localhost\\")  # fake wslpath
+    assert code == 0 and len(lines) == 4
+    assert lines[2].startswith("contact sheet: \\\\wsl.localhost\\")  # fake wslpath
+    assert lines[3].startswith("timing: 2 images in ")
     latent = next(n["inputs"] for n in comfy.workflows()[0].values() if n["class_type"] == "EmptyLatentImage")
     assert (latent["width"], latent["height"]) == (512, 256)
 
