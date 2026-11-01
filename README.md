@@ -23,7 +23,7 @@ gen "misty fjord at sunrise" -p wallpaper --open
 |---|---|
 | `gen "prompt" [-p PRESET] [-n 4] [--open]` | Text to image with a preset (`gen presets` lists them) |
 | `gen vary PATH [--mask M] [-s 0.4]` | img2img variations, or inpaint with a mask |
-| `gen cutout PATH` | Remove the background (transparent PNG) |
+| `gen cutout PATH [--clean]` | Remove the background (transparent PNG); `--clean` also drops stray shapes and centres it on a square |
 | `gen edit PATH "instruction"` | Edit with a plain-language instruction; FLUX.1 Kontext, opt-in models (`models/flux-kontext.sh`) |
 | `gen project new\|list\|status\|set\|gen\|promote\|keep` | Creative projects: versioned prompt/palette/refs, named assets |
 | `gen recent`, `gen sheet [RUN_DIR\|DATE]` | Recent runs; rebuild contact sheets |

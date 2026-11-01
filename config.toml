@@ -54,9 +54,11 @@ width = 1024
 height = 1024
 steps = 30
 cfg = 7.0
-suffix = ", app icon, single centered object, flat vector style, bold simple shapes, plain white background"
-negative_extra = ", busy background, multiple objects, photo, text, letters"
-post = ["remove_bg"]
+suffix = ", app icon, single centered object, isolated on a plain pure white background, flat vector style, bold simple shapes, no shadow, no scenery"
+negative_extra = ", busy background, multiple objects, photo, text, letters, frame, border, scattered elements, confetti, drop shadow, cast shadow, vignette, scenery, ground, gradient background, patterned background"
+# remove_bg: rembg cut-out. keep_largest: drop stray shapes around the subject (anything under a
+# quarter of its size). trim: crop to the subject, centre it on a square, same canvas size.
+post = ["remove_bg", "keep_largest", "trim"]
 
 # Edit-only preset: `gen edit IMAGE "instruction"` / MCP edit. Not usable for gen "prompt" or gen vary.
 # Models are opt-in (~17.7 GB): run ~/imagegen/models/flux-kontext.sh once.
