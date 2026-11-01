@@ -179,7 +179,9 @@ $("prompt").textContent = RUN.prompt;
   if (p0.width && p0.height) parts.push([null, `${p0.width}×${p0.height}`]);
   if (p0.steps != null) parts.push(["steps", p0.steps]);
   if (p0.cfg != null) parts.push(["cfg", p0.cfg]);
-  if (RUN.source_image) parts.push([RUN.mask ? "inpaint from" : "img2img from", `${RUN.source_image} @ ${RUN.denoise}`]);
+  if (RUN.source_image) parts.push(RUN.edit ? ["edit of", RUN.source_image]
+    : [RUN.mask ? "inpaint from" : "img2img from", `${RUN.source_image} @ ${RUN.denoise}`]);
+  if (p0.guidance != null) parts.push(["guidance", p0.guidance]);
   if (RUN.project) parts.push(["project", `${RUN.project.slug} v${RUN.project.version}`]);
   $("meta").append(...parts.flatMap(([k, v], i) => [
     i ? " · " : "", k ? `${k} ` : "", el("b", { textContent: String(v) })]));

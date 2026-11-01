@@ -7,11 +7,12 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
 - `config.toml`: ComfyUI URL, `output_dir` (Windows side, `/mnt/c/Users/lalli/Pictures/imagegen`), presets
 - `workflows/*.json`: ComfyUI **API-format** workflows; string values `"{{key}}"` are filled from preset/args
 - `imagegen.py`: core + `gen` CLI (`gen --help`, `gen presets`, `gen recent`, `gen set-wallpaper PATH`,
-  `gen vary PATH [--mask M] [-s 0.4]` for img2img/inpaint, `gen cutout PATH` for background removal,
+  `gen vary PATH [--mask M] [-s 0.4]` for img2img/inpaint, `gen edit PATH "instruction"` for instruction edits
+  (FLUX.1 Kontext, `kontext` preset), `gen cutout PATH` for background removal,
   `gen sheet [RUN_DIR|DATE]` to rebuild contact sheets (default: latest run), `gen doctor` for a health check)
 - `templates/contact_sheet.html`: the per-run `index.html` viewer (fit-all / size slider, A/B compare).
   Static, no build, opened via file://; `write_contact_sheet` inlines the run data as JSON.
-- `mcp_server.py`: MCP tools (generate, get_job, vary, cutout, doctor, list_presets, recent_runs, view_image, set_wallpaper,
+- `mcp_server.py`: MCP tools (generate, get_job, vary, edit, cutout, doctor, list_presets, recent_runs, view_image, set_wallpaper,
   open_contact_sheet, project_*)
 - `projects.py`: creative projects (#22) behind `gen project new|list|status|set|gen|promote|keep` and the MCP
   `project_*` tools. `<output_dir>/projects/<slug>/project.json` holds the state (prompt, snippets, params,
@@ -25,6 +26,8 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   `update.sh` runs `comfy/install.sh` on comfy/ changes, which re-applies only if limits are already on.
 - `windows/install-wslconfig.sh`: writes `%USERPROFILE%\.wslconfig` (cores/RAM for WSL). Manual, never overwrites,
   always-on once applied (needs `wsl --shutdown`), so it is not part of the on/off toggle.
+- `models/flux-kontext.sh`: opt-in download (~17.7 GB, asks y/N) of the Kontext fp8 model + Flux text encoders
+  and VAE into `~/comfyui/models`. Never run automatically; `gen doctor` shows them as warn while missing.
 - `test.sh` + `tests/`: the test suite (see Testing below). `requirements-dev.txt` / `requirements-browser.txt`
   hold test-only deps; CI runs it on every PR (`.github/workflows/test.yml`).
 - `setup.sh`: idempotent setup (venv `~/venvs/imagegen`, `gen` wrapper, upscaler + rembg models)
@@ -37,6 +40,7 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   Every `{{key}}` in the workflow must be a preset key, or one of: seed, prompt, negative, checkpoint,
   and for img2img/inpaint workflows also image, mask, denoise (width/height then come from the source).
   A preset picks those graphs with `img2img_workflow` / `inpaint_workflow` (defaults: sdxl_img2img.json, sdxl_inpaint.json).
+  An edit preset has `edit_workflow` (gets image, width/height; no checkpoint/negative); without `workflow` it is edit-only.
 - Outputs: `<output_dir>/<YYYY-MM-DD>/<HHMMSS>-<preset>-<slug>/` with PNGs, per-image JSON sidecars
   (prompt, seed, params), `run.json` and `index.html` contact sheet.
 - Logs: `journalctl -u comfyui -f`.

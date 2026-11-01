@@ -11,12 +11,14 @@ import json
 import threading
 import time
 import urllib.parse
+from pathlib import Path
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from PIL import Image
 
 PNG_SIZE = (64, 48)
+WORKFLOWS_DIR = Path(__file__).resolve().parent.parent / "workflows"
 
 
 def png_bytes(color=(200, 80, 40), size=PNG_SIZE, mode="RGB") -> bytes:
@@ -44,7 +46,13 @@ class FakeComfy:
         self.fail_jobs = False    # finished jobs report status_str "error"
         self.no_gpu = False       # /system_stats lists only a CPU
         self.models = {"checkpoints": ["sd_xl_base_1.0.safetensors"],
-                       "upscale_models": ["RealESRGAN_x4plus.pth"]}
+                       "upscale_models": ["RealESRGAN_x4plus.pth"],
+                       "diffusion_models": ["flux1-dev-kontext_fp8_scaled.safetensors"],
+                       "text_encoders": ["clip_l.safetensors", "t5xxl_fp8_e4m3fn_scaled.safetensors"],
+                       "vae": ["ae.safetensors"]}
+        # node types /object_info lists: every class_type the repo's workflows use (tests may remove some)
+        self.nodes = {n["class_type"] for wf in WORKFLOWS_DIR.glob("*.json")
+                      for n in json.loads(wf.read_text()).values()}
         self.queue_running = 0
         self.queue_pending = 0
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
@@ -112,6 +120,8 @@ class FakeComfy:
                 if u.path == "/queue":
                     return self._send(200, {"queue_running": [[0]] * fake.queue_running,
                                             "queue_pending": [[0]] * fake.queue_pending})
+                if u.path == "/object_info":
+                    return self._send(200, {c: {} for c in fake.nodes})
                 if u.path.startswith("/models/"):
                     return self._send(200, fake.models.get(u.path.rsplit("/", 1)[1], []))
                 self._send(404, {"error": "not found"})

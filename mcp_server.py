@@ -15,7 +15,8 @@ import imagegen
 mcp = MCPServer(
     "imagegen",
     instructions=(
-        "Local image generation on the user's GPU (ComfyUI + SDXL). Call list_presets first if unsure. "
+        "Local image generation on the user's GPU (ComfyUI + SDXL; FLUX.1 Kontext for instruction edits via "
+        "the edit tool). Call list_presets first if unsure. "
         "Outputs land in the user's Windows Pictures\\imagegen folder; each run has an index.html contact sheet. "
         "SDXL prompts work best as comma-separated descriptive phrases; presets append their own style suffix."
     ),
@@ -39,9 +40,14 @@ def _thumb(path: str, size: int = 384) -> Image:
 @mcp.tool()
 def list_presets() -> dict:
     """List available presets with descriptions and generation sizes."""
-    return {name: {"description": p.get("description", ""), "size": f"{p['width']}x{p['height']}",
-                   **({"output_size": f"{p['target_width']}x{p['target_height']}"} if "target_width" in p else {})}
-            for name, p in imagegen.list_presets().items()}
+    out = {}
+    for name, p in imagegen.list_presets().items():
+        if "workflow" not in p:  # edit-only (e.g. kontext): use the edit tool
+            out[name] = {"description": p.get("description", ""), "mode": "edit only", "size": "~1 MP, source aspect"}
+            continue
+        out[name] = {"description": p.get("description", ""), "size": f"{p['width']}x{p['height']}",
+                     **({"output_size": f"{p['target_width']}x{p['target_height']}"} if "target_width" in p else {})}
+    return out
 
 
 WAIT_S = 45  # the remote bridge times out at ~60s, so never block longer than this per call
@@ -120,6 +126,28 @@ def vary(path: str, count: int = 4, strength: float | None = None, prompt: str |
     kwargs = dict(path=path, count=min(max(1, count), MAX_COUNT), strength=strength, prompt=prompt,
                   negative=negative, preset=preset, mask=mask, seed=seed)
     return _start(imagegen.vary, kwargs, preview)
+
+
+MAX_EDITS = 4
+
+
+@mcp.tool()
+def edit(path: str, instruction: str, count: int = 1, seed: int | None = None, steps: int | None = None,
+         guidance: float | None = None, preview: bool = True) -> list:
+    """Edit an image by plain-language instruction with FLUX.1 Kontext. path: Linux or Windows path.
+
+    Write the instruction as what to change plus what to keep, e.g. "Make the character wave with one
+    tentacle, seen from the side. Keep the same character design, colors, proportions and art style."
+    Name things concretely ("the small green octopus creature") rather than "it". One change per edit
+    works best; chain edits by editing a result. count 1-4: each is a fresh edit of the source with
+    its own seed. guidance (default 2.5): higher follows the text harder. Output is ~1 MP.
+    Slow: ~75-85s per image on tulu once the model is loaded, ~3 min for the first image of a session
+    (loading ~17 GB). Same waiting/job_id behaviour as generate, so poll get_job.
+    Needs the opt-in Kontext models (doctor shows them as warn if missing).
+    """
+    kwargs = dict(path=path, instruction=instruction, count=min(max(1, count), MAX_EDITS), seed=seed,
+                  steps=steps, guidance=guidance)
+    return _start(imagegen.edit, kwargs, preview)
 
 
 @mcp.tool()

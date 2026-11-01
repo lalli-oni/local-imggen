@@ -57,3 +57,16 @@ cfg = 7.0
 suffix = ", app icon, single centered object, flat vector style, bold simple shapes, plain white background"
 negative_extra = ", busy background, multiple objects, photo, text, letters"
 post = ["remove_bg"]
+
+# Edit-only preset: `gen edit IMAGE "instruction"` / MCP edit. Not usable for gen "prompt" or gen vary.
+# Models are opt-in (~17.7 GB): run ~/imagegen/models/flux-kontext.sh once.
+# FLUX.1 Kontext [dev] is under the FLUX.1 [dev] non-commercial licence.
+[presets.kontext]
+description = "Edit an image by instruction (FLUX.1 Kontext dev, fp8): gen edit IMAGE \"...\""
+edit_workflow = "flux_kontext.json"
+unet = "flux1-dev-kontext_fp8_scaled.safetensors"
+clip_l = "clip_l.safetensors"
+t5 = "t5xxl_fp8_e4m3fn_scaled.safetensors"
+vae = "ae.safetensors"
+steps = 20
+guidance = 2.5

@@ -24,7 +24,7 @@ gen "misty fjord at sunrise" -p wallpaper --open
 | `gen "prompt" [-p PRESET] [-n 4] [--open]` | Text to image with a preset (`gen presets` lists them) |
 | `gen vary PATH [--mask M] [-s 0.4]` | img2img variations, or inpaint with a mask |
 | `gen cutout PATH` | Remove the background (transparent PNG) |
-| `gen edit PATH "instruction"` | Edit with a plain-language instruction (**pending PR #32**) |
+| `gen edit PATH "instruction"` | Edit with a plain-language instruction; FLUX.1 Kontext, opt-in models (`models/flux-kontext.sh`) |
 | `gen project new\|list\|status\|set\|gen\|promote\|keep` | Creative projects: versioned prompt/palette/refs, named assets |
 | `gen recent`, `gen sheet [RUN_DIR\|DATE]` | Recent runs; rebuild contact sheets |
 | `gen set-wallpaper PATH` | Set a Windows wallpaper |
@@ -65,14 +65,14 @@ No GPU, ComfyUI or tulu needed: it uses a fake ComfyUI server and stubs. CI runs
 | **SDXL base 1.0** (`sd_xl_base_1.0.safetensors`) | Generation, img2img, inpaint | every preset; `gen`, `gen vary`, `gen project gen` | `checkpoints` | 6.9 GB | ~8 GB VRAM at 1024² | CreativeML Open RAIL++-M | Jul 2023 | By hand from [stabilityai/stable-diffusion-xl-base-1.0](https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0) |
 | **RealESRGAN x4plus** (`RealESRGAN_x4plus.pth`) | 4x upscale | `wallpaper`, `wallpaper_ultrawide` | `upscale_models` | 64 MB | ~1-2 GB VRAM (tiled) | BSD-3-Clause | Jul 2021 | `setup.sh` (GitHub release) |
 | **rembg u2net** (`u2net.onnx`) | Background removal | `icon` preset, `gen cutout` | not ComfyUI: `~/.u2net/` | 176 MB | ~1 GB RAM, CPU only | Apache 2.0 (rembg: MIT) | 2020 | `setup.sh` (rembg fetches it on first use) |
-| **FLUX.1 Kontext [dev] fp8** (`flux1-dev-kontext_fp8_scaled.safetensors`) | Instruction editing | `gen edit`, MCP `edit` (*pending #32*) | `diffusion_models` | 11.9 GB | ~12 GB VRAM | FLUX.1 [dev] Non-Commercial | Jun 2025 | `models/flux-kontext.sh` (opt-in, asks y/N) |
+| **FLUX.1 Kontext [dev] fp8** (`flux1-dev-kontext_fp8_scaled.safetensors`) | Instruction editing | `gen edit`, MCP `edit` | `diffusion_models` | 11.9 GB | ~12 GB VRAM | FLUX.1 [dev] Non-Commercial | Jun 2025 | `models/flux-kontext.sh` (opt-in, asks y/N) |
 | ↳ T5-XXL encoder fp8 (`t5xxl_fp8_e4m3fn_scaled.safetensors`) | Kontext text encoder | same | `text_encoders` | 5.2 GB | held in RAM, swapped in | Apache 2.0 | 2020 (Google T5 v1.1) | same script |
 | ↳ CLIP-L (`clip_l.safetensors`) | Kontext text encoder | same | `text_encoders` | 0.25 GB | small | MIT | Jan 2021 (OpenAI) | same script |
 | ↳ FLUX VAE (`ae.safetensors`) | Kontext latent decode | same | `vae` | 0.33 GB | small | Apache 2.0 | Aug 2024 | same script |
 
 So yes, editing uses a different model: SDXL makes and varies images, Kontext follows instructions
 ("make it wave a tentacle") while keeping the rest of the picture. The Kontext set is ~17.7 GB and is
-never downloaded automatically. `gen doctor` shows which models are present (with #32, missing Kontext files
+never downloaded automatically. `gen doctor` shows which models are present (missing Kontext files
 are only a warning, since they are opt-in).
 
 Sizes and memory are approximate. VRAM figures are for the model weights at the preset sizes, not
@@ -87,7 +87,11 @@ Set this in `C:\Users\lalli\.wslconfig`, then run `wsl --shutdown` in PowerShell
 ```ini
 [wsl2]
 memory=24GB
+swap=16GB
 ```
+
+This is what tulu runs since 2026-11-01. The first Kontext run on the default 16 GB was OOM-killed at
+~15.5 GB, and `gen` then reports "ComfyUI restarted and lost the job".
 
 `windows/install-wslconfig.sh` writes 50% of the PC's RAM by default, which may be less than that, and it
 never overwrites an existing `.wslconfig`.
