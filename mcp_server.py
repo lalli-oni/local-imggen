@@ -151,9 +151,11 @@ def edit(path: str, instruction: str, count: int = 1, seed: int | None = None, s
 
 
 @mcp.tool()
-def cutout(path: str) -> dict:
-    """Remove an image's background (rembg) -> <name>-transparent.png next to it."""
-    out = imagegen.remove_bg(imagegen.to_linux_path(path))
+def cutout(path: str, clean: bool = False) -> dict:
+    """Remove an image's background (rembg) -> <name>-transparent.png next to it.
+    clean=True also drops stray shapes left around the subject and centres it on a square canvas
+    (what the icon preset does). Leave it off for scenes or several separate subjects."""
+    out = imagegen.cutout(imagegen.to_linux_path(path), clean)
     return {"path": str(out), "windows_path": imagegen.to_windows_path(out)}
 
 

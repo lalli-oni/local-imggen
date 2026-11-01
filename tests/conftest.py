@@ -64,16 +64,22 @@ def comfy(monkeypatch):
     fake.stop()
 
 
+class FakeRembgCalls(list):
+    """fake_rembg's call log. Set .output to PNG bytes to make remove() return that cut-out instead."""
+    output: bytes | None = None
+
+
 @pytest.fixture(autouse=True)
 def fake_rembg(monkeypatch):
     """rembg is heavy (onnxruntime + a 170 MB model, a download on first use): every test gets a stand-in
-    module whose remove() returns an RGBA PNG. The list it returns records each call's input size."""
-    calls = []
+    module whose remove() returns a fully transparent RGBA PNG (or `fake_rembg.output`, if set).
+    The list it returns records each call's input size."""
+    calls = FakeRembgCalls()
     mod = types.ModuleType("rembg")
 
     def remove(data: bytes) -> bytes:
         calls.append(len(data))
-        return png_bytes((0, 0, 0, 0), mode="RGBA")
+        return calls.output if calls.output is not None else png_bytes((0, 0, 0, 0), mode="RGBA")
 
     mod.remove = remove
     monkeypatch.setitem(sys.modules, "rembg", mod)
