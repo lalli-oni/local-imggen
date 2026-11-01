@@ -188,6 +188,9 @@ def test_stage_of():
     assert imagegen.stage_of("ImageCompositeMasked") == "other"
     assert imagegen.stage_of("FluxKontextImageScale") == "other"  # a resize of the input, not an upscale
     assert imagegen.stage_of("LoadImage") == "load" and imagegen.stage_of("ImageScale") == "upscale"
+    # the bake-off graphs (FLUX.2 klein, Qwen-Image-2.1)
+    assert imagegen.stage_of("SamplerCustomAdvanced") == "sample" and imagegen.stage_of("KSamplerSelect") == "other"
+    assert imagegen.stage_of("TextEncodeQwenImage21") == "encode" and imagegen.stage_of("CLIPLoader") == "load"
 
 
 def test_summary_line():

@@ -54,11 +54,17 @@ class FakeComfy:
         self.reject: str | None = None  # /prompt answers 400 with this text
         self.fail_jobs = False    # finished jobs report status_str "error"
         self.no_gpu = False       # /system_stats lists only a CPU
+        self.vram_free = 12 * 1024 ** 3   # /system_stats numbers (tests may change them mid-run)
+        self.ram_free = 20 * 1024 ** 3
+        self.frees = 0            # POST /free calls (unload models)
+        self.fail_preset: str | None = None  # /prompt rejects workflows whose unet_name contains this
         self.models = {"checkpoints": ["sd_xl_base_1.0.safetensors"],
                        "upscale_models": ["RealESRGAN_x4plus.pth"],
-                       "diffusion_models": ["flux1-dev-kontext_fp8_scaled.safetensors"],
-                       "text_encoders": ["clip_l.safetensors", "t5xxl_fp8_e4m3fn_scaled.safetensors"],
-                       "vae": ["ae.safetensors"]}
+                       "diffusion_models": ["flux1-dev-kontext_fp8_scaled.safetensors",
+                                            "flux-2-klein-4b-fp8.safetensors", "qwen_image_2.1_bf16.safetensors"],
+                       "text_encoders": ["clip_l.safetensors", "t5xxl_fp8_e4m3fn_scaled.safetensors",
+                                         "qwen_3_4b.safetensors", "qwen3vl_8b_bf16.safetensors"],
+                       "vae": ["ae.safetensors", "flux2-vae.safetensors", "qwen_image_2.1_vae_bf16.safetensors"]}
         # node types /object_info lists: every class_type the repo's workflows use (tests may remove some)
         self.nodes = {n["class_type"] for wf in WORKFLOWS_DIR.glob("*.json")
                       for n in json.loads(wf.read_text()).values()}
@@ -168,8 +174,9 @@ class FakeComfy:
                 if u.path == "/system_stats":
                     devs = [{"name": "cpu", "type": "cpu"}] if fake.no_gpu else [
                         {"name": "AMD Radeon RX 9070 XT", "type": "cuda",
-                         "vram_total": 16 * 1024 ** 3, "vram_free": 12 * 1024 ** 3}]
-                    return self._send(200, {"system": {"comfyui_version": "fake"}, "devices": devs})
+                         "vram_total": 16 * 1024 ** 3, "vram_free": fake.vram_free}]
+                    return self._send(200, {"system": {"comfyui_version": "fake", "ram_total": 24 * 1024 ** 3,
+                                                       "ram_free": fake.ram_free}, "devices": devs})
                 if u.path.startswith("/history/"):
                     return self._send(200, fake._history(u.path.rsplit("/", 1)[1]))
                 if u.path == "/view":
@@ -206,14 +213,19 @@ class FakeComfy:
                 fake.requests.append(("POST", u.path))
                 body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
                 if u.path == "/prompt":
-                    if fake.reject:
-                        return self._send(400, {"error": fake.reject})
+                    wf = json.loads(body)["prompt"]
+                    unets = [n["inputs"].get("unet_name", "") for n in wf.values() if n["class_type"] == "UNETLoader"]
+                    if fake.reject or (fake.fail_preset and any(fake.fail_preset in u for u in unets)):
+                        return self._send(400, {"error": fake.reject or "value_not_in_list: unet_name"})
                     pid = uuid.uuid4().hex
                     req = json.loads(body)
-                    fake.prompts[pid] = {"workflow": req["prompt"], "queued_at": time.time(), "messages": []}
+                    fake.prompts[pid] = {"workflow": wf, "queued_at": time.time(), "messages": []}
                     fake.order.append(pid)
                     threading.Thread(target=fake._execute, args=(pid, req.get("client_id")), daemon=True).start()
                     return self._send(200, {"prompt_id": pid, "number": len(fake.order)})
+                if u.path == "/free":
+                    fake.frees += 1
+                    return self._send(200, {})
                 if u.path == "/upload/image":
                     name, data = _parse_upload(self.headers["Content-Type"], body)
                     fake.uploads[name] = data

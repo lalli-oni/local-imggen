@@ -8,7 +8,8 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
 - `workflows/*.json`: ComfyUI **API-format** workflows; string values `"{{key}}"` are filled from preset/args
 - `imagegen.py`: core + `gen` CLI (`gen --help`, `gen presets`, `gen recent`, `gen set-wallpaper PATH`,
   `gen vary PATH [--mask M] [-s 0.4]` for img2img/inpaint, `gen edit PATH "instruction"` for instruction edits
-  (FLUX.1 Kontext, `kontext` preset), `gen cutout PATH` for background removal,
+  (FLUX.1 Kontext, `kontext` preset; `-p klein` / `-p qwen`), `gen cutout PATH [--clean]` for background removal,
+  `gen bakeoff PATH "instr"...` (bakeoff.py: same edits through several edit presets, time/VRAM/RAM, one sheet),
   `gen sheet [RUN_DIR|DATE]` to rebuild contact sheets (default: latest run), `gen doctor` for a health check)
 - `templates/contact_sheet.html`: the per-run `index.html` viewer (fit-all / size slider, A/B compare).
   Static, no build, opened via file://; `write_contact_sheet` inlines the run data as JSON.
@@ -27,8 +28,10 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   It applies steps from the last applied commit (`.git/imagegen-applied`), so a manual `git pull` is still caught; `--since REV` overrides.
 - `windows/install-wslconfig.sh`: writes `%USERPROFILE%\.wslconfig` (cores/RAM for WSL). Manual, never overwrites,
   always-on once applied (needs `wsl --shutdown`), so it is not part of the on/off toggle.
-- `models/flux-kontext.sh`: opt-in download (~17.7 GB, asks y/N) of the Kontext fp8 model + Flux text encoders
-  and VAE into `~/comfyui/models`. Never run automatically; `gen doctor` shows them as warn while missing.
+- `models/*.sh`: opt-in downloads (ask y/N, resumable, sha256) into `~/comfyui/models`, sharing `models/_fetch.sh`:
+  `flux-kontext.sh` (~17.7 GB), `flux2-klein.sh` (~11.9 GB), `qwen-image-2.1.sh` (~30 GB, bf16: no int8, it renders
+  black on gfx1201). A preset's `download` key names its script; `gen doctor` shows those models (and nodes only
+  they use) as warn while missing. Never run automatically.
 - `test.sh` + `tests/`: the test suite (see Testing below). `requirements-dev.txt` / `requirements-browser.txt`
   hold test-only deps; CI runs it on every PR (`.github/workflows/test.yml`).
 - `setup.sh`: idempotent setup (venv `~/venvs/imagegen`, `gen` wrapper, upscaler + rembg models)
@@ -41,7 +44,13 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   Every `{{key}}` in the workflow must be a preset key, or one of: seed, prompt, negative, checkpoint,
   and for img2img/inpaint workflows also image, mask, denoise (width/height then come from the source).
   A preset picks those graphs with `img2img_workflow` / `inpaint_workflow` (defaults: sdxl_img2img.json, sdxl_inpaint.json).
+  Post steps (`post = [...]`, see `POST` in imagegen.py) run on each output in order: `remove_bg`, then the
+  optional `keep_largest` (drop stray shapes) and `trim` (crop + centre on a square of the shorter side); the last two rewrite the
+  transparent PNG in place and skip images without transparency.
   An edit preset has `edit_workflow` (gets image, width/height; no checkpoint/negative); without `workflow` it is edit-only.
+  A preset with `unet` (Flux/Qwen diffusion model) gets no default img2img/inpaint graph (`imagegen.mode_workflow`).
+  steps/cfg/guidance/negative the chosen workflow has no `{{key}}` for are ignored with a note on stderr
+  (`gen vary` on a klein/qwen image falls back to draft unless -p is given).
 - Outputs: `<output_dir>/<YYYY-MM-DD>/<HHMMSS>-<preset>-<slug>/` with PNGs, per-image JSON sidecars
   (prompt, seed, params, timing), `run.json` and `index.html` contact sheet.
 - Timing (#2): `Events` in imagegen.py listens on ComfyUI's `/ws` (stdlib websocket client) and `job_timing`
