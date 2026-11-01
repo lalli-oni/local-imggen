@@ -305,15 +305,20 @@ def full_prompt(state: dict, extra: str | None = None, cast_text: list[str] = ()
     return ", ".join(p.strip().strip(",") for p in parts if p and p.strip())
 
 
-def cast_versions(state: dict) -> dict:
-    """{character: the version this project uses (its pin, else the character's latest)}."""
+def cast_versions(state: dict, strict: bool = True) -> dict:
+    """{character: the version this project uses (its pin, else the character's latest)}.
+    strict: a cast character that no longer exists is an error (a pass must not quietly drop it)."""
     import characters
     out = {}
     for name, c in state.get("cast", {}).items():
         try:
-            out[name] = c.get("pin") or characters.load(name)["version"]
+            ch = characters.load(name)
         except FileNotFoundError:
+            if strict:
+                raise FileNotFoundError(f"cast character '{name}' is missing "
+                                        f"(gen char new {name} ..., or gen project set SLUG --uncast {name})") from None
             continue
+        out[name] = c.get("pin") or ch["version"]
     return out
 
 
@@ -438,6 +443,9 @@ def _shows(proj: dict, shows: list[str] | None, origin: dict) -> dict:
     """{character: version shown}: versions come from the pass that made the image, else the cast's."""
     import characters
     drawn = origin.get("chars") or {}
+    moved = proj.get("moved_to_character")
+    if not drawn and moved and origin.get("version") is not None and origin["version"] < moved["version"]:
+        drawn = {moved["name"]: 1}  # a pass from before from_project(): its prompt was that character's v1
     if shows is None:
         return dict(drawn)
     out = {}
@@ -488,7 +496,7 @@ def keep(slug: str, asset: str, note: str | None = None, author: str = "human") 
             raise ValueError(f"no asset '{asset}'")
         a = proj["assets"][asset]
         cur = a["versions"][a["current"] - 1]
-        used = cast_versions(proj["state"])
+        used = cast_versions(proj["state"], strict=False)
         a["kept_at"] = proj["version"]
         a["kept_chars"] = {c: _char_upto(c, used) for c in cur.get("shows") or {}}
         v = _commit(proj, ["assets"], author, note or f"keep {asset} as-is")
@@ -520,12 +528,15 @@ def stale_reasons(proj: dict, asset: str) -> list[str]:
             # promoting this very image as a ref changes refs, but that does not make it stale
             if not (v["version"] == cur.get("promoted_in") and look == ["refs"]):
                 out.append(f"v{v['version']} changed {', '.join(look)}")
-    used = cast_versions(proj["state"])
     d = project_dir(proj["slug"])
     own = {str(d / cur["file"]), cur.get("source") or ""}
     for name, shown_v in (cur.get("shows") or {}).items():
         kept = (a.get("kept_chars") or {}).get(name) or 0
-        out += characters.stale_reasons(name, max(shown_v, kept), own, (proj["state"]["cast"].get(name) or {}).get("pin"))
+        pin = (proj["state"]["cast"].get(name) or {}).get("pin")
+        if pin is not None and pin < shown_v and kept != pin:
+            out.append(f"{name} is pinned at v{pin}, the asset shows v{shown_v}")
+            continue
+        out += characters.stale_reasons(name, max(shown_v, kept), own, pin)
     return out
 
 
@@ -704,7 +715,7 @@ def _doc_arg(items: list[str] | None) -> dict:
     out = {}
     for it in items or []:
         name, sep, path = it.partition("=")
-        if not sep:
+        if not sep or imagegen.to_linux_path(it).is_file():
             name, path = _slugify(Path(it).stem), it
         out[name.strip()] = path or None
     return out

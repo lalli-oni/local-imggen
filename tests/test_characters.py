@@ -304,3 +304,45 @@ def test_mcp_tools(out_dir, comfy, folder, make_image):
     got = mcp_server.project_get("rad")[0]
     assert got["assets"]["tulu-neon"]["stale"] and not got["assets"]["hero"]["stale"]
     assert got["state"]["cast"]["tulu"]["version"] == 2
+
+
+# ---------------------------------------------------------------- review fixes
+
+def test_missing_cast_character_fails_the_pass(walls, comfy):
+    import shutil
+    shutil.rmtree(characters.char_dir("tulu"))
+    with pytest.raises(FileNotFoundError, match="cast character 'tulu' is missing"):
+        projects.run_pass(walls, count=1)
+    assert projects.summary(walls)["state"]["cast"]["tulu"]["missing"]
+
+
+def test_pin_rolled_back_below_the_shown_version_is_stale(walls, make_image):
+    characters.set_state("tulu", description="purple tulu")
+    projects.promote(walls, str(make_image()), "fjord", shows=["tulu"])  # shows v2
+    projects.set_state(walls, cast={"tulu": 1})
+    assert _asset(walls, "fjord")["stale_reasons"] == ["tulu is pinned at v1, the asset shows v2"]
+    projects.keep(walls, "fjord")
+    assert not _asset(walls, "fjord")["stale"]
+
+
+def test_pass_from_before_the_move_shows_the_character(out_dir, comfy):
+    projects.new("tulu", prompt=TULU)
+    old = projects.run_pass("tulu", count=1)["images"][0]["path"]
+    characters.from_project("tulu", title="Lil Tulu")
+    assert characters.load("tulu")["title"] == "Lil Tulu"
+    projects.promote("tulu", old, "tulu")
+    assert _asset("tulu", "tulu")["shows"] == {"tulu": 1}
+
+
+def test_own_image_as_ref_by_relative_path(walls, make_image, monkeypatch):
+    r = projects.promote(walls, str(make_image()), "front", shows=["tulu"])
+    monkeypatch.chdir(projects.project_dir(walls))
+    characters.set_state("tulu", refs={"front": str(Path(r["file"]).relative_to(projects.project_dir(walls)))})
+    assert not _asset(walls, "front")["stale"]
+
+
+def test_doc_path_with_equals_sign(walls, tmp_path):
+    md = tmp_path / "a=b.md"
+    md.write_text("x")
+    assert projects._doc_arg([str(md)]) == {"a-b": str(md)}
+    assert projects._doc_arg([f"lore={md}"]) == {"lore": str(md)}

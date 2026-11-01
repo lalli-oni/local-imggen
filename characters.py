@@ -9,11 +9,12 @@ A character lives in <output_dir>/characters/<name>/:
 - Projects cast characters (projects.py, state["cast"]); a pass puts the cast's descriptions in front
   of the project prompt, and records which character versions it used.
 - Assets record the characters they show (and at which version). When a character changes, the assets
-  that show it go stale in every project that casts it, and nothing else does.
+  that show it go stale, in every project (unless the project pins an older version), and nothing else does.
 """
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -151,6 +152,7 @@ def stale_reasons(name: str, since: int, own_files: set[str] = frozenset(), upto
         ch = load(name)
     except FileNotFoundError:
         return [f"character {name} is missing"]
+    own_files = {os.path.realpath(f) for f in own_files if f}
     out, prev = [], None
     for v in ch["versions"]:
         if v["version"] <= since or (upto is not None and v["version"] > upto):
@@ -161,7 +163,7 @@ def stale_reasons(name: str, since: int, own_files: set[str] = frozenset(), upto
             added = {n: s for n, s in _ref_sources(v["state"]).items()
                      if prev["state"]["refs"].get(n, {}).get("file") != v["state"]["refs"][n]["file"]}
             if added and not set(_ref_sources(prev["state"])) - set(_ref_sources(v["state"])) \
-                    and all(s in own_files for s in added.values()):
+                    and all(s and os.path.realpath(s) in own_files for s in added.values()):
                 prev = v
                 continue
         if look:
@@ -195,7 +197,7 @@ def summary(name: str, history: int = 5) -> dict:
                                 for v in ch["versions"][-history:]]}
 
 
-def from_project(slug: str, name: str | None = None, author: str = "human") -> dict:
+def from_project(slug: str, name: str | None = None, author: str = "human", title: str | None = None) -> dict:
     """Move a single-subject project's prompt, refs and palette into a new character and cast it there.
 
     For projects made before characters existed (the tulu project): the passes keep the same prompt
@@ -210,11 +212,13 @@ def from_project(slug: str, name: str | None = None, author: str = "human") -> d
         if not st["prompt"]:
             raise ValueError(f"project '{slug}' has no prompt to move into a character")
         d = projects.project_dir(slug)
-        ch = new(name, proj["title"], author, f"from project {slug} v{proj['version']}",
+        ch = new(name, title or proj["title"], author, f"from project {slug} v{proj['version']}",
                  description=st["prompt"], palette=st["palette"],
                  refs={n: {"path": str(d / r["file"]), "role": r["role"]} for n, r in st["refs"].items()})
         st["prompt"], st["refs"], st["palette"] = "", {}, []
         st.setdefault("cast", {})[name] = {"pin": None}
+        # images from earlier passes have no "chars" tag; promote() reads this to know they show v1
+        proj["moved_to_character"] = {"name": name, "version": proj["version"] + 1}
         for e in proj["assets"].values():
             for av in e["versions"]:
                 av.setdefault("shows", {})[name] = 1
@@ -292,7 +296,7 @@ def main(argv: list[str]) -> int:
             if a.from_project:
                 if kw:
                     ap.error("--from-project takes the description, refs and palette from the project")
-                from_project(a.from_project, a.name, a.author)
+                from_project(a.from_project, a.name, a.author, a.title)
                 print(f"{a.from_project}: now casts {a.name}")
             else:
                 new(a.name, a.title, a.author, **kw)
