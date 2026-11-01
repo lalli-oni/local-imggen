@@ -210,9 +210,10 @@ def project_list() -> list[dict]:
 
 @mcp.tool()
 def project_get(slug: str, preview: bool = False, history: int = 5) -> list:
-    """A project's current state (prompt, snippets, params, palette, refs), its assets with history and
-    stale flags, recent versions and passes, and new_since_last_look: what changed since your previous
-    project_get. preview=True adds thumbnails of the refs and current asset versions.
+    """A project's current state (prompt, snippets, params, palette, refs, cast characters, docs), its
+    assets with history, the characters they show and stale flags, recent versions and passes, and
+    new_since_last_look: what changed since your previous project_get. preview=True adds thumbnails
+    of the refs and current asset versions. Read docs with project_doc.
     Use this to summarise a project or to decide the next pass."""
     import projects
     s = projects.summary(slug, mark_seen="claude", history=history)
@@ -237,37 +238,47 @@ def project_new(slug: str, title: str | None = None, brief: str = "", prompt: st
 def project_update(slug: str, note: str, prompt: str | None = None, negative: str | None = None,
                    preset: str | None = None, params: dict | None = None, snippets: dict | None = None,
                    palette: list[str] | None = None, refs: dict | None = None,
-                   drop_refs: list[str] | None = None) -> dict:
+                   drop_refs: list[str] | None = None, cast: dict | None = None,
+                   uncast: list[str] | None = None, docs: dict | None = None) -> dict:
     """Change a project's state; creates a new project version with your note (say why).
     params: {width, height, steps, cfg, strength}; snippets: {name: text}, appended to the prompt in order;
     a null value removes a param or snippet. palette: hex list (replaces it). refs: {name: image path}.
+    cast: {character: null, or a version to pin}: shared characters (character_*) whose descriptions go
+    in front of the prompt. docs: {name: path to .md/.txt} (null removes).
     Changing prompt, negative, snippets, palette or refs makes existing assets stale."""
     import projects
     kw = {k: v for k, v in dict(prompt=prompt, negative=negative, preset=preset, params=params,
                                 snippets=snippets, palette=palette, refs=refs,
-                                drop_refs=drop_refs).items() if v is not None}
+                                drop_refs=drop_refs, cast=cast, uncast=uncast,
+                                docs=docs).items() if v is not None}
     return projects.set_state(slug, note, "claude", **kw)
 
 
 @mcp.tool()
 def project_generate(slug: str, count: int = 4, extra: str | None = None, seed: int | None = None,
-                     ref: str | None = None, strength: float | None = None, preview: bool = True) -> list:
-    """A pass: generate from the project's current state (prompt + snippets, preset, params).
-    extra is appended to the prompt for this pass only. ref = img2img from one of the project's refs
-    (strength defaults to the project's strength param, else 0.4). The images record the project version.
+                     ref: str | None = None, strength: float | None = None, preview: bool = True,
+                     chars: list[str] | None = None) -> list:
+    """A pass: generate from the project's current state (cast descriptions + prompt + snippets,
+    preset, params). chars: which cast characters to draw (default all, [] = none).
+    extra is appended to the prompt for this pass only. ref = img2img from one of the project's refs,
+    or "character:ref" for a cast character's ref (strength defaults to the project's strength param,
+    else 0.4). The images record the project and character versions.
     Same waiting/job_id behaviour as generate."""
     import projects
     kwargs = dict(slug=slug, count=min(max(1, count), MAX_COUNT), extra=extra, seed=seed, ref=ref,
-                  strength=strength, author="claude")
+                  strength=strength, author="claude", chars=chars)
     return _start(projects.run_pass, kwargs, preview)
 
 
 @mcp.tool()
-def project_promote(slug: str, image: str, asset: str, note: str, as_ref: str | None = None) -> dict:
+def project_promote(slug: str, image: str, asset: str, note: str, as_ref: str | None = None,
+                    shows: list[str] | None = None) -> dict:
     """Make an image the next version of a named asset (e.g. "tulu", "icon/folder"); creates a project
-    version. as_ref also makes it a project reference image. Only promote what the user picked."""
+    version. as_ref also makes it a project reference image. shows: the characters in the image
+    (default: the ones its pass drew); the asset goes stale when one of them changes.
+    Only promote what the user picked."""
     import projects
-    return projects.promote(slug, image, asset, note, as_ref, "claude")
+    return projects.promote(slug, image, asset, note, as_ref, "claude", shows)
 
 
 @mcp.tool()
@@ -275,6 +286,70 @@ def project_keep(slug: str, asset: str, note: str) -> dict:
     """Mark a stale asset as fine as-is at the current project version (only when the user says so)."""
     import projects
     return projects.keep(slug, asset, note, "claude")
+
+
+@mcp.tool()
+def project_doc(slug: str, name: str) -> str:
+    """The text of a project doc (character notes, lore, prompt guidelines). project_get lists them.
+    Read the relevant ones before writing prompts for the project."""
+    import projects
+    return projects.read_doc(slug, name)
+
+
+@mcp.tool()
+def project_import(slug: str, folder: str, apply: bool = False, shows: list[str] | None = None,
+                   title: str | None = None) -> dict:
+    """Bring an existing folder into a project (creates it if new): images become assets (named after
+    the file, subfolders become asset/name), .md/.txt files become docs. Windows paths work.
+    apply=False (default) only returns the plan: show it to the user and apply only when they agree.
+    shows: characters every imported image shows."""
+    import projects
+    return projects.import_folder(slug, folder, apply, shows, title, "claude")
+
+
+# ---------------------------------------------------------------- shared characters (characters.py)
+
+@mcp.tool()
+def character_list() -> list[dict]:
+    """List shared characters (name, title, version). Projects cast them (project_update cast=...)."""
+    import characters
+    return [{"name": n, "title": (c := characters.load(n))["title"], "version": c["version"]}
+            for n in characters.list_characters()]
+
+
+@mcp.tool()
+def character_get(name: str, preview: bool = False) -> list:
+    """A character's description, palette, refs, history, and which projects cast it (with the assets
+    that show it). preview=True adds thumbnails of its refs."""
+    import characters
+    s = characters.summary(name)
+    out: list = [s]
+    if preview:
+        out += [_thumb(r["path"]) for r in s["state"]["refs"].values()]
+    return out
+
+
+@mcp.tool()
+def character_new(name: str, description: str, title: str | None = None,
+                  palette: list[str] | None = None, refs: dict | None = None) -> dict:
+    """Create a shared character (v1). description: the prompt text that draws it (traits, colours,
+    style); refs: {name: image path}. Cast it in a project with project_update(cast={name: None})."""
+    import characters
+    kw = {k: v for k, v in dict(description=description, palette=palette, refs=refs).items() if v is not None}
+    characters.new(name, title, "claude", **kw)
+    return characters.summary(name)
+
+
+@mcp.tool()
+def character_update(name: str, note: str, description: str | None = None,
+                     palette: list[str] | None = None, refs: dict | None = None,
+                     drop_refs: list[str] | None = None) -> dict:
+    """Change a character; creates a new character version with your note. Every asset that shows it,
+    in every project that casts it (unless pinned), goes stale. Only on the user's request."""
+    import characters
+    kw = {k: v for k, v in dict(description=description, palette=palette, refs=refs,
+                                drop_refs=drop_refs).items() if v is not None}
+    return characters.set_state(name, note, "claude", **kw)
 
 
 if __name__ == "__main__":

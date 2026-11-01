@@ -26,7 +26,8 @@ gen "misty fjord at sunrise" -p wallpaper --open
 | `gen cutout PATH [--clean]` | Remove the background (transparent PNG); `--clean` also drops stray shapes and centres it on a square |
 | `gen edit PATH "instruction" [-p kontext\|klein\|qwen]` | Edit with a plain-language instruction; FLUX.1 Kontext by default, opt-in models (`models/*.sh`) |
 | `gen bakeoff PATH "instr" ["instr"...] [-p kontext,klein,qwen] [-n 2]` | The same edits through several edit models (same seeds), time/VRAM/RAM per model, one contact sheet |
-| `gen project new\|list\|status\|set\|gen\|promote\|keep` | Creative projects: versioned prompt/palette/refs, named assets |
+| `gen project new\|list\|status\|set\|gen\|promote\|keep\|import\|doc` | Creative projects: versioned prompt/palette/refs, named assets, docs, import an existing folder |
+| `gen char new\|list\|status\|set` | Shared characters (lil tulu) that projects cast; a change flags the assets that show them |
 | `gen recent`, `gen sheet [RUN_DIR\|DATE]` | Recent runs; rebuild contact sheets |
 | `gen set-wallpaper PATH` | Set a Windows wallpaper |
 | `gen doctor` | Read-only health check |
@@ -44,7 +45,7 @@ Presets: `draft` (1024², quick), `wallpaper` (16:9, upscaled to 3840x2160), `wa
 ## MCP tools (Claude desktop app)
 
 `mcp_server.py` exposes: `generate`, `get_job`, `vary`, `cutout`, `doctor`, `list_presets`, `recent_runs`,
-`view_image`, `set_wallpaper`, `open_contact_sheet` and `project_*`. `generate` waits up to 45s, then returns
+`view_image`, `set_wallpaper`, `open_contact_sheet`, `project_*` and `character_*`. `generate` waits up to 45s, then returns
 a `job_id` to poll with `get_job` (the remote bridge times out at about 60s). Restart the Claude app after
 `mcp_server.py` changes. The config entry is printed at the end of `setup.sh`.
 
