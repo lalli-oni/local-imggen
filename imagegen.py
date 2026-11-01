@@ -31,8 +31,11 @@ import os
 import random
 import re
 import shutil
+import socket
+import ssl
 import subprocess
 import sys
+import threading
 import time
 import tomllib
 import urllib.error
@@ -154,6 +157,11 @@ class Comfy:
         return any(item[1] == prompt_id for k in ("queue_running", "queue_pending") for item in q.get(k, []))
 
     def wait(self, prompt_id: str, timeout: float = 1800) -> dict:
+        """The job's outputs, once it is done."""
+        return self.wait_entry(prompt_id, timeout).get("outputs", {})
+
+    def wait_entry(self, prompt_id: str, timeout: float = 1800) -> dict:
+        """The job's whole /history entry (outputs, status messages with timestamps), once it is done."""
         t0 = time.time()
         down_since = None  # set while ComfyUI is unreachable (crashed, systemd restarting it)
         while time.time() - t0 < timeout:
@@ -173,7 +181,7 @@ class Comfy:
                 status = entry.get("status", {})
                 if status.get("status_str") == "error":
                     raise RuntimeError(f"ComfyUI failed: {json.dumps(status.get('messages'))[:2000]}")
-                return entry.get("outputs", {})
+                return entry
             time.sleep(1)
         raise TimeoutError(f"prompt {prompt_id} did not finish in {timeout}s")
 
@@ -196,6 +204,260 @@ class Comfy:
     def fetch(self, image: dict) -> bytes:
         q = urllib.parse.urlencode({k: image.get(k, "") for k in ("filename", "subfolder", "type")})
         return self._get(f"/view?{q}", timeout=120)
+
+
+# ---------------------------------------------------------------- timing (per stage, from ComfyUI events)
+
+class Events:
+    """Listens on ComfyUI's websocket (/ws?clientId=...) and stamps each job's events with the local time.
+
+    ComfyUI sends `executing` {node} when a node starts (node None when the job is done), plus
+    execution_start / execution_cached / execution_success. That is the only place per-node times
+    come from: /history only has the start and end. Best effort: if the socket can't connect or drops,
+    timing falls back to /history (queue and total only). Stdlib only, so no new dependency.
+    """
+
+    def __init__(self, url: str, client_id: str, timeout: float = 5):
+        self.by_prompt: dict[str, list[tuple[float, str, dict]]] = {}
+        self.ok = False
+        self._sock = None
+        self._alive = False
+        self._send_lock = threading.Lock()
+        self._changed = threading.Condition()
+        try:
+            self._sock = self._connect(url, client_id, timeout)
+            self.ok = self._alive = True
+            threading.Thread(target=self._loop, daemon=True).start()
+        except Exception as e:
+            log(f"note: no ComfyUI websocket, timing has no per-stage split ({type(e).__name__}: {e})")
+            self.close()
+
+    @staticmethod
+    def _connect(url: str, client_id: str, timeout: float):
+        u = urllib.parse.urlsplit(url)
+        port = u.port or (443 if u.scheme == "https" else 80)
+        sock = socket.create_connection((u.hostname, port), timeout=timeout)
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        if u.scheme == "https":
+            sock = ssl.create_default_context().wrap_socket(sock, server_hostname=u.hostname)
+        key = base64.b64encode(os.urandom(16)).decode()
+        path = (u.path.rstrip("/") or "") + f"/ws?clientId={urllib.parse.quote(client_id)}"
+        sock.sendall((f"GET {path} HTTP/1.1\r\nHost: {u.netloc}\r\nUpgrade: websocket\r\n"
+                      f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n").encode())
+        head = b""
+        while b"\r\n\r\n" not in head:
+            chunk = sock.recv(1024)
+            if not chunk:
+                raise ConnectionError("closed during the handshake")
+            head += chunk
+            if len(head) > 16384:
+                raise ConnectionError("handshake answer too long")
+        head, _, rest = head.partition(b"\r\n\r\n")
+        status = head.split(b"\r\n", 1)[0]
+        if b" 101 " not in status + b" ":
+            raise ConnectionError(status.decode(errors="replace"))
+        sock.settimeout(None)
+        return _Buffered(sock, rest)
+
+    def _loop(self) -> None:
+        parts: list[bytes] = []
+        try:
+            while True:
+                fin, op, data = self._frame()
+                if op == 8:  # close
+                    return
+                if op == 9:  # ping
+                    self._send(10, data)
+                    continue
+                if op in (1, 0) and (op == 1 or parts):  # text, or the continuation of one
+                    parts.append(data)
+                    if fin:
+                        self._record(b"".join(parts))
+                        parts = []
+                elif op == 2:  # binary: sampler previews, not needed
+                    parts = []
+        except Exception:
+            pass  # closed by us or by ComfyUI: keep what was recorded
+        finally:
+            with self._changed:
+                self._alive = False
+                self._changed.notify_all()
+
+    def wait_done(self, prompt_id: str, timeout: float = 2.0) -> list | None:
+        """The job's events, once the socket has its end too. /history can show a job as done a moment
+        before its last websocket frame is read; waiting briefly here keeps the per-node split."""
+        def done() -> bool:
+            return any(kind == "execution_success" or (kind == "executing" and d.get("node") is None)
+                       for _, kind, d in self.by_prompt.get(prompt_id, []))
+        with self._changed:
+            self._changed.wait_for(lambda: done() or not self._alive, timeout)
+        return self.by_prompt.get(prompt_id)
+
+    def _frame(self) -> tuple[bool, int, bytes]:
+        b1, b2 = self._sock.read(2)
+        n = b2 & 0x7F
+        if n == 126:
+            n = int.from_bytes(self._sock.read(2), "big")
+        elif n == 127:
+            n = int.from_bytes(self._sock.read(8), "big")
+        mask = self._sock.read(4) if b2 & 0x80 else None
+        data = self._sock.read(n)
+        if mask:
+            data = bytes(c ^ mask[i % 4] for i, c in enumerate(data))
+        return bool(b1 & 0x80), b1 & 0x0F, data
+
+    def _send(self, op: int, data: bytes = b"") -> None:
+        """One masked frame (client frames must be); only pong and close, so always under 126 bytes."""
+        mask = os.urandom(4)
+        with self._send_lock:  # the reader thread answers pings while close() may run on the main one
+            if self._sock is not None:
+                self._sock.sendall(bytes([0x80 | op, 0x80 | len(data[:125])]) + mask +
+                                   bytes(c ^ mask[i % 4] for i, c in enumerate(data[:125])))
+
+    def _record(self, raw: bytes) -> None:
+        t = time.time()
+        try:
+            msg = json.loads(raw)
+            data = msg.get("data") or {}
+            if pid := data.get("prompt_id"):
+                with self._changed:
+                    self.by_prompt.setdefault(pid, []).append((t, msg.get("type", ""), data))
+                    self._changed.notify_all()
+        except (ValueError, AttributeError):
+            pass
+
+    def __enter__(self) -> "Events":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+    def close(self) -> None:
+        try:
+            self._send(8)
+        except Exception:
+            pass
+        with self._send_lock:
+            if self._sock is not None:
+                self._sock.close()
+                self._sock = None
+
+
+class _Buffered:
+    """A socket with the bytes already read past the handshake put back in front."""
+
+    def __init__(self, sock, rest: bytes):
+        self.sock, self.buf = sock, rest
+
+    def read(self, n: int) -> bytes:
+        while len(self.buf) < n:
+            chunk = self.sock.recv(max(65536, n - len(self.buf)))
+            if not chunk:
+                raise ConnectionError("websocket closed")
+            self.buf += chunk
+        out, self.buf = self.buf[:n], self.buf[n:]
+        return out
+
+    def sendall(self, data: bytes) -> None:
+        self.sock.sendall(data)
+
+    def close(self) -> None:
+        try:
+            self.sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        self.sock.close()
+
+
+# Node class -> stage. Loaders read weights from disk; moving them onto the GPU happens inside the
+# sampler, so a cold start shows up in sample_s as well as load_s.
+# Exact class names first, then substrings (so UNETLoader, KSamplerAdvanced, VAEEncodeForInpaint match).
+STAGE_CLASSES = {"LoadImage": "load", "LoadImageMask": "load",
+                 "ImageUpscaleWithModel": "upscale", "ImageScale": "upscale", "ImageScaleBy": "upscale",
+                 "LatentUpscale": "upscale", "LatentUpscaleBy": "upscale",
+                 "SaveImage": "save", "PreviewImage": "save", "KSamplerSelect": "other"}
+STAGES = (("load", ("Loader",)), ("sample", ("KSampler", "SamplerCustom")),
+          ("encode", ("TextEncode", "VAEEncode")), ("decode", ("VAEDecode",)))  # TextEncode: also Qwen's
+STAGE_ORDER = ("queue", "load", "encode", "sample", "decode", "upscale", "save", "other", "fetch")
+COMFY_STAGES = tuple(f"{st}_s" for st in STAGE_ORDER[1:-1])  # the parts of comfy_s
+
+
+def stage_of(class_type: str) -> str:
+    if class_type in STAGE_CLASSES:
+        return STAGE_CLASSES[class_type]
+    for stage, keys in STAGES:
+        if any(k in class_type for k in keys):
+            return stage
+    return "other"
+
+
+def job_timing(workflow: dict, queued_at: float, events: list | None, history: dict) -> dict:
+    """Seconds per stage for one ComfyUI job: queue wait, per node (grouped into stages) and ComfyUI total.
+
+    queue_s is from queueing to ComfyUI starting it, so in a multi-image run it includes the images
+    before it. Node times need the websocket events; without them only queue_s and comfy_s are known.
+    """
+    def secs(x: float) -> float:
+        return round(max(0.0, x), 2)
+
+    hist = {m[0]: m[1] for m in (history.get("status") or {}).get("messages") or []
+            if isinstance(m, (list, tuple)) and len(m) == 2 and isinstance(m[1], dict)}
+    ev = events or []
+    start = next((t for t, kind, _ in ev if kind == "execution_start"), None)
+    end = next((t for t, kind, d in ev if kind == "execution_success"
+                or (kind == "executing" and d.get("node") is None)), None)
+    if end is None:  # the socket missed the end (or there is none): /history's start and end, same clock
+        ev, start = [], None
+        h_start, h_end = (hist.get(k, {}).get("timestamp") for k in ("execution_start", "execution_success"))
+        if isinstance(h_start, (int, float)):
+            start = h_start / 1000
+            if isinstance(h_end, (int, float)):
+                end = h_end / 1000
+
+    out: dict = {}
+    if start is not None:
+        out["queue_s"] = secs(start - queued_at)
+    if start is not None and end is not None:
+        out["comfy_s"] = secs(end - start)
+    starts = [(t, d.get("display_node") or d.get("node")) for t, kind, d in ev
+              if kind == "executing" and d.get("node") is not None]
+    if starts and end is not None:
+        nodes = []
+        for (t, node), (t_next, _) in zip(starts, starts[1:] + [(end, None)]):
+            cls = (workflow.get(str(node)) or {}).get("class_type", "?")
+            nodes.append({"node": str(node), "class": cls, "s": secs(t_next - t)})
+            key = stage_of(cls) + "_s"
+            out[key] = round(out.get(key, 0) + nodes[-1]["s"], 2)
+        out["nodes"] = nodes
+    cached = next((d.get("nodes") for _, kind, d in ev if kind == "execution_cached"), None)
+    if cached is None:
+        cached = hist.get("execution_cached", {}).get("nodes")
+    if cached:
+        out["cached"] = [str(n) for n in cached]
+    return out
+
+
+def _flat(t: dict) -> dict:
+    """A timing dict without its node lists (what run.json keeps per image)."""
+    return {k: v for k, v in t.items() if k not in ("nodes", "cached")}
+
+
+def _stage_parts(t: dict) -> list[str]:
+    """ "sample 41.2s" etc. for each stage in t, in pipeline order (not the totals or the queue wait)."""
+    keys = [k[:-2] for k in t if k.endswith("_s") and k not in ("total_s", "comfy_s", "setup_s", "queue_s")]
+    keys.sort(key=lambda k: (STAGE_ORDER.index(k) if k in STAGE_ORDER else len(STAGE_ORDER), k))
+    return [f"{k} {t[k + '_s']:.1f}s" for k in keys if t[k + "_s"] >= 0.05]
+
+
+def timing_summary(run_timing: dict, image_timings: list[dict]) -> str:
+    """One line, e.g. "4 images in 210.3s (first 80.1s, then ~43.4s each): sample 160.2s, upscale 30.0s, ..."."""
+    n = len(image_timings)
+    head = f"{n} image{'s' if n != 1 else ''} in {run_timing['total_s']:.1f}s"
+    per = [t["total_s"] for t in image_timings if "total_s" in t]
+    if len(per) > 1:
+        head += f" (first {per[0]:.1f}s, then ~{sum(per[1:]) / (len(per) - 1):.1f}s each)"
+    parts = _stage_parts(run_timing)
+    return head + (": " + ", ".join(parts) if parts else "")
 
 
 # ---------------------------------------------------------------- post-processing
@@ -417,6 +679,7 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
     """txt2img by default. With source_image: img2img (denoise = how much may change, 0-1).
     With source_image + mask: inpaint, only the white part of the mask is repainted.
     With source_image + edit=True: the prompt is an edit instruction for the preset's edit_workflow."""
+    t_start = time.time()
     conf = load_config()
     presets = conf["presets"]
     if preset not in presets:
@@ -491,64 +754,100 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
 
     comfy = Comfy(conf["comfy_url"])
     comfy.wait_ready()
+    with Events(comfy.url, comfy.client_id) as events:  # per-node times; closed even on errors
+        source = None
+        if src_path is not None:
+            # content-addressed names: re-running on the same source/mask overwrites instead of piling up
+            def name(kind: str, data: bytes) -> str:
+                return f"imagegen-{kind}-{hashlib.sha1(data).hexdigest()[:16]}.png"
+            params.update(image=comfy.upload(src_png, name("src", src_png)),
+                          width=src_size[0], height=src_size[1])
+            if not edit:
+                params["denoise"] = denoise
+            if mask_png is not None:
+                params["mask"] = comfy.upload(mask_png, name("mask", mask_png))
+            source = {"source_image": str(src_path), "mask": str(mask_path) if mask_path else None,
+                      "denoise": None if edit else denoise, "edit": edit}
+            try:  # exactly what the model got, for the contact sheet's input card
+                (run_dir / SHEET_SOURCE).write_bytes(src_png)
+            except OSError as e:
+                log(f"warning: could not save {SHEET_SOURCE}: {e}")
 
-    source = None
-    if src_path is not None:
-        # content-addressed names: re-running on the same source/mask overwrites instead of piling up
-        def name(kind: str, data: bytes) -> str:
-            return f"imagegen-{kind}-{hashlib.sha1(data).hexdigest()[:16]}.png"
-        params.update(image=comfy.upload(src_png, name("src", src_png)),
-                      width=src_size[0], height=src_size[1])
-        if not edit:
-            params["denoise"] = denoise
-        if mask_png is not None:
-            params["mask"] = comfy.upload(mask_png, name("mask", mask_png))
-        source = {"source_image": str(src_path), "mask": str(mask_path) if mask_path else None,
-                  "denoise": None if edit else denoise, "edit": edit}
-        try:  # exactly what the model got, for the contact sheet's input card
-            (run_dir / SHEET_SOURCE).write_bytes(src_png)
-        except OSError as e:
-            log(f"warning: could not save {SHEET_SOURCE}: {e}")
+        # queue everything up front; ComfyUI works through it while we wait
+        jobs = []
+        t_queue = time.time()
+        for i in range(count):
+            s = (base_seed + i) % MAX_SEED
+            wf = fill(template, {**params, "seed": s})
+            jobs.append((s, comfy.queue(wf), time.time(), wf))
+        log(f"queued {count} x {preset} (seeds {base_seed}..) -> {run_dir}")
 
-    # queue everything up front; ComfyUI works through it while we wait
-    jobs = []
-    for i in range(count):
-        s = (base_seed + i) % MAX_SEED
-        jobs.append((s, comfy.queue(fill(template, {**params, "seed": s}))))
-    log(f"queued {count} x {preset} (seeds {base_seed}..) -> {run_dir}")
+        images, job_timings = [], []
+        t_wait = time.time()
+        for i, (s, pid, queued_at, wf) in enumerate(jobs, 1):
+            entry = comfy.wait_entry(pid)
+            secs = round(time.time() - t_wait, 1)  # wall time; the first one includes loading the model
+            outputs = entry.get("outputs", {})
+            try:  # best effort: a surprise in the events must not lose the finished images
+                jt = job_timing(wf, queued_at, events.wait_done(pid), entry)
+            except Exception as e:
+                log(f"note: no timing for seed {s} ({type(e).__name__}: {e})")
+                jt = {}
+            job_timings.append(jt)
+            outs = [im for o in outputs.values() for im in o.get("images", []) if im.get("type") == "output"]
+            for j, im in enumerate(outs):
+                name = f"{i:02d}-seed{s}" + (f"-{j}" if len(outs) > 1 else "") + ".png"
+                path = run_dir / name
+                t0 = time.time()
+                path.write_bytes(comfy.fetch(im))
+                timing = {**_flat(jt), "fetch_s": round(time.time() - t0, 2)}
+                final = path
+                for step in p.get("post", []):
+                    t0 = time.time()
+                    final = POST[step](final)
+                    timing[f"{step}_s"] = round(time.time() - t0, 2)
+                # this image's own time: ComfyUI's work (counted on a job's first image only) + fetch + post
+                own = [v for k, v in timing.items() if k not in ("queue_s", "comfy_s") + COMFY_STAGES]
+                timing["total_s"] = round(sum(own) + (jt.get("comfy_s", 0) if j == 0 else 0), 2)
+                meta = {"prompt": prompt, "full_prompt": full_prompt, "negative": full_negative,
+                        "user_negative": negative,
+                        "preset": preset, "seed": s, "params": {k: v for k, v in params.items()
+                                                                if k not in ("prompt", "negative")},
+                        "file": final.name, "raw_file": path.name, "created": now.isoformat(timespec="seconds"),
+                        "timing": {**timing, **{k: jt[k] for k in ("nodes", "cached") if k in jt}},
+                        **(source or {})}
+                path.with_suffix(".json").write_text(json.dumps(meta, indent=2))
+                images.append({"path": str(final), "windows_path": to_windows_path(final), "seed": s,
+                               "seconds": secs if j == 0 else None,  # per job, not per output (gen bakeoff)
+                               "timing": timing})
+            parts = _stage_parts(images[-1]["timing"] if outs else jt)
+            log(f"  [{i}/{count}] seed {s} done in {secs:.1f}s"
+                + (f" ({', '.join(parts)})" if parts else ""))
+            t_wait = time.time()
 
-    images = []
-    for i, (s, pid) in enumerate(jobs, 1):
-        t0 = time.time()
-        outputs = comfy.wait(pid)
-        secs = round(time.time() - t0, 1)  # the first one includes loading the model
-        outs = [im for o in outputs.values() for im in o.get("images", []) if im.get("type") == "output"]
-        for j, im in enumerate(outs):
-            name = f"{i:02d}-seed{s}" + (f"-{j}" if len(outs) > 1 else "") + ".png"
-            path = run_dir / name
-            path.write_bytes(comfy.fetch(im))
-            final = path
-            for step in p.get("post", []):
-                final = POST[step](final)
-            meta = {"prompt": prompt, "full_prompt": full_prompt, "negative": full_negative,
-                    "user_negative": negative,
-                    "preset": preset, "seed": s, "params": {k: v for k, v in params.items()
-                                                            if k not in ("prompt", "negative")},
-                    "file": final.name, "raw_file": path.name, "created": now.isoformat(timespec="seconds"),
-                    **(source or {})}
-            path.with_suffix(".json").write_text(json.dumps(meta, indent=2))
-            images.append({"path": str(final), "windows_path": to_windows_path(final), "seed": s,
-                           "seconds": secs if j == 0 else None})  # per job, not per output
-        log(f"  [{i}/{count}] seed {s} done in {secs:.1f}s")
-
-    run = {"preset": preset, "prompt": prompt, "base_seed": base_seed, "count": count,
-           "run_dir": str(run_dir), "images": images, "transparent": bool(p.get("post")), **(source or {})}
-    (run_dir / "run.json").write_text(json.dumps(run, indent=2))
-    sheet = write_contact_sheet(run_dir, run)
-    run["contact_sheet"] = str(sheet)
-    run["contact_sheet_windows"] = to_windows_path(sheet)
-    run["run_dir_windows"] = to_windows_path(run_dir)
-    return run
+        run_timing = {"total_s": round(time.time() - t_start, 2), "setup_s": round(t_queue - t_start, 2)}
+        if job_timings and "queue_s" in job_timings[0]:
+            run_timing["queue_s"] = job_timings[0]["queue_s"]  # waiting for other jobs ahead of this run
+        comfy_keys = ("comfy_s",) + COMFY_STAGES
+        for key in comfy_keys:  # once per job (a job may save more than one image)
+            if any(key in jt for jt in job_timings):
+                run_timing[key] = round(sum(jt.get(key, 0) for jt in job_timings), 2)
+        for key in [k for im in images for k in im["timing"]]:  # fetch and post steps: once per image
+            if key not in run_timing and key not in comfy_keys + ("queue_s", "total_s"):
+                run_timing[key] = round(sum(im["timing"].get(key, 0) for im in images), 2)
+        if not events.ok:
+            run_timing["note"] = "no websocket: only queue and ComfyUI totals"
+        summary = timing_summary(run_timing, [im["timing"] for im in images])
+        run_timing["summary"] = summary
+        run = {"preset": preset, "prompt": prompt, "base_seed": base_seed, "count": count,
+               "run_dir": str(run_dir), "images": images, "transparent": bool(p.get("post")), **(source or {}),
+               "timing": run_timing}
+        (run_dir / "run.json").write_text(json.dumps(run, indent=2))
+        sheet = write_contact_sheet(run_dir, run)
+        run["contact_sheet"] = str(sheet)
+        run["contact_sheet_windows"] = to_windows_path(sheet)
+        run["run_dir_windows"] = to_windows_path(run_dir)
+        return run
 
 
 def vary(path: str, count: int = 4, strength: float | None = None, prompt: str | None = None,
@@ -620,6 +919,10 @@ def write_contact_sheet(run_dir: Path, run: dict) -> Path:
         meta = find_sidecar(run_dir / path.name) or {}
         first = first if first is not None else meta
         entry = {"file": path.name, "seed": im["seed"]}
+        timing = im.get("timing") or meta.get("timing") or {}
+        if "total_s" in timing:
+            entry["time_s"] = timing["total_s"]
+            entry["timing"] = ", ".join(_stage_parts(timing))
         entry.update({k: im[k] for k in ("tag", "seconds") if im.get(k) is not None})  # tag: gen bakeoff
         params = meta.get("params") or {}
         entry.update({k: params[k] for k in SHEET_PARAMS if k in params})
@@ -633,7 +936,8 @@ def write_contact_sheet(run_dir: Path, run: dict) -> Path:
             "source_image": Path(run["source_image"]).name if run.get("source_image") else None,
             "source_file": _sheet_source(run_dir, run.get("source_image")),
             "mask": bool(run.get("mask")), "denoise": run.get("denoise"), "edit": bool(run.get("edit")),
-            "run_dir": str(run_dir), "project": run.get("project"), "bakeoff": run.get("bakeoff")}
+            "run_dir": str(run_dir), "project": run.get("project"), "bakeoff": run.get("bakeoff"),
+            "timing": (run.get("timing") or {}).get("summary")}
     # "<" escaped so no value can close the <script> block it is inlined into
     fills = {"TITLE": html.escape(run["prompt"][:60]),
              "RUN_JSON": json.dumps(data, ensure_ascii=False).replace("<", "\\u003c")}
@@ -739,6 +1043,8 @@ def _print_run(run: dict, open_sheet: bool) -> None:
     for im in run["images"]:
         print(im["windows_path"] or im["path"])
     print("contact sheet:", run["contact_sheet_windows"] or run["contact_sheet"])
+    if summary := (run.get("timing") or {}).get("summary"):
+        print("timing:", summary)
     if open_sheet:
         open_in_windows(run["contact_sheet"])
 

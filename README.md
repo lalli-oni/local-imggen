@@ -31,6 +31,12 @@ gen "misty fjord at sunrise" -p wallpaper --open
 | `gen set-wallpaper PATH` | Set a Windows wallpaper |
 | `gen doctor` | Read-only health check |
 
+Every run ends with a timing line, e.g. `timing: 4 images in 210.3s (first 80.1s, then ~43.4s each): load 3.0s,
+sample 160.2s, decode 8.1s, upscale 30.0s, fetch 1.2s`. The numbers are also in `run.json` and in each sidecar
+under `"timing"` (seconds per stage; the sidecar also lists every node). They come from ComfyUI's websocket
+events. `load` is reading weights from disk; moving them onto the GPU is counted in `sample`, so the first
+image after a model change is slower. `queue` is the wait before ComfyUI started on the job.
+
 Presets: `draft` (1024², quick), `wallpaper` (16:9, upscaled to 3840x2160), `wallpaper_ultrawide`
 (21:9, upscaled to 3440x1440), `icon` (centered object, background removed). Opt-in: `kontext` (edit only),
 `klein` and `qwen` (text-to-image and `gen edit -p ...`; no `gen vary`).

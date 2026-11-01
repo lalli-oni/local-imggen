@@ -58,6 +58,7 @@ figcaption { height: var(--cap); display: flex; align-items: center; gap: 8px; p
   color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; }
 figcaption button { padding: 0 8px; font-size: 11px; line-height: 16px; }
 figcaption .pick { margin-left: auto; }
+figcaption .time { color: var(--muted); }
 figure.src img { outline: 2px dashed var(--line); }
 figure.src figcaption b { color: var(--text); font-weight: 500; }
 figure.a .pick { border-color: var(--pick-a); color: var(--pick-a); }
@@ -195,6 +196,7 @@ $("prompt").textContent = RUN.prompt;
     : [RUN.mask ? "inpaint from" : "img2img from", `${RUN.source_image} @ ${RUN.denoise}`]);
   if (p0.guidance != null) parts.push(["guidance", p0.guidance]);
   if (RUN.project) parts.push(["project", `${RUN.project.slug} v${RUN.project.version}`]);
+  if (RUN.timing) parts.push(["timing", RUN.timing]);
   $("meta").append(...parts.flatMap(([k, v], i) => [
     i ? " · " : "", k ? `${k} ` : "", el("b", { textContent: String(v) })]));
   if (RUN.bakeoff) {
@@ -247,7 +249,12 @@ const cards = images.map((im, i) => {
     const seed = el("span", { className: "seed", textContent: `seed ${im.seed}`, title: "copy seed" });
     seed.addEventListener("click", () => copy(String(im.seed), `seed ${im.seed} copied`));
     cap = el("figcaption", {}, ...(im.tag ? [el("b", { className: "tag", textContent: im.tag })] : []),
-      `#${im.n}`, seed, ...(im.tag && im.seconds != null ? [`${im.seconds}s`] : []), pick);
+      `#${im.n}`, seed);
+    // time_s: this image's own time (hover: per stage); older runs and bake-off copies may only have seconds
+    const secs = im.time_s ?? (im.tag ? im.seconds : null);
+    if (secs != null) cap.append(el("span", { className: "time", textContent: `${secs.toFixed(1)}s`,
+      title: im.timing || "" }));
+    cap.append(pick);
     if (SRC >= 0) {
       const vs = el("button", { textContent: "vs input", title: "compare with the input image" });
       vs.addEventListener("click", () => compareWithInput(i));

@@ -107,6 +107,17 @@ def test_transparent_run_uses_checkerboard(make_run, open_sheet):
     assert "checker" in page.locator("#grid img").first.get_attribute("class")
 
 
+def test_timing_shown(make_run, open_sheet):
+    run = make_run(n=2, timing={"summary": "2 images in 90.0s: sample 80.0s"})
+    for im, s in zip(run["images"], (50.0, 40.0)):
+        im["timing"] = {"total_s": s, "sample_s": s - 5, "comfy_s": s}
+    page, errors = open_sheet(run)
+    assert "2 images in 90.0s" in page.locator("#meta").inner_text()
+    first = page.locator("#grid figcaption .time").first
+    assert first.inner_text() == "50.0s" and first.get_attribute("title") == "sample 45.0s"
+    assert not errors, errors
+
+
 def test_bakeoff_sheet_shows_tags_and_numbers(make_run, open_sheet):
     run = make_run(n=2, preset="bakeoff: kontext vs klein", prompt="1. make it wave")
     run["images"][0]["tag"], run["images"][1]["tag"] = "kontext · 1", "klein · 1"

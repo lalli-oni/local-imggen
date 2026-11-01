@@ -194,7 +194,7 @@ def bakeoff(path: str, instructions: list[str], presets: list[str] | tuple[str, 
                     if (side := p.with_suffix(".json")).is_file():
                         shutil.copy2(side, dest.with_suffix(".json"))
                     entries.append({"path": str(dest), "seed": im["seed"], "seconds": im.get("seconds"),
-                                    "tag": f"{preset} · {n}"})
+                                    "timing": im.get("timing"), "tag": f"{preset} · {n}"})  # timing: per stage
                 if not (out / imagegen.SHEET_SOURCE).is_file() and \
                         (s := Path(run["run_dir"]) / imagegen.SHEET_SOURCE).is_file():
                     shutil.copy2(s, out / imagegen.SHEET_SOURCE)
