@@ -9,6 +9,7 @@ Usage:
   gen vary PATH -n 4 --strength 0.4             # img2img variations of an image
   gen vary PATH --mask MASK.png --prompt "..."  # inpaint: repaint only the white part of MASK
   gen edit PATH "make it wave, side view"      # instruction edit (FLUX.1 Kontext, opt-in models)
+  gen bakeoff PATH "instr" ["instr"...]         # same edits through kontext, klein, qwen; time/VRAM/RAM
   gen cutout PATH [--clean]                     # remove the background -> PATH-transparent.png
                                                 #   --clean: also drop stray shapes, centre on a square
   gen presets                                   # list presets
@@ -63,7 +64,19 @@ def load_config() -> dict:
 
 # Preset keys that are not workflow values (generate() drops them before filling the workflow).
 NOT_PARAMS = {"workflow", "img2img_workflow", "inpaint_workflow", "edit_workflow", "description",
-              "suffix", "negative_extra", "post"}
+              "suffix", "negative_extra", "post", "download"}
+
+# Default img2img/inpaint graphs (SDXL). Presets that load a diffusion model (`unet`: Flux, Qwen) get none.
+DEFAULT_MODE_WORKFLOWS = {"img2img_workflow": "sdxl_img2img.json", "inpaint_workflow": "sdxl_inpaint.json"}
+
+
+def mode_workflow(p: dict, key: str) -> str | None:
+    """The workflow file a preset uses for a mode key (workflow, img2img_workflow, ...), or None."""
+    if key in p:
+        return p[key]
+    if "workflow" in p and "unet" not in p:
+        return DEFAULT_MODE_WORKFLOWS.get(key)
+    return None
 
 
 def list_presets() -> dict[str, dict]:
@@ -122,6 +135,16 @@ class Comfy:
                 return json.loads(r.read())["prompt_id"]
         except urllib.error.HTTPError as e:
             raise RuntimeError(f"ComfyUI rejected the workflow: {e.read().decode(errors='replace')[:2000]}")
+
+    def free(self) -> None:
+        """Unload all models and free their memory (ComfyUI's /free), so the next job loads from scratch."""
+        req = urllib.request.Request(self.url + "/free", data=json.dumps(
+            {"unload_models": True, "free_memory": True}).encode(), headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            r.read()
+
+    def system_stats(self) -> dict:
+        return json.loads(self._get("/system_stats", timeout=5))
 
     CRASH_HINT = ("ComfyUI probably crashed (often out of RAM/VRAM): "
                   "journalctl -u comfyui -n 50; sudo dmesg | grep -i oom")
@@ -431,14 +454,23 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
             mask_path = to_linux_path(mask)
             if not mask_path.is_file():
                 raise FileNotFoundError(mask_path)
-            workflow = p.get("inpaint_workflow", "sdxl_inpaint.json")
+            key = "inpaint_workflow"
         else:
-            workflow = p.get("img2img_workflow", "sdxl_img2img.json")
+            key = "img2img_workflow"
+        workflow = mode_workflow(p, key)
+        if workflow is None:
+            raise ValueError(f"preset '{preset}' has no {key.split('_')[0]} (gen vary); "
+                             f"for this model use gen edit IMAGE \"instruction\" -p {preset}")
         denoise = float(denoise if denoise is not None else (0.85 if mask_path else 0.4))
         if not 0 < denoise <= 1:
             raise ValueError("strength/denoise must be in (0, 1]")
         src_png, mask_png, src_size = prepare_source(src_path, mask_path)
-    template = json.loads((ROOT / "workflows" / workflow).read_text())
+    template_text = (ROOT / "workflows" / workflow).read_text()
+    template = json.loads(template_text)
+    unused = [k for k, v in (("steps", steps), ("cfg", cfg), ("guidance", guidance), ("negative", negative))
+              if v is not None and "{{" + k + "}}" not in template_text]
+    if unused:  # e.g. -g on klein, or a project's cfg after switching it to klein: say so, then go on
+        log(f"note: {workflow} has no {', '.join(unused)}, ignoring {'it' if len(unused) == 1 else 'them'}")
     base_seed = seed if seed is not None else random.randrange(MAX_SEED)
     full_prompt = prompt + p.get("suffix", "")
     full_negative = "" if edit else (negative if negative is not None else conf.get("default_negative", "")) \
@@ -489,6 +521,7 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
     for i, (s, pid) in enumerate(jobs, 1):
         t0 = time.time()
         outputs = comfy.wait(pid)
+        secs = round(time.time() - t0, 1)  # the first one includes loading the model
         outs = [im for o in outputs.values() for im in o.get("images", []) if im.get("type") == "output"]
         for j, im in enumerate(outs):
             name = f"{i:02d}-seed{s}" + (f"-{j}" if len(outs) > 1 else "") + ".png"
@@ -504,8 +537,9 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
                     "file": final.name, "raw_file": path.name, "created": now.isoformat(timespec="seconds"),
                     **(source or {})}
             path.with_suffix(".json").write_text(json.dumps(meta, indent=2))
-            images.append({"path": str(final), "windows_path": to_windows_path(final), "seed": s})
-        log(f"  [{i}/{count}] seed {s} done in {time.time() - t0:.1f}s")
+            images.append({"path": str(final), "windows_path": to_windows_path(final), "seed": s,
+                           "seconds": secs if j == 0 else None})  # per job, not per output
+        log(f"  [{i}/{count}] seed {s} done in {secs:.1f}s")
 
     run = {"preset": preset, "prompt": prompt, "base_seed": base_seed, "count": count,
            "run_dir": str(run_dir), "images": images, "transparent": bool(p.get("post")), **(source or {})}
@@ -540,7 +574,12 @@ def vary(path: str, count: int = 4, strength: float | None = None, prompt: str |
             raise ValueError(f"no sidecar JSON next to {src.name}; pass a prompt")
     if negative is None:
         negative = meta.get("user_negative")
-    preset = preset or meta.get("preset") or "draft"
+    if preset is None:
+        preset = meta.get("preset") or "draft"
+        key = "inpaint_workflow" if mask else "img2img_workflow"
+        if mode_workflow(list_presets().get(preset, {}), key) is None:  # e.g. made with klein/qwen/kontext
+            log(f"note: preset '{preset}' has no {key.split('_')[0]}, using draft (pick one with -p)")
+            preset = "draft"
     return generate(prompt, preset, count, seed, negative, steps=steps, cfg=cfg,
                     label=label or ("inpaint-" if mask else "vary-") + slug(src.stem, 30),
                     source_image=str(src), mask=mask, denoise=strength)
@@ -581,6 +620,7 @@ def write_contact_sheet(run_dir: Path, run: dict) -> Path:
         meta = find_sidecar(run_dir / path.name) or {}
         first = first if first is not None else meta
         entry = {"file": path.name, "seed": im["seed"]}
+        entry.update({k: im[k] for k in ("tag", "seconds") if im.get(k) is not None})  # tag: gen bakeoff
         params = meta.get("params") or {}
         entry.update({k: params[k] for k in SHEET_PARAMS if k in params})
         images.append(entry)
@@ -593,7 +633,7 @@ def write_contact_sheet(run_dir: Path, run: dict) -> Path:
             "source_image": Path(run["source_image"]).name if run.get("source_image") else None,
             "source_file": _sheet_source(run_dir, run.get("source_image")),
             "mask": bool(run.get("mask")), "denoise": run.get("denoise"), "edit": bool(run.get("edit")),
-            "run_dir": str(run_dir), "project": run.get("project")}
+            "run_dir": str(run_dir), "project": run.get("project"), "bakeoff": run.get("bakeoff")}
     # "<" escaped so no value can close the <script> block it is inlined into
     fills = {"TITLE": html.escape(run["prompt"][:60]),
              "RUN_JSON": json.dumps(data, ensure_ascii=False).replace("<", "\\u003c")}
@@ -742,7 +782,8 @@ def main(argv: list[str]) -> int:
         return 0
     if argv and argv[0] == "edit":
         ep = argparse.ArgumentParser(
-            prog="gen edit", description="Edit an image by instruction (FLUX.1 Kontext). "
+            prog="gen edit", description="Edit an image by instruction (FLUX.1 Kontext; "
+            "-p klein / -p qwen for FLUX.2 klein / Qwen-Image-2.1). "
             "Say what to change and what to keep, e.g. \"Make the character wave with one tentacle, "
             "seen from the side. Keep the same character design, colors and art style.\"")
         ep.add_argument("path")
@@ -750,14 +791,17 @@ def main(argv: list[str]) -> int:
         ep.add_argument("-n", "--count", type=int, default=1, help="edits to make, one seed each (default 1)")
         ep.add_argument("-p", "--preset", default=EDIT_PRESET)
         ep.add_argument("--seed", type=int)
-        ep.add_argument("--steps", type=int, help="default from the preset (20)")
-        ep.add_argument("-g", "--guidance", type=float, help="how strongly to follow the text (default 2.5)")
+        ep.add_argument("--steps", type=int, help="default from the preset (kontext 20, klein 4, qwen 25)")
+        ep.add_argument("-g", "--guidance", type=float, help="kontext only: how strongly to follow the text (2.5)")
         ep.add_argument("--label", help="folder name instead of edit-<image>-<instruction>")
         ep.add_argument("--open", action="store_true", help="open contact sheet in Windows browser")
         a = ep.parse_args(argv[1:])
         run = edit(a.path, a.instruction, a.count, a.preset, a.seed, a.steps, a.guidance, a.label)
         _print_run(run, a.open)
         return 0
+    if argv and argv[0] == "bakeoff":
+        import bakeoff  # lazy: only gen bakeoff needs it
+        return bakeoff.main(argv[1:])
     if argv and argv[0] == "cutout":
         cp = argparse.ArgumentParser(prog="gen cutout",
                                      description="Remove the background -> PATH-transparent.png")

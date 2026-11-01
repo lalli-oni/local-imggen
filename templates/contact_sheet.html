@@ -11,6 +11,7 @@
   s side-by-side / w wipe, x swap.
   img2img/inpaint runs show their input image (source.png, saved by generate) as the
   first card; project runs get a "promote" button that copies the `gen project promote` command.
+  gen bakeoff runs tag each image (preset · instruction #) and show a table of time/VRAM/RAM per preset.
 -->
 <style>
 :root {
@@ -61,6 +62,15 @@ figure.src img { outline: 2px dashed var(--line); }
 figure.src figcaption b { color: var(--text); font-weight: 500; }
 figure.a .pick { border-color: var(--pick-a); color: var(--pick-a); }
 figure.b .pick { border-color: var(--pick-b); color: var(--pick-b); }
+.tag { color: var(--text); font-weight: 500; }
+#bake { margin-top: 8px; color: var(--muted); }
+#bake ol { margin: 4px 0 8px; padding-left: 22px; }
+#bake .scroll { overflow-x: auto; }
+#bake table { border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+#bake th, #bake td { padding: 3px 10px 3px 0; text-align: right; white-space: nowrap; }
+#bake th:first-child, #bake td:first-child, #bake td.err { text-align: left; }
+#bake td { color: var(--text); }
+#bake td.err { color: #ff8a80; white-space: normal; min-width: 200px; }
 .seed { cursor: copy; }
 .seed:hover { color: var(--text); }
 .checker { background: repeating-conic-gradient(#3a3a3a 0 25%, #2a2a2a 0 50%) 0 0 / 20px 20px; }
@@ -99,6 +109,7 @@ figure.b .pick { border-color: var(--pick-b); color: var(--pick-b); }
   <h1 id="prompt"></h1>
   <p class="meta" id="meta"></p>
   <details id="neg" hidden><summary>negative prompt</summary><p></p></details>
+  <section id="bake" hidden><ol></ol><div class="scroll"><table></table></div></section>
 </header>
 
 <div class="bar">
@@ -156,7 +167,8 @@ function promoteCmd(im) {
   return `gen project promote ${p.slug} ${shq(RUN.run_dir.replace(/\/+$/, "") + "/" + im.file)}` +
     ` --asset ${p.slug} --note ${shq(`v${p.version}${p.ref ? ` from ${p.ref}` : ""} #${im.n} seed ${im.seed}`)}`;
 }
-const label = (i) => images[i].source ? "input" : `#${images[i].n} · seed ${images[i].seed}`;
+const label = (i) => images[i].source ? "input"
+  : `${images[i].tag ? images[i].tag + " · " : ""}#${images[i].n} · seed ${images[i].seed}`;
 function copyPromote(im) {
   copy(promoteCmd(im), `promote command for #${im.n} copied (change --asset if needed)`);
 }
@@ -175,7 +187,7 @@ const state = {
 $("prompt").textContent = RUN.prompt;
 {
   const parts = [["preset", RUN.preset], [null, `${RUN.count} image(s)`], ["base seed", RUN.base_seed]];
-  const p0 = images[SRC + 1] || {};
+  const p0 = RUN.bakeoff ? {} : images[SRC + 1] || {};  // a bake-off mixes presets: no shared params
   if (p0.width && p0.height) parts.push([null, `${p0.width}×${p0.height}`]);
   if (p0.steps != null) parts.push(["steps", p0.steps]);
   if (p0.cfg != null) parts.push(["cfg", p0.cfg]);
@@ -185,6 +197,22 @@ $("prompt").textContent = RUN.prompt;
   if (RUN.project) parts.push(["project", `${RUN.project.slug} v${RUN.project.version}`]);
   $("meta").append(...parts.flatMap(([k, v], i) => [
     i ? " · " : "", k ? `${k} ` : "", el("b", { textContent: String(v) })]));
+  if (RUN.bakeoff) {
+    $("prompt").textContent = RUN.preset;
+    $("bake").hidden = false;
+    $("bake").querySelector("ol").append(...RUN.bakeoff.instructions.map((t) => el("li", { textContent: t })));
+    const num = (v, d = 1) => (v == null ? "-" : Number(v).toFixed(d));
+    const head = ["preset", "images", "first s (with load)", "median s", "VRAM GiB", "system RAM GiB", "comfy RAM GiB",
+      "comfy swap GiB", "system swap GiB", "error"];
+    const rows = RUN.bakeoff.presets.map((r) => {
+      const pk = r.peak || {};
+      return el("tr", {}, ...[r.preset, r.images ?? 0, num(r.first_seconds), num(r.median_seconds),
+        num(pk.vram_gib), num(pk.ram_gib), num(pk.comfy_rss_gib), num(pk.comfy_swap_gib), num(pk.swap_gib)]
+        .map((v) => el("td", { textContent: String(v) })), el("td", { className: "err", textContent: r.error || "" }));
+    });
+    $("bake").querySelector("table").append(
+      el("tr", {}, ...head.map((h) => el("th", { textContent: h }))), ...rows);
+  }
   if (RUN.negative) {
     $("neg").hidden = false;
     $("neg").querySelector("p").textContent = RUN.negative;
@@ -218,7 +246,8 @@ const cards = images.map((im, i) => {
   } else {
     const seed = el("span", { className: "seed", textContent: `seed ${im.seed}`, title: "copy seed" });
     seed.addEventListener("click", () => copy(String(im.seed), `seed ${im.seed} copied`));
-    cap = el("figcaption", {}, `#${im.n}`, seed, pick);
+    cap = el("figcaption", {}, ...(im.tag ? [el("b", { className: "tag", textContent: im.tag })] : []),
+      `#${im.n}`, seed, ...(im.tag && im.seconds != null ? [`${im.seconds}s`] : []), pick);
     if (SRC >= 0) {
       const vs = el("button", { textContent: "vs input", title: "compare with the input image" });
       vs.addEventListener("click", () => compareWithInput(i));

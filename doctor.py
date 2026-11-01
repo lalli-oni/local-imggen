@@ -24,21 +24,24 @@ LIMITS_DROPIN = Path("/etc/systemd/system/comfyui.service.d/zz-imagegen-limits.c
 # Keys generate() drops from a preset before filling the workflow, plus the ones it always adds.
 NOT_PARAMS = imagegen.NOT_PARAMS
 STANDARD_PARAMS = {"seed", "prompt", "negative", "checkpoint"}
-# Each mode a preset can run in: (preset key, default workflow, extra params generate() adds).
-MODES = [("workflow", None, set()),
-         ("img2img_workflow", "sdxl_img2img.json", {"image", "denoise"}),
-         ("inpaint_workflow", "sdxl_inpaint.json", {"image", "denoise", "mask"})]
-# Edit-only presets (edit_workflow, no workflow) run in this mode instead.
-EDIT_MODE = ("edit_workflow", None, {"image", "width", "height"})
+# Each mode a preset can run in: (preset key, extra params generate() adds).
+MODES = [("workflow", set()),
+         ("img2img_workflow", {"image", "denoise"}),
+         ("inpaint_workflow", {"image", "denoise", "mask"})]
+# Presets with an edit_workflow also run in this mode (edit-only ones have no workflow).
+EDIT_MODE = ("edit_workflow", {"image", "width", "height"})
 # Which ComfyUI model folder each model-like preset key lives in.
 MODEL_KEYS = {"checkpoint": "checkpoints", "upscale_model": "upscale_models", "unet": "diffusion_models",
-              "clip_l": "text_encoders", "t5": "text_encoders", "vae": "vae"}
-OPT_IN_MODELS = "~/imagegen/models/flux-kontext.sh"
+              "clip_l": "text_encoders", "t5": "text_encoders", "text_encoder": "text_encoders", "vae": "vae"}
+MODELS_DIR = "~/imagegen/models"  # where a preset's `download` script lives
 
 
 def _modes(p: dict) -> list[tuple[str, str | None, set[str]]]:
-    """The modes a preset runs in: text/img2img/inpaint if it has a workflow, edit if it has an edit_workflow."""
-    return (MODES if "workflow" in p else []) + ([EDIT_MODE] if "edit_workflow" in p else [])
+    """(key, workflow file, extra params) for each mode the preset runs in: text, plus img2img/inpaint when
+    it has those graphs (imagegen.mode_workflow), and edit if it has an edit_workflow."""
+    out = [(key, imagegen.mode_workflow(p, key), extra) for key, extra in MODES]
+    out = [m for m in out if m[1] is not None or m[0] in p]  # a key set to "" stays, so it gets reported
+    return out + ([(EDIT_MODE[0], p[EDIT_MODE[0]], EDIT_MODE[1])] if EDIT_MODE[0] in p else [])
 
 
 def _check(name: str, status: str, detail: str, fix: str | None = None) -> dict:
@@ -131,10 +134,10 @@ def _model_names(url: str, folder: str, api_up: bool) -> tuple[set[str], str]:
 def _placeholders(p: dict, edit: bool) -> set[str]:
     """{{keys}} used by the preset's edit workflow (edit=True) or by its other workflows."""
     keys: set[str] = set()
-    for key, default, _ in _modes(p):
-        if (key == EDIT_MODE[0]) == edit:
+    for key, wf_name, _ in _modes(p):
+        if (key == EDIT_MODE[0]) == edit and wf_name:
             try:
-                keys |= set(imagegen._PLACEHOLDER.findall((imagegen.ROOT / "workflows" / p.get(key, default)).read_text()))
+                keys |= set(imagegen._PLACEHOLDER.findall((imagegen.ROOT / "workflows" / wf_name).read_text()))
             except OSError:
                 pass  # check_workflows reports it
     return keys
@@ -142,28 +145,35 @@ def _placeholders(p: dict, edit: bool) -> set[str]:
 
 def check_models(conf: dict, api_up: bool) -> list[dict]:
     url = conf["comfy_url"]
-    # folder -> model -> required. Models only an edit workflow uses are opt-in downloads: missing = warn.
-    wanted: dict[str, dict[str, bool]] = {}
+    # folder -> model -> (required, opt-in download scripts). Models of a preset with a `download` script,
+    # or that only an edit workflow uses, are opt-in: missing = warn.
+    wanted: dict[str, dict[str, tuple[bool, set[str]]]] = {}
     for p in conf["presets"].values():
         edit_only_keys = _placeholders(p, edit=True) - _placeholders(p, edit=False)
+        uses_checkpoint = "checkpoint" in _placeholders(p, edit=False) | _placeholders(p, edit=True)
         for key, folder in MODEL_KEYS.items():
-            required = "workflow" in p and key not in edit_only_keys
+            if key == "checkpoint" and not uses_checkpoint:
+                continue  # Flux/Qwen presets load a unet instead of the global SDXL checkpoint
+            required = "workflow" in p and key not in edit_only_keys and "download" not in p
             name = p.get(key, conf.get("checkpoint") if key == "checkpoint" and "workflow" in p else None)
             if name:
                 names = wanted.setdefault(folder, {})
-                names[name] = names.get(name, False) or required
+                req, scripts = names.get(name, (False, set()))
+                names[name] = (req or required, scripts | ({p["download"]} if "download" in p else set()))
     out = []
     for folder, names in sorted(wanted.items()):
         have, source = _model_names(url, folder, api_up)
-        for name, required in sorted(names.items()):
+        for name, (required, scripts) in sorted(names.items()):
             if name in have:
                 out.append(_check(f"model {name}", "ok", f"found in {folder} ({source})"))
             elif required:
                 out.append(_check(f"model {name}", "fail", f"missing from {folder} ({source})",
                                   f"put it in {COMFY_DIR / 'models' / folder}/ (setup.sh fetches the upscaler)"))
             else:
+                fix = " or ".join(f"{MODELS_DIR}/{s}" for s in sorted(scripts)) or \
+                    f"put it in {COMFY_DIR / 'models' / folder}/"
                 out.append(_check(f"model {name}", "warn", f"missing from {folder} ({source}); "
-                                  "only gen edit needs it", f"opt-in download: {OPT_IN_MODELS}"))
+                                  "only opt-in presets need it", f"opt-in download: {fix}"))
     # rembg: used by the icon preset's remove_bg step and by `gen cutout`
     u2 = Path(os.environ.get("U2NET_HOME", Path.home() / ".u2net")).expanduser() / "u2net.onnx"
     if u2.is_file():
@@ -183,8 +193,7 @@ def check_workflows(conf: dict) -> list[dict]:
         problems, used = [], []
         if not _modes(p):
             problems.append("no workflow or edit_workflow set")
-        for key, default, extra in _modes(p):
-            wf_name = p.get(key, default)
+        for key, wf_name, extra in _modes(p):
             # generate() adds checkpoint only outside edit mode (unless the preset sets it)
             mode_have = have - {"checkpoint"} if key == EDIT_MODE[0] and "checkpoint" not in p else have
             if not wf_name:
@@ -215,13 +224,14 @@ def check_workflows(conf: dict) -> list[dict]:
 def check_nodes(conf: dict, url: str) -> dict:
     """Every node type the presets' workflows use must exist in this ComfyUI (Kontext needs a mid-2025+ one).
 
-    Missing nodes that only edit workflows use are a warning: gen edit is opt-in.
+    Missing nodes that only edit workflows or opt-in presets (with a `download` script) use are a warning.
     """
     classes: dict[str, set[str]] = {}  # class_type -> workflows using it
-    required: set[str] = set()  # class_types some non-edit workflow uses
+    required: set[str] = set()  # class_types some non-edit workflow of a non-opt-in preset uses
     for p in conf["presets"].values():
-        for key, default, _ in _modes(p):
-            wf_name = p.get(key, default)
+        for key, wf_name, _ in _modes(p):
+            if not wf_name:
+                continue
             try:
                 wf = json.loads((imagegen.ROOT / "workflows" / wf_name).read_text())
             except Exception:
@@ -229,7 +239,7 @@ def check_nodes(conf: dict, url: str) -> dict:
             for node in wf.values():
                 if isinstance(node, dict) and "class_type" in node:
                     classes.setdefault(node["class_type"], set()).add(wf_name)
-                    if key != EDIT_MODE[0]:
+                    if key != EDIT_MODE[0] and "download" not in p:
                         required.add(node["class_type"])
     try:
         available = _get_json(f"{url.rstrip('/')}/object_info", timeout=30)

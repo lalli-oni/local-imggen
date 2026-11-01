@@ -92,7 +92,7 @@ def test_doctor_nodes(comfy):
     assert doctor.check_nodes(conf, comfy.url)["status"] == "ok"
     comfy.nodes -= {"ReferenceLatent"}
     c = doctor.check_nodes(conf, comfy.url)
-    assert c["status"] == "warn" and "ReferenceLatent (in flux_kontext.json)" in c["detail"]
+    assert c["status"] == "warn" and "ReferenceLatent (in flux2_klein_edit.json, flux_kontext.json)" in c["detail"]
     comfy.nodes -= {"KSampler"}
     assert doctor.check_nodes(conf, comfy.url)["status"] == "fail"
 

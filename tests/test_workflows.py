@@ -49,8 +49,8 @@ def test_every_workflow_file_is_used_by_some_preset():
     conf = imagegen.load_config()
     used = set()
     for p in conf["presets"].values():
-        for key, default, _ in doctor._modes(p):
-            used.add(p.get(key, default))
+        for _key, wf, _ in doctor._modes(p):
+            used.add(wf)
     unused = {w.name for w in WORKFLOWS} - used
     assert not unused, f"workflows no preset uses: {unused}"
 

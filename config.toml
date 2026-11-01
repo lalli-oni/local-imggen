@@ -60,15 +60,52 @@ negative_extra = ", busy background, multiple objects, photo, text, letters, fra
 # quarter of its size). trim: crop to the subject, centre it on a square (the canvas's shorter side).
 post = ["remove_bg", "keep_largest", "trim"]
 
+# Opt-in model presets: `download` names the script in models/ that fetches their models (gen doctor
+# shows them as warn until then). Presets that load a diffusion model (`unet`) have no img2img/inpaint
+# (gen vary) unless they name an img2img_workflow / inpaint_workflow.
+
 # Edit-only preset: `gen edit IMAGE "instruction"` / MCP edit. Not usable for gen "prompt" or gen vary.
 # Models are opt-in (~17.7 GB): run ~/imagegen/models/flux-kontext.sh once.
 # FLUX.1 Kontext [dev] is under the FLUX.1 [dev] non-commercial licence.
 [presets.kontext]
 description = "Edit an image by instruction (FLUX.1 Kontext dev, fp8): gen edit IMAGE \"...\""
 edit_workflow = "flux_kontext.json"
+download = "flux-kontext.sh"
 unet = "flux1-dev-kontext_fp8_scaled.safetensors"
 clip_l = "clip_l.safetensors"
 t5 = "t5xxl_fp8_e4m3fn_scaled.safetensors"
 vae = "ae.safetensors"
 steps = 20
 guidance = 2.5
+
+# Bake-off candidates (#40): text-to-image and edit in one preset each. Compare with `gen bakeoff`.
+# FLUX.2 [klein] 4B distilled, fp8 (~11.9 GB, Apache 2.0): ~/imagegen/models/flux2-klein.sh
+[presets.klein]
+description = "FLUX.2 klein 4B (fp8, 4 steps): text-to-image, and gen edit IMAGE \"...\" -p klein"
+workflow = "flux2_klein_t2i.json"
+edit_workflow = "flux2_klein_edit.json"
+download = "flux2-klein.sh"
+unet = "flux-2-klein-4b-fp8.safetensors"
+text_encoder = "qwen_3_4b.safetensors"
+vae = "flux2-vae.safetensors"
+width = 1024
+height = 1024
+steps = 4
+
+# Qwen-Image-2.1 7B (~30 GB of bf16 files, Qwen Research licence): ~/imagegen/models/qwen-image-2.1.sh
+# weight_dtype loads the bf16 diffusion model as fp8 (half the VRAM). Not int8: int8 renders black here.
+# resolution = the edit's pixel budget (1024 = ~1 MP; the model goes up to 2048). cfg 1 ignores the negative.
+[presets.qwen]
+description = "Qwen-Image-2.1 7B (fp8 at load): text-to-image, and gen edit IMAGE \"...\" -p qwen"
+workflow = "qwen_image_21_t2i.json"
+edit_workflow = "qwen_image_21_edit.json"
+download = "qwen-image-2.1.sh"
+unet = "qwen_image_2.1_bf16.safetensors"
+weight_dtype = "fp8_e4m3fn"
+text_encoder = "qwen3vl_8b_bf16.safetensors"
+vae = "qwen_image_2.1_vae_bf16.safetensors"
+width = 1024
+height = 1024
+resolution = 1024
+steps = 25
+cfg = 1.0
