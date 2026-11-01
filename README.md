@@ -50,6 +50,9 @@ It fetches, shows the incoming PRs and files, flags risky changes (sudo, systemd
 downloads), asks y/N, then fast-forwards to exactly what it showed. It reinstalls the venv only when
 `requirements.txt` changed and tells you when to restart the Claude app. It never downloads models.
 
+It remembers the last commit it applied, so if you `git pull` by hand first, the next `update.sh` still
+shows those changes and runs their steps. `update.sh --since REV` re-runs the steps for everything after REV.
+
 ## Tests
 
 ```bash
