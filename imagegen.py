@@ -21,6 +21,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import html
+import http.client
 import io
 import json
 import os
@@ -120,10 +121,28 @@ class Comfy:
         except urllib.error.HTTPError as e:
             raise RuntimeError(f"ComfyUI rejected the workflow: {e.read().decode(errors='replace')[:2000]}")
 
+    CRASH_HINT = ("ComfyUI probably crashed (often out of RAM/VRAM): "
+                  "journalctl -u comfyui -n 50; sudo dmesg | grep -i oom")
+
+    def _queued(self, prompt_id: str) -> bool:
+        q = json.loads(self._get("/queue"))
+        return any(item[1] == prompt_id for k in ("queue_running", "queue_pending") for item in q.get(k, []))
+
     def wait(self, prompt_id: str, timeout: float = 1800) -> dict:
         t0 = time.time()
+        down_since = None  # set while ComfyUI is unreachable (crashed, systemd restarting it)
         while time.time() - t0 < timeout:
-            hist = json.loads(self._get(f"/history/{prompt_id}"))
+            try:
+                hist = json.loads(self._get(f"/history/{prompt_id}"))
+                if down_since is not None and prompt_id not in hist and not self._queued(prompt_id):
+                    raise RuntimeError(f"ComfyUI restarted and lost the job. {self.CRASH_HINT}")
+                down_since = None
+            except (urllib.error.URLError, ConnectionError, http.client.HTTPException, TimeoutError):
+                down_since = down_since or time.time()
+                if time.time() - down_since > 90:
+                    raise RuntimeError(f"lost the connection to ComfyUI for 90s. {self.CRASH_HINT}")
+                time.sleep(2)
+                continue
             if prompt_id in hist:
                 entry = hist[prompt_id]
                 status = entry.get("status", {})
