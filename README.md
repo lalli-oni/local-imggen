@@ -44,6 +44,16 @@ Presets: `draft` (1024², quick), `wallpaper` (16:9, upscaled to 3840x2160), `wa
 `klein` and `qwen` (text-to-image and `gen edit -p ...`; no `gen vary`), `wallpaper_ref` (klein: a 4K 16:9
 wallpaper of the character in a ref image, `gen edit REF "scene" -p wallpaper_ref`; `gen daily` uses it).
 
+### How a preset works, and how to see it
+
+A preset is two parts: a `[presets.NAME]` table in `config.toml` (model files, size, steps, upscaler, ...) and a
+ComfyUI workflow in `workflows/*.json` (API format) whose `"{{key}}"` slots `gen` fills from that table.
+
+To see the graph that made an image, **drag the PNG onto ComfyUI** at http://127.0.0.1:8188: ComfyUI stores the
+filled-in workflow inside every image it saves, so you get the exact nodes and values as boxes and wires, and can
+tweak and re-run it there. This works for every run's PNGs except cut-outs (`icon`, `gen cutout`): removing the
+background rewrites the file without that data (the run's non-transparent PNG still has it).
+
 ## MCP tools (Claude desktop app)
 
 `mcp_server.py` exposes: `generate`, `get_job`, `vary`, `cutout`, `doctor`, `list_presets`, `recent_runs`,
