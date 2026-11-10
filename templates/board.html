@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{TITLE}}</title>
+<!--
+  Board page for one creative project (#7). Written by boards.write_page(), which fills BOARD_JSON
+  below; rebuilt after every project change, rating and note. Static and self-contained (file://):
+  it cannot write, so its pick / maybe / reject / note buttons copy the `gen project` command,
+  and Claude rates through the MCP project_rate tool.
+  Passes are grouped by the project version they were made from, newest first.
+-->
+<style>
+:root {
+  --bg: #0b0b0c; --panel: #161618; --line: #2a2a2e; --text: #ddd; --muted: #8a8a90; --accent: #7aa2ff;
+  --pick: #5ad17a; --maybe: #ffb454; --reject: #ff6b6b;
+  --gap: 12px; --pad: 16px; --thumb: 240px;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, sans-serif; }
+button { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 6px; padding: 2px 8px; cursor: pointer; }
+button:hover { border-color: #555; }
+button[aria-pressed="true"] { background: #23304d; border-color: var(--accent); }
+a { color: var(--accent); }
+header { padding: var(--pad) var(--pad) 4px; }
+h1 { font-size: 18px; margin: 0 0 4px; }
+h2 { font-size: 15px; margin: 0; font-weight: 600; }
+.muted { color: var(--muted); }
+.brief { margin: 0 0 8px; max-width: 80ch; }
+.kv { margin: 2px 0; overflow-wrap: anywhere; }
+.kv b { color: var(--muted); font-weight: 500; margin-right: 6px; }
+.swatch { display: inline-block; width: 14px; height: 14px; border-radius: 3px; vertical-align: -2px;
+  margin-right: 4px; border: 1px solid var(--line); }
+.strip { display: flex; flex-wrap: wrap; gap: 10px; margin: 8px 0; }
+.strip figure { margin: 0; width: 96px; }
+.strip img { width: 96px; height: 96px; object-fit: contain; background: #111; border-radius: 6px; display: block; }
+.strip figcaption { font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+.stale { color: var(--maybe); }
+.bar { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
+  padding: 8px var(--pad); background: rgba(11, 11, 12, .94); border-bottom: 1px solid var(--line); }
+.seg { display: inline-flex; }
+.seg button { border-radius: 0; margin-left: -1px; }
+.seg button:first-child { border-radius: 6px 0 0 6px; margin-left: 0; }
+.seg button:last-child { border-radius: 0 6px 6px 0; }
+.bar label { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.counts { color: var(--muted); }
+.notes { margin: 6px 0 0; padding-left: 18px; }
+.notes li { overflow-wrap: anywhere; }
+.notes .who { color: var(--muted); }
+section.version { padding: 12px var(--pad); border-top: 1px solid var(--line); }
+section.version > details { margin: 4px 0 0; color: var(--muted); }
+section.version > details p { margin: 4px 0 0; overflow-wrap: anywhere; color: var(--text); }
+.pass { margin-top: 12px; }
+.pass h3 { font-size: 13px; font-weight: 500; margin: 0 0 6px; color: var(--muted); }
+.pass h3 b { color: var(--text); font-weight: 600; }
+.grid { display: grid; gap: var(--gap); grid-template-columns: repeat(auto-fill, minmax(min(var(--thumb), 100%), 1fr)); }
+.card { margin: 0; min-width: 0; }
+.card img { width: 100%; display: block; border-radius: 8px; background: #111;
+  outline: 3px solid transparent; outline-offset: 2px; }
+.card.pick img { outline-color: var(--pick); }
+.card.maybe img { outline-color: var(--maybe); }
+.card.reject img { opacity: .35; }
+.card figcaption { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 6px;
+  font-size: 12px; color: var(--muted); }
+.card figcaption .id { color: var(--text); font-weight: 600; }
+.badge { padding: 0 6px; border-radius: 4px; font-size: 11px; color: #000; font-weight: 600; }
+.badge.pick { background: var(--pick); } .badge.maybe { background: var(--maybe); } .badge.reject { background: var(--reject); }
+.card figcaption button { padding: 0 6px; font-size: 11px; line-height: 16px; }
+.card figcaption .acts { margin-left: auto; display: inline-flex; gap: 4px; }
+.card ul { margin: 4px 0 0; padding-left: 16px; font-size: 12px; }
+.empty { padding: 24px var(--pad); color: var(--muted); }
+.history { padding: 12px var(--pad) 32px; border-top: 1px solid var(--line); }
+.history ol { margin: 6px 0 0; padding-left: 0; list-style: none; font-size: 13px; }
+.history li { padding: 2px 0; overflow-wrap: anywhere; }
+.toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 20; padding: 6px 12px;
+  border-radius: 6px; background: var(--panel); border: 1px solid var(--line); opacity: 0; transition: opacity .2s;
+  pointer-events: none; max-width: calc(100% - 32px); overflow-wrap: anywhere; }
+.toast.show { opacity: 1; }
+</style>
+
+<script id="board-data" type="application/json">{{BOARD_JSON}}</script>
+
+<header>
+  <h1 id="title"></h1>
+  <p class="brief" id="brief"></p>
+  <div id="state"></div>
+  <div class="strip" id="refs"></div>
+  <div id="board-notes"></div>
+</header>
+
+<div class="bar">
+  <span class="seg" role="group" aria-label="show">
+    <button data-filter="all" aria-pressed="true">All</button>
+    <button data-filter="pick">Picks</button>
+    <button data-filter="maybe">Maybe</button>
+    <button data-filter="unrated">Unrated</button>
+    <button data-filter="reject">Rejects</button>
+  </span>
+  <label><input type="checkbox" id="hide-rejects" checked> hide rejects</label>
+  <label>Size <input id="size" type="range" min="120" max="800" step="20"></label>
+  <span class="counts" id="counts"></span>
+</div>
+
+<main id="main"></main>
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+const B = JSON.parse(document.getElementById("board-data").textContent);
+const $ = (id) => document.getElementById(id);
+const el = (tag, props = {}, ...kids) => {
+  const e = Object.assign(document.createElement(tag), props);
+  e.append(...kids.filter((k) => k != null));
+  return e;
+};
+const store = {  // per-viewer settings; file:// storage can be missing or throw
+  get(k, d) { try { const v = localStorage.getItem("imagegen-board:" + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem("imagegen-board:" + k, JSON.stringify(v)); } catch {} },
+};
+const when = (t) => (t || "").replace("T", " ");
+const shq = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'";  // POSIX shell single quotes
+let toastTimer;
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), 2200);
+}
+function copy(text, msg) {
+  const done = () => toast(msg || "copied");
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done, () => fallback());
+  } else fallback();
+  function fallback() {
+    const ta = el("textarea", { value: text });
+    document.body.append(ta);
+    ta.select();
+    try { document.execCommand("copy"); done(); } catch { toast(text); }
+    ta.remove();
+  }
+}
+const noteList = (notes) => notes && notes.length
+  ? el("ul", { className: "notes" }, ...notes.map((n) => el("li", {}, el("span", { className: "who", textContent: n.author + ": " }), n.text)))
+  : null;
+
+/* ---------- header ---------- */
+$("title").textContent = `${B.title} · v${B.version}`;
+$("brief").textContent = B.brief || "";
+{
+  const s = B.state;
+  const kv = (k, ...v) => el("p", { className: "kv" }, el("b", { textContent: k }), ...v);
+  const params = Object.entries(s.params || {}).map(([k, v]) => `${k}=${v}`).join(" ");
+  $("state").append(...[
+    kv("prompt", s.prompt || "(none yet)"),
+    s.negative ? kv("negative", s.negative) : null,
+    kv("preset", s.preset + (params ? ` · ${params}` : "")),
+    s.palette.length ? kv("palette", ...s.palette.map((c) => el("span", {}, el("span", { className: "swatch", style: `background:${c}` }), c + " "))) : null,
+    s.cast.length ? kv("cast", s.cast.join(", ")) : null,
+  ].filter(Boolean));
+  const thumb = (src, cap, cls) => el("figure", {}, el("a", { href: src, target: "_blank" }, el("img", { src, loading: "lazy", alt: cap })),
+    el("figcaption", { className: cls || "" }, cap));
+  $("refs").append(
+    ...s.refs.map((r) => thumb(r.src, `ref ${r.name}${r.role ? ` (${r.role})` : ""}`)),
+    ...B.assets.map((a) => thumb(a.src, `${a.name} ${a.current}${a.stale ? " · stale" : ""}`, a.stale ? "stale" : "")));
+  if (B.notes.length) $("board-notes").append(el("h2", { textContent: "Board notes" }), noteList(B.notes));
+}
+
+/* ---------- passes, grouped by project version ---------- */
+const cards = [];
+const versions = new Map(B.versions.map((v) => [v.version, v]));
+const byVersion = new Map();
+for (const p of B.passes) {
+  if (!byVersion.has(p.version)) byVersion.set(p.version, []);
+  byVersion.get(p.version).push(p);
+}
+function card(im) {
+  const fig = el("figure", { className: "card" + (im.rating ? " " + im.rating : "") });
+  const label = im.id || im.path.split("/").pop();
+  const target = im.id || im.path;
+  const acts = el("span", { className: "acts" });
+  for (const r of ["pick", "maybe", "reject"]) {
+    const b = el("button", { textContent: r, title: `copy: gen project rate ... ${r}` });
+    b.addEventListener("click", () => copy(`gen project rate ${B.slug} ${r} ${shq(target)}`, `rate command for ${label} copied`));
+    acts.append(b);
+  }
+  const nb = el("button", { textContent: "note", title: "copy: gen project note ..." });
+  nb.addEventListener("click", () => copy(`gen project note ${B.slug} '...' --image ${shq(target)}`, `note command for ${label} copied`));
+  acts.append(nb);
+  fig.append(...[
+    el("a", { href: im.src, target: "_blank" }, el("img", { src: im.src, loading: "lazy", decoding: "async", alt: label })),
+    el("figcaption", {}, el("span", { className: "id", textContent: label }),
+      im.seed != null ? `seed ${im.seed}` : null,
+      im.rating ? el("span", { className: "badge " + im.rating, textContent: im.rating }) : null, acts),
+    noteList(im.notes)].filter(Boolean));
+  fig.dataset.rating = im.rating || "unrated";
+  cards.push(fig);
+  return fig;
+}
+const main = $("main");
+const shown = [...byVersion.keys()].sort((a, b) => b - a);
+for (const vn of shown) {
+  const v = versions.get(vn) || { version: vn, author: "?", note: "", changed: [] };
+  const sec = el("section", { className: "version" },
+    el("h2", { textContent: `v${v.version}` + (v.note ? ` · ${v.note}` : "") }),
+    el("div", { className: "muted", textContent: `${v.author} · ${when(v.at)}` + (v.changed.length ? ` · changed ${v.changed.join(", ")}` : "") }));
+  if (v.prompt) sec.append(el("details", {}, el("summary", { textContent: "project prompt at this version" }), el("p", { textContent: v.prompt })));
+  for (const p of byVersion.get(vn).slice().reverse()) {
+    const bits = [`${p.images.length} image(s)`, p.author, when(p.at)];
+    if (p.extra) bits.push(`extra: ${p.extra}`);
+    if (p.ref) bits.push(`from ref ${p.ref}`);
+    const h = el("h3", {}, el("b", { textContent: `Pass ${p.n}` }), " · " + bits.join(" · ") + " · ",
+      el("a", { href: p.sheet, target: "_blank", textContent: "contact sheet" }));
+    const pass = el("div", { className: "pass" }, h);
+    if (p.missing) pass.append(el("p", { className: "muted", textContent: "run folder is gone" }));
+    else pass.append(el("div", { className: "grid" }, ...p.images.map(card)));
+    sec.append(pass);
+  }
+  main.append(sec);
+}
+if (B.others.length) {
+  main.append(el("section", { className: "version" }, el("h2", { textContent: "Other rated images" }),
+    el("div", { className: "grid", style: "margin-top:8px" }, ...B.others.map(card))));
+}
+if (!B.passes.length && !B.others.length) {
+  main.append(el("p", { className: "empty", textContent: `No passes yet. Run one with: gen project gen ${B.slug}` }));
+}
+main.append(el("section", { className: "history" }, el("h2", { textContent: "History" }),
+  el("ol", {}, ...B.versions.slice().reverse().map((v) => el("li", {},
+    el("b", { textContent: `v${v.version} ` }), el("span", { className: "muted", textContent: `${when(v.at)} ${v.author} ` }),
+    v.note || "", v.changed.length ? el("span", { className: "muted", textContent: ` [${v.changed.join(", ")}]` }) : null)))));
+
+/* ---------- filter + size ---------- */
+const counts = B.counts;  // the same numbers gen project status and project_get report
+$("counts").textContent = `${counts.pick} pick · ${counts.maybe} maybe · ${counts.reject} reject · ${counts.unrated} unrated`;
+const state = { filter: store.get("filter", "all"), hideRejects: store.get("hideRejects", true), thumb: store.get("thumb", 240) };
+function apply() {
+  for (const c of cards) {
+    const r = c.dataset.rating;
+    c.hidden = state.filter === "all" ? (state.hideRejects && r === "reject") : r !== state.filter;
+  }
+  for (const b of document.querySelectorAll("[data-filter]")) b.setAttribute("aria-pressed", String(b.dataset.filter === state.filter));
+  $("hide-rejects").checked = state.hideRejects;
+  $("hide-rejects").disabled = state.filter !== "all";
+  document.documentElement.style.setProperty("--thumb", state.thumb + "px");
+  $("size").value = state.thumb;
+}
+for (const b of document.querySelectorAll("[data-filter]")) {
+  b.addEventListener("click", () => { state.filter = b.dataset.filter; store.set("filter", state.filter); apply(); });
+}
+$("hide-rejects").addEventListener("change", (e) => { state.hideRejects = e.target.checked; store.set("hideRejects", state.hideRejects); apply(); });
+$("size").addEventListener("input", (e) => { state.thumb = Number(e.target.value); store.set("thumb", state.thumb); apply(); });
+apply();
+</script>
