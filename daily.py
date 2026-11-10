@@ -3,10 +3,11 @@
 Settings live in config.toml under [daily]:
   preset   the wallpaper preset (wallpaper / wallpaper_ultrawide)
   count    images to make; the first becomes the wallpaper (the rest stay in the run folder)
-  cast     characters (gen char) in every daily; their descriptions lead the prompt, like a project pass
+  cast     characters (gen char) in every daily. Text-only presets: their descriptions lead the prompt, like a
+           project pass. With a ref (wallpaper_ref) the ref shows them and the descriptions are left out
   style    text added after the theme (optional)
   ref, ref_prompt  for an edit-only preset (wallpaper_ref): the image that shows the cast (CHARACTER:REF or a
-           path; default the first cast character's first ref), and text added to the prompt about it
+           path; default the first cast character's first ref), and the prompt template ({scene}, {name})
   themes   the scene for the day, picked at random (by the date: a re-run that day gets the same theme,
            with a new seed) from the ones the past daily runs haven't used in the last no_repeat_days
   no_repeat_days  at least this many days between two uses of a theme (default 7)
@@ -160,6 +161,25 @@ def compose(d: dict, theme: str) -> tuple[str, dict]:
     return projects.full_prompt({"prompt": theme, "snippets": {}}, d["style"], cast_text), used
 
 
+def ref_prompt(d: dict, theme: str, used: dict) -> str:
+    """The prompt when the ref image shows the character: the scene plus [daily] ref_prompt, without the
+    cast's text descriptions (written for text-only models, they say things like "plain white background,
+    standing", and with a ref the model then copies the ref's pose and white background).
+    ref_prompt may use {scene} and {name}; without {scene}, the scene goes first."""
+    scene = ", ".join(t.strip().strip(",") for t in (theme, d["style"]) if t and t.strip())
+    import characters
+    name = characters.load(next(iter(used))).get("title") or next(iter(used)) if used else "the character"
+    tmpl = (d["ref_prompt"] or "").strip()
+    if not tmpl:
+        return scene
+    if "{scene}" not in tmpl:
+        tmpl = "{scene}. " + tmpl
+    try:
+        return tmpl.format(scene=scene, name=name)
+    except (KeyError, IndexError, ValueError) as e:
+        raise ValueError(f"[daily] ref_prompt: only {{scene}} and {{name}} can be filled in ({e})") from None
+
+
 def plan(day: date | None = None, conf: dict | None = None) -> dict:
     day = day or date.today()
     d = settings(conf)
@@ -169,8 +189,7 @@ def plan(day: date | None = None, conf: dict | None = None) -> dict:
     ref = None
     if d["uses_ref"]:
         ref = str(find_ref(d))
-        if d["ref_prompt"].strip():
-            prompt = f"{prompt}. {d['ref_prompt'].strip()}"
+        prompt = ref_prompt(d, theme, used)
     return {"date": day.isoformat(), "theme": theme, "from": where, "prompt": prompt, "cast": used,
             "preset": d["preset"], "count": max(1, int(d["count"])), "ref": ref}
 

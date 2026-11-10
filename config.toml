@@ -66,7 +66,9 @@ post = ["remove_bg", "keep_largest", "trim"]
 [daily]
 preset = "wallpaper_ref"      # klein + the cast's ref image (on-model); "wallpaper" = SDXL from text only
 ref = ""                      # CHARACTER:REF, or an image path (relative = under output_dir); "" = first cast character's first ref
-ref_prompt = "exactly one character, the one from the reference image with the same design: huge round head, four curled face tentacles, amber eyes, small red bat wings, pale belly, short rounded tail. No other characters or creatures"
+# With a ref, the prompt is this ({scene} = theme + style, {name} = the cast character); the cast descriptions
+# are left out (they ask for a plain white background, so the model copied the ref as-is).
+ref_prompt = "A wide, finished storybook illustration that fills the whole frame: {scene}. Detailed background, scenery and lighting everywhere, no white or empty background, no border. The character from the reference image appears exactly once, as {name}, in a new pose that fits the scene, with the same design and colours and its short rounded tail. No other characters."
 count = 1                     # images per day; the first one becomes the wallpaper
 no_repeat_days = 7            # at least this many days between two uses of a theme (past daily runs)
 cast = ["tulu"]               # characters (gen char) in every daily; their descriptions lead the prompt

@@ -151,7 +151,7 @@ def test_bad_daily_settings(daily_conf):
 
 
 def test_prompt_puts_the_cast_first(tulu, daily_conf):
-    daily_conf(themes=["on a beach"], months={}, weekdays={}, style="soft light", ref_prompt="")
+    daily_conf(themes=["on a beach"], months={}, weekdays={}, style="soft light", preset="wallpaper")  # text only
     p = daily.plan(date(2026, 11, 10))
     assert p["prompt"] == f"{TULU}, on a beach, soft light"
     assert p["cast"] == {"tulu": 1}
@@ -166,7 +166,7 @@ def test_show(tulu, capsys):
     assert imagegen.main(["daily", "--show", "--date", "2026-12-24"]) == 0
     out = capsys.readouterr().out
     assert out.startswith("2026-12-24: ") and "(from dates.12-24)" in out and "tulu v1" in out
-    assert f"prompt:  {TULU}, " in out
+    assert "prompt:  A wide, finished storybook illustration" in out and "ref:     " in out
 
 
 # ---------------------------------------------------------------- runs
@@ -241,11 +241,23 @@ def test_default_preset_draws_from_the_cast_ref(tulu, comfy, on_c_drive, stub_ca
     assert (latent["width"], latent["height"]) == (1536, 864)  # 16:9, not the ref's 3:4
     assert (_node(wf, "ImageScale")["width"], _node(wf, "ImageScale")["height"]) == (3840, 2160)
     text = _node(wf, "CLIPTextEncode")["text"]
-    assert text.startswith(TULU + ", ") and "exactly one character" in text
+    assert text.startswith("A wide, finished storybook illustration that fills the whole frame: ")
+    assert "as lil tulu, in a new pose" in text and "no white or empty background" in text
+    assert TULU not in text  # the text description (plain background, standing...) would make it copy the ref
     [run] = imagegen.recent_runs(1)
     meta = json.loads((Path(run["run_dir"]) / "run.json").read_text())
     assert meta["daily"]["ref"].endswith("refs/v1-v1.png") and meta["edit"] is True
     assert len(_wallpaper_calls(stub_calls)) == 1
+
+
+def test_ref_prompt_template(tulu, daily_conf):
+    daily_conf(themes=["on a beach"], months={}, weekdays={}, style="soft light", ref_prompt="{name} is here")
+    assert daily.plan(date(2026, 11, 12))["prompt"] == "on a beach, soft light. lil tulu is here"
+    daily_conf(themes=["on a beach"], months={}, weekdays={}, style="", ref_prompt="")
+    assert daily.plan(date(2026, 11, 12))["prompt"] == "on a beach"
+    daily_conf(ref_prompt="{oops}")
+    with pytest.raises(ValueError, match="only {scene} and {name}"):
+        daily.plan(date(2026, 11, 12))
 
 
 def test_ref_choices(tulu, daily_conf, make_image):
