@@ -101,6 +101,7 @@ themes = [
 "06-24" = ["at the São João festival in Porto with a plastic hammer, balloons and fireworks over the river",
            "drumming at the San Juan drum festival on a palm-lined Venezuelan coast"]
 "07-05" = "celebrating Venezuelan Independence Day with yellow, blue and red flags below Mount Ávila"
+"10-12" = "at the María Lionza gathering on Sorte mountain in Venezuela, candles, drums and mist in the jungle night"
 "11-10" = "at a cosy Danish Mortens aften dinner with roast duck and candles"
 "11-11" = "roasting chestnuts at a São Martinho magusto bonfire in a Portuguese village"
 "11-18" = "playing a cuatro at a lively gaita party in Maracaibo"
@@ -109,6 +110,8 @@ themes = [
 "12-31" = "jumping off a chair at midnight on Danish New Year's Eve, fireworks over Copenhagen"
 "2027-01-22" = "at an Icelandic Þorrablót feast with hákarl, rye bread and singing"
 "2027-02-07" = "in a costume at Danish Fastelavn, hitting a candy barrel with a bat"
+"2027-05-27" = "dancing with the Diablos Danzantes de Yare in a red devil costume and painted mask, Corpus Christi in Venezuela"
+"2027-11-05" = "on Danish J-dag, the evening the Christmas beer arrives, a snowy pub street full of blue Santa hats"
 "2027-02-08" = ["handing out cream buns on Icelandic Bolludagur", "dancing in the Carnaval parade of El Callao, Venezuela"]
 
 [daily.months]
