@@ -31,8 +31,8 @@ def daily_conf(monkeypatch):
 
 
 @pytest.fixture
-def tulu(out_dir):
-    characters.new("tulu", "lil tulu", description=TULU)
+def tulu(out_dir, make_image):
+    characters.new("tulu", "lil tulu", description=TULU, refs={"v1": str(make_image("tulu.png", (600, 800)))})
     return "tulu"
 
 
@@ -151,7 +151,7 @@ def test_bad_daily_settings(daily_conf):
 
 
 def test_prompt_puts_the_cast_first(tulu, daily_conf):
-    daily_conf(themes=["on a beach"], months={}, weekdays={}, style="soft light")
+    daily_conf(themes=["on a beach"], months={}, weekdays={}, style="soft light", ref_prompt="")
     p = daily.plan(date(2026, 11, 10))
     assert p["prompt"] == f"{TULU}, on a beach, soft light"
     assert p["cast"] == {"tulu": 1}
@@ -171,7 +171,8 @@ def test_show(tulu, capsys):
 
 # ---------------------------------------------------------------- runs
 
-def test_daily_generates_and_sets_wallpaper(tulu, comfy, on_c_drive, stub_calls, out_dir, capsys):
+def test_daily_generates_and_sets_wallpaper(tulu, comfy, on_c_drive, stub_calls, out_dir, capsys, daily_conf):
+    daily_conf(preset="wallpaper")  # SDXL, text only
     assert imagegen.main(["daily", "--wait", "5"]) == 0
     [wf] = comfy.workflows()
     prompts = [n["inputs"]["text"] for n in wf.values() if n["class_type"] == "CLIPTextEncode"]
@@ -225,6 +226,50 @@ def test_no_set(tulu, comfy, stub_calls, out_dir):
     assert imagegen.main(["daily", "--no-set", "--wait", "5"]) == 0
     assert _wallpaper_calls(stub_calls) == []
     assert _log_lines(out_dir)[0].endswith("(not set)")
+
+
+def _node(wf, cls):
+    return next(n["inputs"] for n in wf.values() if n["class_type"] == cls)
+
+
+def test_default_preset_draws_from_the_cast_ref(tulu, comfy, on_c_drive, stub_calls, out_dir):
+    assert daily.settings()["preset"] == "wallpaper_ref"
+    assert imagegen.main(["daily", "--wait", "5"]) == 0
+    [wf] = comfy.workflows()
+    assert _node(wf, "LoadImage")["image"] in comfy.uploads  # the ref went up as the reference
+    latent = _node(wf, "EmptyFlux2LatentImage")
+    assert (latent["width"], latent["height"]) == (1344, 768)  # 16:9, not the ref's 3:4
+    assert (_node(wf, "ImageScale")["width"], _node(wf, "ImageScale")["height"]) == (3840, 2160)
+    text = _node(wf, "CLIPTextEncode")["text"]
+    assert text.startswith(TULU + ", ") and "exactly one character" in text
+    [run] = imagegen.recent_runs(1)
+    meta = json.loads((Path(run["run_dir"]) / "run.json").read_text())
+    assert meta["daily"]["ref"].endswith("refs/v1-v1.png") and meta["edit"] is True
+    assert len(_wallpaper_calls(stub_calls)) == 1
+
+
+def test_ref_choices(tulu, daily_conf, make_image):
+    daily_conf(ref="tulu:v1")
+    assert daily.plan(date(2026, 11, 12))["ref"].endswith("refs/v1-v1.png")
+    other = make_image("other.png")
+    daily_conf(ref=str(other))
+    assert daily.plan(date(2026, 11, 12))["ref"] == str(other)
+    daily_conf(ref="tulu:nope")
+    with pytest.raises(ValueError, match="no ref 'nope'"):
+        daily.plan(date(2026, 11, 12))
+    daily_conf(ref="/no/such.png")
+    with pytest.raises(FileNotFoundError):
+        daily.plan(date(2026, 11, 12))
+    daily_conf(ref="", cast=[])
+    with pytest.raises(ValueError, match="needs a reference image"):
+        daily.plan(date(2026, 11, 12))
+
+
+def test_character_without_ref_fails_and_is_logged(out_dir, comfy, on_c_drive, stub_calls):
+    characters.new("tulu", "lil tulu", description=TULU)
+    assert imagegen.main(["daily", "--wait", "5"]) == 1
+    assert comfy.workflows() == [] and _wallpaper_calls(stub_calls) == []
+    assert "has no ref image" in _log_lines(out_dir)[0]
 
 
 # ---------------------------------------------------------------- windows/daily-task.sh

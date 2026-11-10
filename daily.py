@@ -5,6 +5,8 @@ Settings live in config.toml under [daily]:
   count    images to make; the first becomes the wallpaper (the rest stay in the run folder)
   cast     characters (gen char) in every daily; their descriptions lead the prompt, like a project pass
   style    text added after the theme (optional)
+  ref, ref_prompt  for an edit-only preset (wallpaper_ref): the image that shows the cast (CHARACTER:REF or a
+           path; default the first cast character's first ref), and text added to the prompt about it
   themes   the scene for the day, picked at random (by the date: a re-run that day gets the same theme,
            with a new seed) from the ones the past daily runs haven't used in the last no_repeat_days
   no_repeat_days  at least this many days between two uses of a theme (default 7)
@@ -25,6 +27,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 import sys
 import tomllib
 from datetime import date, datetime, timedelta
@@ -39,9 +42,8 @@ DEFAULT_WAIT = 600  # seconds for ComfyUI to come up: a scheduled run may have j
 
 def settings(conf: dict | None = None) -> dict:
     conf = conf or imagegen.load_config()
-    d = {"preset": "wallpaper", "count": 1, "cast": [], "style": "", "no_repeat_days": 7, "themes": [], "dates": {}, "months": {},
-         "weekdays": {},
-         **conf.get("daily", {})}
+    d = {"preset": "wallpaper", "count": 1, "cast": [], "style": "", "no_repeat_days": 7, "themes": [],
+         "dates": {}, "months": {}, "weekdays": {}, "ref": "", "ref_prompt": "", **conf.get("daily", {})}
     for key, names in (("months", MONTHS), ("weekdays", DAYS)):
         bad = [k for k in d[key] if k not in names]
         if bad:
@@ -51,7 +53,37 @@ def settings(conf: dict | None = None) -> dict:
         raise ValueError(f"[daily.dates]: {', '.join(bad)} is not \"MM-DD\" or \"YYYY-MM-DD\"")
     if d["preset"] not in conf["presets"]:
         raise ValueError(f"[daily] preset '{d['preset']}' is not a preset ({', '.join(conf['presets'])})")
+    p = conf["presets"][d["preset"]]
+    if "workflow" not in p and "edit_workflow" not in p:
+        raise ValueError(f"[daily] preset '{d['preset']}' has no workflow")
+    d["uses_ref"] = "workflow" not in p  # an edit-only preset draws the cast from a ref image
     return d
+
+
+def find_ref(d: dict) -> Path:
+    """The reference image for an edit preset: [daily] ref (CHARACTER:REF or a path), else the first cast
+    character's first ref."""
+    import characters
+    ref = (d["ref"] or "").strip()
+    if ref and ":" in ref and not ref.startswith(("/", "~")) and not re.match(r"^[A-Za-z]:[\\/]", ref):
+        name, _, r = ref.partition(":")
+    elif ref:
+        path = imagegen.to_linux_path(ref)
+        if not path.is_file():
+            raise FileNotFoundError(f"[daily] ref: no file {path}")
+        return path
+    else:
+        cast = _pool(d["cast"])
+        if not cast:
+            raise ValueError(f"[daily] preset '{d['preset']}' needs a reference image: set cast or ref")
+        name, r = cast[0], None
+    refs = characters.state_at(characters.load(name))["refs"]
+    if not refs:
+        raise ValueError(f"character '{name}' has no ref image: gen char set {name} --ref NAME=PATH")
+    r = r or next(iter(refs))
+    if r not in refs:
+        raise ValueError(f"character '{name}' has no ref '{r}' (refs: {', '.join(refs)})")
+    return characters.char_dir(name) / refs[r]["file"]
 
 
 def _date_key_ok(k: str) -> bool:
@@ -129,8 +161,13 @@ def plan(day: date | None = None, conf: dict | None = None) -> dict:
     conf = conf or imagegen.load_config()
     theme, where = pick_theme(d, day, recent_themes(conf, day, max(1, int(d["no_repeat_days"])) - 1))
     prompt, used = compose(d, theme)
+    ref = None
+    if d["uses_ref"]:
+        ref = str(find_ref(d))
+        if d["ref_prompt"].strip():
+            prompt = f"{prompt}. {d['ref_prompt'].strip()}"
     return {"date": day.isoformat(), "theme": theme, "from": where, "prompt": prompt, "cast": used,
-            "preset": d["preset"], "count": max(1, int(d["count"]))}
+            "preset": d["preset"], "count": max(1, int(d["count"])), "ref": ref}
 
 
 def log_file(conf: dict | None = None) -> Path:
@@ -159,12 +196,13 @@ def run(day: date | None = None, wait: float = DEFAULT_WAIT, set_wallpaper: bool
         conf = imagegen.load_config()
         p = plan(day, conf)
         imagegen.Comfy(conf["comfy_url"]).wait_ready(timeout=wait)  # generate() then finds it up
-        run = imagegen.generate(p["prompt"], p["preset"], p["count"], label=f"daily-{imagegen.slug(p['theme'], 30)}")
+        run = imagegen.generate(p["prompt"], p["preset"], p["count"], label=f"daily-{imagegen.slug(p['theme'], 30)}",
+                                source_image=p["ref"], edit=p["ref"] is not None)
         if not run["images"]:
             raise RuntimeError(f"the run made no images ({run['run_dir']})")
         rf = Path(run["run_dir"]) / "run.json"
         meta = json.loads(rf.read_text())
-        meta["daily"] = run["daily"] = {k: p[k] for k in ("date", "theme", "from", "cast")}
+        meta["daily"] = run["daily"] = {k: p[k] for k in ("date", "theme", "from", "cast", "ref")}
         rf.write_text(json.dumps(meta, indent=2))
         image = run["images"][0]["path"]
         run["wallpaper"] = imagegen.set_wallpaper(image) if set_wallpaper else None
@@ -195,6 +233,8 @@ def main(argv: list[str]) -> int:
         p = plan(a.date)
         print(f"{p['date']}: {p['theme']}  (from {p['from']})")
         print(f"preset:  {p['preset']} x{p['count']}")
+        if p["ref"]:
+            print(f"ref:     {p['ref']}")
         if p["cast"]:
             print("cast:    " + ", ".join(f"{c} v{v}" for c, v in p["cast"].items()))
         print(f"prompt:  {p['prompt']}")

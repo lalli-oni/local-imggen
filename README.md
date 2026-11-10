@@ -41,7 +41,8 @@ image after a model change is slower. `queue` is the wait before ComfyUI started
 
 Presets: `draft` (1024², quick), `wallpaper` (16:9, upscaled to 3840x2160), `wallpaper_ultrawide`
 (21:9, upscaled to 3440x1440), `icon` (centered object, background removed). Opt-in: `kontext` (edit only),
-`klein` and `qwen` (text-to-image and `gen edit -p ...`; no `gen vary`).
+`klein` and `qwen` (text-to-image and `gen edit -p ...`; no `gen vary`), `wallpaper_ref` (klein: a 4K 16:9
+wallpaper of the character in a ref image, `gen edit REF "scene" -p wallpaper_ref`; `gen daily` uses it).
 
 ## MCP tools (Claude desktop app)
 
