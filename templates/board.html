@@ -8,7 +8,8 @@
   below; rebuilt after every project change, rating and note. Static and self-contained (file://):
   it cannot write, so its pick / maybe / reject / note buttons copy the `gen project` command,
   and Claude rates through the MCP project_rate tool.
-  Passes are grouped by the project version they were made from, newest first.
+  Passes are grouped by the project version they were made from, newest first. The History button (h)
+  lists every version, including the ones without a pass.
 -->
 <style>
 :root {
@@ -71,7 +72,13 @@ section.version > details p { margin: 4px 0 0; overflow-wrap: anywhere; color: v
 .card figcaption .acts { margin-left: auto; display: inline-flex; gap: 4px; }
 .card ul { margin: 4px 0 0; padding-left: 16px; font-size: 12px; }
 .empty { padding: 24px var(--pad); color: var(--muted); }
-.history { padding: 12px var(--pad) 32px; border-top: 1px solid var(--line); }
+.counts { margin-right: auto; }
+dialog.history { width: min(720px, calc(100% - 32px)); max-height: calc(100% - 64px); padding: 0;
+  background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 10px; }
+dialog.history::backdrop { background: rgba(0, 0, 0, .6); }
+.history .head { position: sticky; top: 0; display: flex; align-items: center; justify-content: space-between;
+  padding: 12px var(--pad); background: var(--panel); border-bottom: 1px solid var(--line); }
+.history ol { padding: 8px var(--pad) 16px !important; }
 .history ol { margin: 6px 0 0; padding-left: 0; list-style: none; font-size: 13px; }
 .history li { padding: 2px 0; overflow-wrap: anywhere; }
 .toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 20; padding: 6px 12px;
@@ -101,9 +108,14 @@ section.version > details p { margin: 4px 0 0; overflow-wrap: anywhere; color: v
   <label><input type="checkbox" id="hide-rejects" checked> hide rejects</label>
   <label>Size <input id="size" type="range" min="120" max="800" step="20"></label>
   <span class="counts" id="counts"></span>
+  <button id="history-open" title="Every project version, including the ones without a pass (h)">History</button>
 </div>
 
 <main id="main"></main>
+<dialog class="history" id="history" aria-labelledby="history-title">
+  <div class="head"><h2 id="history-title">History</h2><button id="history-close" title="Close (Esc)">Close</button></div>
+  <ol></ol>
+</dialog>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -227,10 +239,17 @@ if (B.others.length) {
 if (!B.passes.length && !B.others.length) {
   main.append(el("p", { className: "empty", textContent: `No passes yet. Run one with: gen project gen ${B.slug}` }));
 }
-main.append(el("section", { className: "history" }, el("h2", { textContent: "History" }),
-  el("ol", {}, ...B.versions.slice().reverse().map((v) => el("li", {},
-    el("b", { textContent: `v${v.version} ` }), el("span", { className: "muted", textContent: `${when(v.at)} ${v.author} ` }),
-    v.note || "", v.changed.length ? el("span", { className: "muted", textContent: ` [${v.changed.join(", ")}]` }) : null)))));
+/* ---------- history popup: every version, also the ones without a pass (params, promote, keep) ---------- */
+$("history").querySelector("ol").append(...B.versions.slice().reverse().map((v) => el("li", {},
+  el("b", { textContent: `v${v.version} ` }), el("span", { className: "muted", textContent: `${when(v.at)} ${v.author} ` }),
+  v.note || "", v.changed.length ? el("span", { className: "muted", textContent: ` [${v.changed.join(", ")}]` }) : null)));
+$("history-open").textContent = `History (${B.versions.length})`;
+$("history-open").addEventListener("click", () => $("history").showModal());
+$("history-close").addEventListener("click", () => $("history").close());
+$("history").addEventListener("click", (e) => { if (e.target === e.currentTarget) e.currentTarget.close(); });  // backdrop
+document.addEventListener("keydown", (e) => {
+  if (e.key === "h" && !e.ctrlKey && !e.metaKey && !e.altKey && !$("history").open) $("history").showModal();
+});
 
 /* ---------- filter + size ---------- */
 const counts = B.counts;  // the same numbers gen project status and project_get report

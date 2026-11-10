@@ -28,7 +28,7 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
 - `boards.py`: the board (#7) is the project's triage view, not a separate object. `board.json` next to
   project.json holds pick/maybe/reject ratings and notes per image (key: path relative to output_dir; images
   are addressed as `P:N`, pass P image N) plus a log; rating never makes a project version. `projects.save()`
-  rebuilds `<project>/index.html` from `templates/board.html` (passes grouped by version; buttons copy the
+  rebuilds `<project>/index.html` from `templates/board.html` (passes grouped by version, History popup; buttons copy the
   `gen project rate|note` command). `gen project rate|note|board`, MCP `project_rate`/`project_note`;
   `project_get` returns `board` and the ratings/notes in `new_since_last_look`.
 - `doctor.py`: read-only health checks behind `gen doctor` and the MCP `doctor` tool
