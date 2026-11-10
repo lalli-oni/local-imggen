@@ -119,6 +119,7 @@ const store = {  // per-viewer settings; file:// storage can be missing or throw
   get(k, d) { try { const v = localStorage.getItem("imagegen-board:" + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem("imagegen-board:" + k, JSON.stringify(v)); } catch {} },
 };
+const when = (t) => (t || "").replace("T", " ");
 const shq = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'";  // POSIX shell single quotes
 let toastTimer;
 function toast(msg) {
@@ -152,18 +153,18 @@ $("brief").textContent = B.brief || "";
   const s = B.state;
   const kv = (k, ...v) => el("p", { className: "kv" }, el("b", { textContent: k }), ...v);
   const params = Object.entries(s.params || {}).map(([k, v]) => `${k}=${v}`).join(" ");
-  $("state").append(
+  $("state").append(...[
     kv("prompt", s.prompt || "(none yet)"),
     s.negative ? kv("negative", s.negative) : null,
     kv("preset", s.preset + (params ? ` · ${params}` : "")),
     s.palette.length ? kv("palette", ...s.palette.map((c) => el("span", {}, el("span", { className: "swatch", style: `background:${c}` }), c + " "))) : null,
     s.cast.length ? kv("cast", s.cast.join(", ")) : null,
-  );
+  ].filter(Boolean));
   const thumb = (src, cap, cls) => el("figure", {}, el("a", { href: src, target: "_blank" }, el("img", { src, loading: "lazy", alt: cap })),
     el("figcaption", { className: cls || "" }, cap));
   $("refs").append(
     ...s.refs.map((r) => thumb(r.src, `ref ${r.name}${r.role ? ` (${r.role})` : ""}`)),
-    ...B.assets.map((a) => thumb(a.src, `${a.name} v${a.current}${a.stale ? " · stale" : ""}`, a.stale ? "stale" : "")));
+    ...B.assets.map((a) => thumb(a.src, `${a.name} ${a.current}${a.stale ? " · stale" : ""}`, a.stale ? "stale" : "")));
   if (B.notes.length) $("board-notes").append(el("h2", { textContent: "Board notes" }), noteList(B.notes));
 }
 
@@ -188,12 +189,12 @@ function card(im) {
   const nb = el("button", { textContent: "note", title: "copy: gen project note ..." });
   nb.addEventListener("click", () => copy(`gen project note ${B.slug} '...' --image ${shq(target)}`, `note command for ${label} copied`));
   acts.append(nb);
-  fig.append(
+  fig.append(...[
     el("a", { href: im.src, target: "_blank" }, el("img", { src: im.src, loading: "lazy", decoding: "async", alt: label })),
     el("figcaption", {}, el("span", { className: "id", textContent: label }),
       im.seed != null ? `seed ${im.seed}` : null,
       im.rating ? el("span", { className: "badge " + im.rating, textContent: im.rating }) : null, acts),
-    noteList(im.notes));
+    noteList(im.notes)].filter(Boolean));
   fig.dataset.rating = im.rating || "unrated";
   cards.push(fig);
   return fig;
@@ -204,10 +205,10 @@ for (const vn of shown) {
   const v = versions.get(vn) || { version: vn, author: "?", note: "", changed: [] };
   const sec = el("section", { className: "version" },
     el("h2", { textContent: `v${v.version}` + (v.note ? ` · ${v.note}` : "") }),
-    el("div", { className: "muted", textContent: `${v.author} · ${v.at || ""}` + (v.changed.length ? ` · changed ${v.changed.join(", ")}` : "") }));
+    el("div", { className: "muted", textContent: `${v.author} · ${when(v.at)}` + (v.changed.length ? ` · changed ${v.changed.join(", ")}` : "") }));
   if (v.prompt) sec.append(el("details", {}, el("summary", { textContent: "project prompt at this version" }), el("p", { textContent: v.prompt })));
   for (const p of byVersion.get(vn).slice().reverse()) {
-    const bits = [`${p.images.length} image(s)`, p.author, p.at];
+    const bits = [`${p.images.length} image(s)`, p.author, when(p.at)];
     if (p.extra) bits.push(`extra: ${p.extra}`);
     if (p.ref) bits.push(`from ref ${p.ref}`);
     const h = el("h3", {}, el("b", { textContent: `Pass ${p.n}` }), " · " + bits.join(" · ") + " · ",
@@ -228,12 +229,11 @@ if (!B.passes.length && !B.others.length) {
 }
 main.append(el("section", { className: "history" }, el("h2", { textContent: "History" }),
   el("ol", {}, ...B.versions.slice().reverse().map((v) => el("li", {},
-    el("b", { textContent: `v${v.version} ` }), el("span", { className: "muted", textContent: `${v.at} ${v.author} ` }),
+    el("b", { textContent: `v${v.version} ` }), el("span", { className: "muted", textContent: `${when(v.at)} ${v.author} ` }),
     v.note || "", v.changed.length ? el("span", { className: "muted", textContent: ` [${v.changed.join(", ")}]` }) : null)))));
 
 /* ---------- filter + size ---------- */
-const counts = { pick: 0, maybe: 0, reject: 0, unrated: 0 };
-for (const c of cards) counts[c.dataset.rating]++;
+const counts = B.counts;  // the same numbers gen project status and project_get report
 $("counts").textContent = `${counts.pick} pick · ${counts.maybe} maybe · ${counts.reject} reject · ${counts.unrated} unrated`;
 const state = { filter: store.get("filter", "all"), hideRejects: store.get("hideRejects", true), thumb: store.get("thumb", 240) };
 function apply() {

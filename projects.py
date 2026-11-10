@@ -608,7 +608,7 @@ def _slugify(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
 
 
-def summary(slug: str, mark_seen: str | None = None, history: int = 5) -> dict:
+def summary(slug: str, mark_seen: str | None = None, history: int = 5, board: bool = True) -> dict:
     """Everything needed to talk about a project: state, assets (with stale flags), recent history.
 
     mark_seen = a reader name ("claude"): "new_since_last_look" lists the versions and passes added
@@ -653,7 +653,7 @@ def summary(slug: str, mark_seen: str | None = None, history: int = 5) -> dict:
         "recent_versions": [{k: v[k] for k in ("version", "at", "author", "note", "changed")}
                             for v in proj["versions"][-history:]],
         "recent_passes": [{"n": i, **p} for i, p in enumerate(proj["passes"], 1)][-history:],
-        "board": boards.summary(proj),
+        **({"board": boards.summary(proj)} if board else {}),
     }
     if mark_seen:
         # kept out of project.json so that reading a project never rewrites its state

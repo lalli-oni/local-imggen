@@ -1,6 +1,7 @@
 """mcp_server.py tools: called directly, plus through the MCP layer for listing and result conversion."""
 import asyncio
 import time
+from pathlib import Path
 
 import pytest
 
@@ -166,5 +167,7 @@ def test_board_tools(comfy):
     assert s["board"]["counts"]["pick"] == 1 and s["board"]["notes"] == ["claude: try dusk next"]
     assert [e["action"] for e in s["new_since_last_look"]["board"]] == ["rate", "note"]
     assert len(got) == 2  # summary + the pick's thumbnail
+    Path(s["board"]["images"][0]["image"]).unlink()
+    assert len(mcp_server.project_get("fox", preview=True)) == 1  # a pick whose file is gone is skipped
     with pytest.raises(ValueError, match="rating must be"):
         mcp_server.project_rate("fox", ["1:1"], "great")

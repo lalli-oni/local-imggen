@@ -19,6 +19,7 @@ import html
 import json
 import os
 import re
+import threading
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
@@ -58,11 +59,12 @@ def load(slug: str) -> dict:
     return b
 
 
-def _key(path: Path) -> str:
-    """How board.json names an image: relative to output_dir when inside it, else absolute."""
+def _key(path: Path, root: Path | None = None) -> str:
+    """How board.json names an image: relative to output_dir when inside it, else absolute.
+    root: output_dir, resolved (pass it when naming many images: resolving is slow on /mnt/c)."""
     p = path.resolve()
     try:
-        return p.relative_to(_root().resolve()).as_posix()
+        return p.relative_to(root or _root().resolve()).as_posix()
     except ValueError:
         return str(p)
 
@@ -96,16 +98,22 @@ def resolve(proj: dict, image: str) -> tuple[str, str | None]:
         raise FileNotFoundError(path)
     if path.suffix.lower() not in projects.IMAGE_EXTS:
         raise ValueError(f"{path.name}: not an image ({', '.join(sorted(projects.IMAGE_EXTS))})")
-    key = _key(path)
-    return key, pass_ids(proj).get(key)
+    return _key(path), None  # rate() and note() fill in the pass id
 
 
 def pass_ids(proj: dict) -> dict[str, str]:
     """{board key: "P:N"} for every image of every pass whose run folder still exists."""
-    out = {}
-    for pi, p in enumerate(proj["passes"], 1):
-        for ni, im in enumerate(_pass_images(p), 1):
-            out[_key(Path(im["path"]))] = f"{pi}:{ni}"
+    root = _root().resolve()
+    return {_key(Path(im["path"]), root): f"{pi}:{ni}"
+            for pi, p in enumerate(proj["passes"], 1) for ni, im in enumerate(_pass_images(p), 1)}
+
+
+def _resolve_all(proj: dict, images: list[str]) -> list[tuple[str, str | None]]:
+    """resolve() for each image, all checked before anything is written; paths of pass images get their id."""
+    out = [resolve(proj, im) for im in images]
+    if any(pid is None for _, pid in out):
+        ids = pass_ids(proj)
+        out = [(k, pid or ids.get(k)) for k, pid in out]
     return out
 
 
@@ -121,21 +129,29 @@ def rate(slug: str, images: list[str], rating: str, note: str | None = None, aut
         raise ValueError("no images given")
     with projects.locked(slug):
         proj = projects.load(slug)
-        targets = [resolve(proj, im) for im in images]  # all valid before any is written
+        targets = _resolve_all(proj, images)  # all valid before any is written
         b = load(slug)
+        note = (note or "").strip()
         out = []
         for key, pid in targets:
-            e = b["images"].setdefault(key, {"notes": []})
+            e = b["images"].get(key) or {"notes": []}
             if rating == "clear":
+                if not e.get("rating") and not note:  # nothing to clear: no entry, no log line
+                    out.append({"image": str(_abs(key)), **({"id": pid} if pid else {}), "rating": None})
+                    continue
                 for k in ("rating", "rated_by", "rated_at"):
                     e.pop(k, None)
             else:
                 e.update(rating=rating, rated_by=author, rated_at=_now())
-            if note and note.strip():
-                e["notes"].append({"author": author, "text": note.strip(), "at": _now()})
+            if note:
+                e["notes"].append({"author": author, "text": note, "at": _now()})
+            if e.get("rating") or e["notes"]:
+                b["images"][key] = e
+            else:
+                b["images"].pop(key, None)
             b["log"].append({"at": _now(), "author": author, "action": "rate", "image": key,
                              **({"id": pid} if pid else {}), "rating": rating,
-                             **({"note": note.strip()} if note and note.strip() else {})})
+                             **({"note": note} if note else {})})
             out.append({"image": str(_abs(key)), **({"id": pid} if pid else {}), "rating": e.get("rating")})
         _save(slug, b)
         write_page(slug, proj, b)
@@ -155,7 +171,7 @@ def note(slug: str, text: str, image: str | None = None, author: str = "human") 
             b["notes"].append(n)
             entry = {"at": n["at"], "author": author, "action": "note", "note": text}
         else:
-            key, pid = resolve(proj, image)
+            [(key, pid)] = _resolve_all(proj, [image])
             b["images"].setdefault(key, {"notes": []})["notes"].append(n)
             entry = {"at": n["at"], "author": author, "action": "note", "image": key,
                      **({"id": pid} if pid else {}), "note": text}
@@ -165,15 +181,22 @@ def note(slug: str, text: str, image: str | None = None, author: str = "human") 
     return entry
 
 
+def counts(b: dict, ids: dict) -> dict:
+    """Ratings of every rated image (pass or not), and the pass images nobody rated yet."""
+    out = {r: 0 for r in RATINGS}
+    for e in b["images"].values():
+        if e.get("rating") in out:
+            out[e["rating"]] += 1
+    out["unrated"] = sum(1 for k in ids if not b["images"].get(k, {}).get("rating"))
+    return out
+
+
 def summary(proj: dict, notes: int = 10) -> dict:
     """The board part of projects.summary(): counts, every rated or noted image, recent board notes."""
     b = load(proj["slug"])
     ids = pass_ids(proj)
-    counts = {r: 0 for r in RATINGS}
     images = []
     for key, e in b["images"].items():
-        if e.get("rating") in counts:
-            counts[e["rating"]] += 1
         if not e.get("rating") and not e.get("notes"):
             continue
         pid = ids.get(key)
@@ -184,8 +207,7 @@ def summary(proj: dict, notes: int = 10) -> dict:
                        **({"notes": [f"{n['author']}: {n['text']}" for n in e["notes"]]} if e.get("notes") else {})})
     order = {"pick": 0, "maybe": 1, "reject": 2, None: 3}
     images.sort(key=lambda x: (order[x.get("rating")], -x.get("version", 0)))
-    counts["unrated"] = sum(1 for k in ids if not b["images"].get(k, {}).get("rating"))
-    return {"page": str(page_file(proj["slug"])), "counts": counts, "images": images,
+    return {"page": str(page_file(proj["slug"])), "counts": counts(b, ids), "images": images,
             "notes": [f"{n['author']}: {n['text']}" for n in b["notes"][-notes:]]}
 
 
@@ -200,8 +222,10 @@ def page_data(proj: dict, b: dict) -> dict:
     """Everything templates/board.html shows, with image paths relative to the page."""
     slug = proj["slug"]
     d = projects.project_dir(slug)
-    s = projects.summary(slug, history=len(proj["versions"]))
+    s = projects.summary(slug, history=1, board=False)
     st = s["state"]
+    root = _root().resolve()
+    ids = {}
     passes = []
     for pi, p in enumerate(proj["passes"], 1):
         try:
@@ -211,16 +235,17 @@ def page_data(proj: dict, b: dict) -> dict:
         ims = []
         for ni, im in enumerate((run or {}).get("images") or [], 1):
             path = Path(im["path"])
-            e = b["images"].get(_key(path), {})
+            key = _key(path, root)
+            ids[key] = f"{pi}:{ni}"
+            e = b["images"].get(key, {})
             ims.append({"id": f"{pi}:{ni}", "src": _url(path, d), "path": str(path), "seed": im.get("seed"),
                         "rating": e.get("rating"), "notes": e.get("notes", [])})
         passes.append({"n": pi, "version": p["version"], "at": p["at"], "author": p["author"],
                        "extra": p.get("extra"), "ref": p.get("ref"), "chars": p.get("chars"),
                        "prompt": (run or {}).get("prompt"), "missing": run is None,
                        "sheet": _url(Path(p["run_dir"]) / "index.html", d), "images": ims})
-    in_pass = {i["path"] for p in passes for i in p["images"]}
     others = [{"src": _url(_abs(k), d), "path": str(_abs(k)), "rating": e.get("rating"), "notes": e.get("notes", [])}
-              for k, e in b["images"].items() if str(_abs(k)) not in in_pass and (e.get("rating") or e.get("notes"))]
+              for k, e in b["images"].items() if k not in ids and (e.get("rating") or e.get("notes"))]
     versions = [{"version": v["version"], "at": v["at"], "author": v["author"], "note": v["note"],
                  "changed": v["changed"], "prompt": projects.full_prompt(v["state"]),
                  "negative": v["state"].get("negative"), "preset": v["state"].get("preset")}
@@ -233,7 +258,7 @@ def page_data(proj: dict, b: dict) -> dict:
                   "refs": [{"name": n, "role": r["role"], "src": _url(Path(r["path"]), d)} for n, r in st["refs"].items()]},
         "assets": [{"name": n, "current": a["current"], "stale": a["stale"], "reasons": a["stale_reasons"],
                     "src": _url(Path(a["file"]), d)} for n, a in s["assets"].items()],
-        "versions": versions, "passes": passes, "others": others, "notes": b["notes"],
+        "versions": versions, "passes": passes, "others": others, "notes": b["notes"], "counts": counts(b, ids),
     }
 
 
@@ -245,7 +270,10 @@ def write_page(slug: str, proj: dict | None = None, b: dict | None = None) -> Pa
              "BOARD_JSON": json.dumps(data, ensure_ascii=False).replace("<", "\\u003c")}
     page = re.sub(r"\{\{(TITLE|BOARD_JSON)\}\}", lambda m: fills[m.group(1)], TEMPLATE.read_text(encoding="utf-8"))
     out = page_file(slug)
-    out.write_text(page, encoding="utf-8")
+    # tmp + replace, like project.json: a browser reload or a second writer never sees half a page
+    tmp = out.with_name(f".{out.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    tmp.write_text(page, encoding="utf-8")
+    os.replace(tmp, out)
     return out
 
 

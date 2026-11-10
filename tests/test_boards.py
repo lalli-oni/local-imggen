@@ -163,3 +163,34 @@ def test_cli(proj, capsys, stub_calls):
     assert any(c.startswith("explorer.exe") for c in stub_calls())
     with pytest.raises(SystemExit):
         projects.main(["rate", proj, "love", "1:1"])
+
+
+def test_clear_on_unrated_image_changes_nothing(proj):
+    assert boards.rate(proj, ["1:1"], "clear") == [{"image": str(pass_image(proj, 1, 1)), "id": "1:1", "rating": None}]
+    b = boards.load(proj)
+    assert b["images"] == {} and b["log"] == []
+    boards.rate(proj, ["1:1"], "pick")
+    boards.rate(proj, ["1:1"], "clear")
+    assert boards.load(proj)["images"] == {}  # an entry with no rating and no notes is dropped
+
+
+def test_path_to_a_pass_image_gets_its_id(proj):
+    assert boards.rate(proj, [str(pass_image(proj, 2, 1))], "maybe")[0]["id"] == "2:1"
+    assert boards.note(proj, "hm", str(pass_image(proj, 1, 2)))["id"] == "1:2"
+
+
+def test_page_and_summary_counts_agree(proj, make_image):
+    boards.rate(proj, ["1:1"], "pick")
+    boards.rate(proj, [str(make_image("outside.png"))], "reject")
+    boards.note(proj, "noted only", str(make_image("other.png")))
+    assert page_data(proj)["counts"] == projects.summary(proj)["board"]["counts"] == \
+        {"pick": 1, "maybe": 0, "reject": 1, "unrated": 3}
+    assert len(page_data(proj)["others"]) == 2
+
+
+def test_character_change_rebuilds_the_board(out_dir):
+    import characters
+    characters.new("tulu", description="chibi cthulhu")
+    projects.new("wall", prompt="a wallpaper", cast={"tulu": None})
+    characters.set_state("tulu", "greener", description="green chibi cthulhu")
+    assert page_data("wall")["state"]["prompt"].startswith("green chibi cthulhu")

@@ -44,6 +44,7 @@ def test_renders_versions_passes_and_notes(board):
     assert "go warmer" in page.locator("#board-notes").inner_text()
     assert "the light!" in page.locator(".card.pick").inner_text()
     assert "1 pick · 1 maybe · 1 reject · 2 unrated" in page.locator("#counts").inner_text()
+    assert "null" not in page.locator("body").inner_text()  # optional parts are left out, not printed
     assert not errors, errors
 
 

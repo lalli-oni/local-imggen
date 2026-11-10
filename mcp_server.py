@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import os
 import threading
 import time
 import uuid
@@ -227,7 +228,8 @@ def project_get(slug: str, preview: bool = False, history: int = 5) -> list:
     if preview:
         out += [_thumb(r["path"]) for r in s["state"]["refs"].values()]
         out += [_thumb(a["file"]) for a in s["assets"].values()]
-        out += [_thumb(im["image"]) for im in s["board"]["images"] if im.get("rating") == "pick"][:8]
+        picks = [im["image"] for im in s["board"]["images"] if im.get("rating") == "pick"]
+        out += [_thumb(p) for p in [p for p in picks if os.path.isfile(p)][:8]]  # a pick's run may be gone
     return out
 
 
