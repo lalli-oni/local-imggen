@@ -59,3 +59,18 @@ def test_filters(board):
     page.locator("#hide-rejects").uncheck()
     assert len(visible_ids(page)) == 5
     assert not errors, errors
+
+
+def test_history_is_a_popup(board):
+    page, errors = board
+    assert not page.locator("#history").is_visible()
+    assert page.locator("#history-open").inner_text() == "History (2)"
+    page.locator("#history-open").click()
+    assert page.locator("#history li").all_inner_texts()[0].startswith("v2 ")
+    page.keyboard.press("Escape")
+    assert not page.locator("#history").is_visible()
+    page.keyboard.press("h")
+    assert page.locator("#history").is_visible()
+    page.locator("#history-close").click()
+    assert not page.locator("#history").is_visible()
+    assert not errors, errors
