@@ -62,10 +62,11 @@ post = ["remove_bg", "keep_largest", "trim"]
 
 # gen daily (#3): one new wallpaper a day, set as the desktop background (old ones stay in output_dir).
 # Schedule it: windows/daily-task.sh on [--at 06:00]. Preview a day: gen daily --show [--date 2026-12-24].
-# Log: <output_dir>/daily.log. Each theme comes up once per round, in an order the date decides.
+# Log: <output_dir>/daily.log. Themes are picked at random from the ones not used recently.
 [daily]
 preset = "wallpaper"          # or wallpaper_ultrawide
 count = 1                     # images per day; the first one becomes the wallpaper
+no_repeat_days = 7            # at least this many days between two uses of a theme (past daily runs)
 cast = ["tulu"]               # characters (gen char) in every daily; their descriptions lead the prompt
 style = "cosy whimsical storybook scene, soft light"
 themes = [

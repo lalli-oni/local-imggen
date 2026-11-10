@@ -62,37 +62,51 @@ def test_config_has_a_usable_daily_section():
         assert theme in daily._pool(d["months"].get(daily.MONTHS[day.month - 1]) or d["themes"])
 
 
-def test_each_theme_once_per_round_and_stable(daily_conf):
+def _simulate(d, start, days):
+    """Pick a theme each day, feeding back the history like real daily runs would."""
+    used, picks = {}, []
+    for i in range(days):
+        day = start + timedelta(days=i)
+        window = {t: u for t, u in used.items() if (day - u).days < d["no_repeat_days"]}
+        theme = daily.pick_theme(d, day, window)[0]
+        used[theme] = day
+        picks.append(theme)
+    return picks
+
+
+@pytest.mark.parametrize("n", [10, 8, 7])
+def test_no_theme_within_7_days(daily_conf, n):
+    daily_conf(themes=[f"t{i}" for i in range(n)], months={}, weekdays={})
+    picks = _simulate(daily.settings(), date(2026, 1, 1), 300)
+    for i, t in enumerate(picks):
+        assert t not in picks[max(0, i - 6):i], (i, t)
+    assert set(picks) == {f"t{i}" for i in range(n)}
+
+
+def test_small_pool_rotates_least_recent(daily_conf):
+    daily_conf(themes=["a", "b", "c"], months={}, weekdays={})
+    picks = _simulate(daily.settings(), date(2026, 1, 1), 30)
+    assert all(picks[i] == picks[i % 3] for i in range(30)) and sorted(picks[:3]) == ["a", "b", "c"]
+
+
+def test_pick_is_stable_and_ignores_config_order(daily_conf):
     themes = [f"theme {i}" for i in range(5)]
     daily_conf(themes=themes, months={}, weekdays={})
-    d = daily.settings()
-    start = date(2026, 11, 10)
-    start -= timedelta(days=start.toordinal() % 5)  # start of a round
-    rounds = [[daily.pick_theme(d, start + timedelta(days=r * 5 + i))[0] for i in range(5)] for r in range(3)]
-    assert all(sorted(r) == themes for r in rounds)
-    assert len({tuple(r) for r in rounds}) > 1  # the order changes between rounds
-    assert daily.pick_theme(d, start) == daily.pick_theme(d, start)
-    # reordering config.toml does not change the day's theme
+    d, day = daily.settings(), date(2026, 11, 10)
+    assert daily.pick_theme(d, day) == daily.pick_theme(d, day)
     daily_conf(themes=list(reversed(themes)), months={}, weekdays={})
-    assert daily.pick_theme(daily.settings(), start) == daily.pick_theme(d, start)
+    assert daily.pick_theme(daily.settings(), day) == daily.pick_theme(d, day)
 
 
-def test_no_theme_twice_in_a_row(daily_conf):
-    for n in (2, 3, 4):
-        daily_conf(themes=[f"t{i}" for i in range(n)], months={}, weekdays={})
-        d = daily.settings()
-        picks = [daily.pick_theme(d, date(2026, 1, 1) + timedelta(days=i))[0] for i in range(400)]
-        assert all(a != b for a, b in zip(picks, picks[1:])), n
-
-
-def test_weekday_pool_counts_weeks(daily_conf):
-    themes = [f"fri {i}" for i in range(7)]
-    daily_conf(themes=["plain"], months={}, weekdays={"fri": themes})
-    d = daily.settings()
-    first = date(2026, 1, 2)  # a Friday
-    first += timedelta(weeks=-((first.toordinal() // 7) % 7))  # the first Friday of a round
-    fridays = [daily.pick_theme(d, first + timedelta(weeks=i))[0] for i in range(7)]
-    assert sorted(fridays) == themes  # 7 Fridays in a row: each theme once
+def test_history_comes_from_past_daily_runs(tulu, daily_conf, make_run):
+    daily_conf(themes=["a", "b"], months={}, weekdays={}, no_repeat_days=7)
+    make_run(n=1, preset="wallpaper", prompt="x", date="2026-11-09", daily={"theme": "a"})
+    make_run(n=1, preset="wallpaper", prompt="y", date="2026-11-03", daily={"theme": "b"})
+    make_run(n=1, preset="draft", prompt="z", date="2026-11-08")  # not a daily
+    conf = imagegen.load_config()
+    assert daily.recent_themes(conf, date(2026, 11, 10), 6) == {"a": date(2026, 11, 9)}  # 11-03 is 7 days back
+    assert daily.plan(date(2026, 11, 10))["theme"] == "b"
+    assert daily.plan(date(2026, 11, 9))["theme"] == "a"  # only days before count: b (11-03) is 6 back
 
 
 def test_month_beats_weekday_beats_themes(daily_conf):

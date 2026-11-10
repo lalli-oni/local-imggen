@@ -5,8 +5,9 @@ Settings live in config.toml under [daily]:
   count    images to make; the first becomes the wallpaper (the rest stay in the run folder)
   cast     characters (gen char) in every daily; their descriptions lead the prompt, like a project pass
   style    text added after the theme (optional)
-  themes   the scene for the day. Each theme comes up once per round, in a shuffled order that the
-           date decides, so a re-run on the same day gets the same theme (with a new seed).
+  themes   the scene for the day, picked at random (by the date: a re-run that day gets the same theme,
+           with a new seed) from the ones the past daily runs haven't used in the last no_repeat_days
+  no_repeat_days  at least this many days between two uses of a theme (default 7)
   [daily.months]   jan..dec = a theme or a list: replaces `themes` for that month
   [daily.weekdays] mon..sun = the same for a weekday (a month entry wins over a weekday one)
 
@@ -24,7 +25,7 @@ import os
 import random
 import sys
 import tomllib
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import imagegen
@@ -36,7 +37,7 @@ DEFAULT_WAIT = 600  # seconds for ComfyUI to come up: a scheduled run may have j
 
 def settings(conf: dict | None = None) -> dict:
     conf = conf or imagegen.load_config()
-    d = {"preset": "wallpaper", "count": 1, "cast": [], "style": "", "themes": [], "months": {}, "weekdays": {},
+    d = {"preset": "wallpaper", "count": 1, "cast": [], "style": "", "no_repeat_days": 7, "themes": [], "months": {}, "weekdays": {},
          **conf.get("daily", {})}
     for key, names in (("months", MONTHS), ("weekdays", DAYS)):
         bad = [k for k in d[key] if k not in names]
@@ -52,33 +53,42 @@ def _pool(value) -> list[str]:
     return [t.strip() for t in items if isinstance(t, str) and t.strip()]
 
 
-def _shuffled(pool: list[str], key: str, r: int) -> list[str]:
-    order = sorted(pool)  # only the key and round decide the order, not how config.toml lists them
-    random.Random(f"{key}:{r}").shuffle(order)
-    return order
+def recent_themes(conf: dict, day: date, days: int) -> dict[str, date]:
+    """{theme: the last day it was used} over the `days` days before `day`, from past daily runs' run.json."""
+    out: dict[str, date] = {}
+    root = Path(conf["output_dir"]).expanduser()
+    for back in range(days, 0, -1):  # oldest first, so a later use overwrites an earlier one
+        d = day - timedelta(days=back)
+        for f in sorted((root / d.isoformat()).glob("*/run.json")):
+            try:
+                theme = (json.loads(f.read_text()).get("daily") or {}).get("theme")
+            except (OSError, ValueError, AttributeError):
+                continue
+            if isinstance(theme, str):
+                out[theme] = d
+    return out
 
 
-def _order(pool: list[str], key: str, r: int) -> list[str]:
-    """Round r of a pool: each theme once, and never the theme that ended round r - 1 first."""
-    if len(pool) <= 2:
-        return sorted(pool)  # 2 themes simply alternate
-    order = _shuffled(pool, key, r)
-    if order[0] == _shuffled(pool, key, r - 1)[-1]:
-        order[0], order[1] = order[1], order[0]  # the fix never moves a round's last theme, so this holds
-    return order
-
-
-def pick_theme(d: dict, day: date) -> tuple[str, str]:
+def pick_theme(d: dict, day: date, recent: dict[str, date] | None = None) -> tuple[str, str]:
     """(theme, where it came from) for a day: the month's list, else the weekday's, else `themes`.
-    The pool is walked in rounds over the days it applies to (a weekday pool counts weeks, not days)."""
-    k = day.toordinal()
-    for where, pool, step in ((f"months.{MONTHS[day.month - 1]}", d["months"].get(MONTHS[day.month - 1]), k),
-                              (f"weekdays.{DAYS[day.weekday()]}", d["weekdays"].get(DAYS[day.weekday()]), k // 7),
-                              ("themes", d["themes"], k)):
-        pool = _pool(pool)
-        if pool:
-            n = len(pool)
-            return _order(pool, where, step // n)[step % n], where
+
+    recent: {theme: last day used}. A theme used within the last no_repeat_days - 1 days is skipped
+    (so no_repeat_days = 7 means at least 7 days between uses). If that rules out the whole pool,
+    the theme(s) used longest ago are picked from. The date decides among the rest, so re-running
+    on the same day gets the same theme (with a new seed)."""
+    recent = recent or {}
+    floor = max(1, int(d["no_repeat_days"]))
+    for where, pool in ((f"months.{MONTHS[day.month - 1]}", d["months"].get(MONTHS[day.month - 1])),
+                        (f"weekdays.{DAYS[day.weekday()]}", d["weekdays"].get(DAYS[day.weekday()])),
+                        ("themes", d["themes"])):
+        pool = sorted(set(_pool(pool)))  # only the date decides, not how config.toml lists them
+        if not pool:
+            continue
+        free = [t for t in pool if t not in recent or (day - recent[t]).days >= floor]
+        if not free:
+            oldest = min(recent[t] for t in pool)
+            free = [t for t in pool if recent[t] == oldest]
+        return random.Random(f"{where}:{day.isoformat()}").choice(free), where
     raise ValueError("[daily] has no themes: add themes = [\"...\"] to config.toml")
 
 
@@ -100,7 +110,8 @@ def compose(d: dict, theme: str) -> tuple[str, dict]:
 def plan(day: date | None = None, conf: dict | None = None) -> dict:
     day = day or date.today()
     d = settings(conf)
-    theme, where = pick_theme(d, day)
+    conf = conf or imagegen.load_config()
+    theme, where = pick_theme(d, day, recent_themes(conf, day, max(1, int(d["no_repeat_days"])) - 1))
     prompt, used = compose(d, theme)
     return {"date": day.isoformat(), "theme": theme, "from": where, "prompt": prompt, "cast": used,
             "preset": d["preset"], "count": max(1, int(d["count"]))}
