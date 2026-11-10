@@ -14,7 +14,7 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
 - `templates/contact_sheet.html`: the per-run `index.html` viewer (fit-all / size slider, A/B compare).
   Static, no build, opened via file://; `write_contact_sheet` inlines the run data as JSON.
 - `mcp_server.py`: MCP tools (generate, get_job, vary, edit, cutout, doctor, list_presets, recent_runs, view_image, set_wallpaper,
-  open_contact_sheet, project_*, character_*)
+  open_contact_sheet, project_* incl. project_rate/project_note, character_*)
 - `projects.py`: creative projects (#22) behind `gen project new|list|status|set|gen|promote|keep` and the MCP
   `project_*` tools. `<output_dir>/projects/<slug>/project.json` holds the state (prompt, snippets, params,
   palette, refs), a version per change, named assets with history, and passes (tagged `gen` runs).
@@ -25,6 +25,12 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   `<output_dir>/characters/<name>/character.json` (description, palette, refs, versions). Passes put the cast's
   descriptions first; a character change stales the assets that show it in every project (unless pinned).
   `gen char new tulu --from-project tulu` moves a single-subject project into a character without staling.
+- `boards.py`: the board (#7) is the project's triage view, not a separate object. `board.json` next to
+  project.json holds pick/maybe/reject ratings and notes per image (key: path relative to output_dir; images
+  are addressed as `P:N`, pass P image N) plus a log; rating never makes a project version. `projects.save()`
+  rebuilds `<project>/index.html` from `templates/board.html` (passes grouped by version; buttons copy the
+  `gen project rate|note` command). `gen project rate|note|board`, MCP `project_rate`/`project_note`;
+  `project_get` returns `board` and the ratings/notes in `new_since_last_look`.
 - `doctor.py`: read-only health checks behind `gen doctor` and the MCP `doctor` tool
 - `comfy/`: opt-in resource limits for the comfyui service, **off by default**. `comfy/limits.sh on|off|status`
   installs/removes `/etc/systemd/system/comfyui.service.d/zz-imagegen-limits.conf` built from `comfyui-args`

@@ -14,7 +14,8 @@ A project lives in <output_dir>/projects/<slug>/:
   project version changed the look (prompt, negative, snippets, palette or refs) and nobody has
   regenerated it or marked it as kept since.
 
-Boards (#7) are not built yet; until then the run folders listed under "passes" stand in for them.
+The board (#7, boards.py) is the triage view on top: ratings and notes per pass image in board.json,
+and the project's index.html page, which save() rebuilds after every change.
 """
 from __future__ import annotations
 
@@ -87,6 +88,8 @@ def save(proj: dict) -> None:
     d = project_dir(proj["slug"])
     d.mkdir(parents=True, exist_ok=True)
     _write_json(d / "project.json", proj)
+    import boards
+    boards.refresh(proj["slug"])
 
 
 _THREAD_LOCK = threading.RLock()
@@ -611,6 +614,7 @@ def summary(slug: str, mark_seen: str | None = None, history: int = 5) -> dict:
     mark_seen = a reader name ("claude"): "new_since_last_look" lists the versions and passes added
     since that reader's previous call, then the reader is marked as up to date.
     """
+    import boards
     import characters
     proj = load(slug)
     d = project_dir(slug)
@@ -648,7 +652,8 @@ def summary(slug: str, mark_seen: str | None = None, history: int = 5) -> dict:
         "assets": assets,
         "recent_versions": [{k: v[k] for k in ("version", "at", "author", "note", "changed")}
                             for v in proj["versions"][-history:]],
-        "recent_passes": proj["passes"][-history:],
+        "recent_passes": [{"n": i, **p} for i, p in enumerate(proj["passes"], 1)][-history:],
+        "board": boards.summary(proj),
     }
     if mark_seen:
         # kept out of project.json so that reading a project never rewrites its state
@@ -659,7 +664,8 @@ def summary(slug: str, mark_seen: str | None = None, history: int = 5) -> dict:
             except (OSError, ValueError):
                 seen_all = {}
             seen = seen_all.get(mark_seen)
-            now = {"version": proj["version"], "passes": len(proj["passes"])}
+            log = boards.load(slug)["log"]
+            now = {"version": proj["version"], "passes": len(proj["passes"]), "board": len(log)}
             if seen != now:
                 _write_json(seen_file, {**seen_all, mark_seen: now})
         if seen is not None:
@@ -667,7 +673,9 @@ def summary(slug: str, mark_seen: str | None = None, history: int = 5) -> dict:
                 "since": seen,
                 "versions": [{k: v[k] for k in ("version", "author", "note", "changed")}
                              for v in proj["versions"] if v["version"] > seen["version"]],
-                "passes": proj["passes"][seen["passes"]:]}
+                "passes": proj["passes"][seen["passes"]:],
+                # ratings and notes since then; seen.json from before boards has no "board" count
+                "board": log[seen.get("board", 0):]}
     return out
 
 
@@ -765,9 +773,16 @@ def _print_status(s: dict) -> None:
     for v in s["recent_versions"]:
         print(f"  v{v['version']:<3} {v['at']}  {v['author']:6} {v['note']}  [{', '.join(v['changed'])}]")
     if s["recent_passes"]:
-        print("passes:")
+        print("passes (P = pass number, rate its images as P:1, P:2, ...):")
         for p in s["recent_passes"]:
-            print(f"  v{p['version']:<3} {p['count']}x  {p['run_dir']}")
+            print(f"  P{p['n']:<3} v{p['version']:<3} {p['count']}x  {p['run_dir']}")
+    b = s["board"]
+    c = b["counts"]
+    print(f"board: {c['pick']} pick, {c['maybe']} maybe, {c['reject']} reject, {c['unrated']} unrated  {b['page']}")
+    for im in b["images"]:
+        if im.get("rating") == "pick" or (im.get("notes") and im.get("rating") != "reject"):
+            notes = f"  {' | '.join(im['notes'])}" if im.get("notes") else ""
+            print(f"  {im.get('rating') or '-':6} {im.get('id') or im['image']}{notes}")
 
 
 def _csv(items: list[str] | None) -> list[str] | None:
@@ -805,6 +820,10 @@ USAGE = """usage: gen project COMMAND ...
   import SLUG FOLDER [--shows C,C] [--title T] [--yes]
                                                       images -> assets, .md/.txt -> docs (dry run without --yes)
   doc SLUG NAME                                       print a project doc
+  rate SLUG pick|maybe|reject|clear IMAGE... [--note N]
+                                                      triage images: IMAGE is P:N (pass P, image N) or a path
+  note SLUG TEXT [--image IMAGE]                      a note on an image, or on the board
+  board SLUG [--open]                                 rebuild the board page (index.html) and open it
 state options: --prompt --neg -p/--preset --param K=V --snippet NAME=TEXT --palette '#hex,...' --ref NAME=PATH
                --cast CHAR[@V] --doc [NAME=]PATH; set also takes --uncast CHAR --drop-doc NAME
 characters are shared between projects: gen char -h
@@ -914,6 +933,37 @@ def main(argv: list[str]) -> int:
         ap.add_argument("name")
         a = ap.parse_args(rest)
         print(read_doc(a.slug, a.name), end="")
+        return 0
+    if cmd == "rate":
+        import boards
+        ap.add_argument("slug")
+        ap.add_argument("rating", choices=[*boards.RATINGS, "clear"])
+        ap.add_argument("images", nargs="+", metavar="IMAGE", help="P:N (pass P, image N) or an image path")
+        ap.add_argument("--note")
+        ap.add_argument("--author", default="human")
+        a = ap.parse_args(rest)
+        for r in boards.rate(a.slug, a.images, a.rating, a.note, a.author):
+            print(f"{r.get('id') or r['image']}: {r['rating'] or 'unrated'}")
+        return 0
+    if cmd == "note":
+        import boards
+        ap.add_argument("slug")
+        ap.add_argument("text")
+        ap.add_argument("--image", help="P:N or an image path (default: a note on the whole board)")
+        ap.add_argument("--author", default="human")
+        a = ap.parse_args(rest)
+        boards.note(a.slug, a.text, a.image, a.author)
+        print(f"noted on {a.image or 'the board'}")
+        return 0
+    if cmd == "board":
+        import boards
+        ap.add_argument("slug")
+        ap.add_argument("--open", action="store_true", help="open the board in the Windows browser")
+        a = ap.parse_args(rest)
+        page = boards.write_page(a.slug)
+        print("board:", imagegen.to_windows_path(page) or page)
+        if a.open:
+            imagegen.open_in_windows(str(page))
         return 0
     print(f"unknown project command '{cmd}'\n{USAGE}", file=sys.stderr)
     return 2

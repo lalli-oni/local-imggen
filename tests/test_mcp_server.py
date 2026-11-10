@@ -10,7 +10,7 @@ import mcp_server
 EXPECTED_TOOLS = {"generate", "get_job", "vary", "edit", "cutout", "doctor", "list_presets", "recent_runs",
                   "view_image", "set_wallpaper", "open_contact_sheet", "project_list", "project_get",
                   "project_new", "project_update", "project_generate", "project_promote", "project_keep",
-                  "project_doc", "project_import", "character_list", "character_get", "character_new",
+                  "project_doc", "project_import", "project_rate", "project_note", "character_list", "character_get", "character_new",
                   "character_update"}
 
 
@@ -154,3 +154,17 @@ def test_stdio_server_end_to_end(comfy, tmp_path):
     assert not res.is_error, res.content
     kinds = [c.type for c in res.content]
     assert kinds[0] == "text" and '"status": "done"' in res.content[0].text and "image" in kinds
+
+
+def test_board_tools(comfy):
+    mcp_server.project_new("fox", prompt="a fox")
+    mcp_server.project_generate("fox", count=2, preview=False)
+    assert [r["rating"] for r in mcp_server.project_rate("fox", ["1:1"], "pick", "crisp")] == ["pick"]
+    assert mcp_server.project_note("fox", "try dusk next", None)["action"] == "note"
+    got = mcp_server.project_get("fox", preview=True)
+    s = got[0]
+    assert s["board"]["counts"]["pick"] == 1 and s["board"]["notes"] == ["claude: try dusk next"]
+    assert [e["action"] for e in s["new_since_last_look"]["board"]] == ["rate", "note"]
+    assert len(got) == 2  # summary + the pick's thumbnail
+    with pytest.raises(ValueError, match="rating must be"):
+        mcp_server.project_rate("fox", ["1:1"], "great")

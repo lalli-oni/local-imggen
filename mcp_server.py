@@ -187,7 +187,8 @@ def set_wallpaper(path: str) -> str:
 
 @mcp.tool()
 def open_contact_sheet(path: str) -> str:
-    """Open a run's index.html contact sheet in the user's Windows browser."""
+    """Open a run's index.html contact sheet, or a project's board page (project_get board.page),
+    in the user's Windows browser."""
     imagegen.open_in_windows(str(imagegen.to_linux_path(path)))
     return "opened"
 
@@ -214,15 +215,19 @@ def project_list() -> list[dict]:
 def project_get(slug: str, preview: bool = False, history: int = 5) -> list:
     """A project's current state (prompt, snippets, params, palette, refs, cast characters, docs), its
     assets with history, the characters they show and stale flags, recent versions and passes, and
-    new_since_last_look: what changed since your previous project_get. preview=True adds thumbnails
-    of the refs and current asset versions. Read docs with project_doc.
-    Use this to summarise a project or to decide the next pass."""
+    new_since_last_look: what changed since your previous project_get (versions, passes, and the
+    ratings/notes on the board). board: rating counts, every rated or noted image (picks first, with
+    its pass id "P:N" and project version) and the board notes; board.page is the user's board page.
+    preview=True adds thumbnails of the refs, current asset versions and up to 8 picks.
+    Read docs with project_doc. Use this to summarise a project or to decide the next pass: base the
+    next prompt version on what the user picked and rejected, and on their notes."""
     import projects
     s = projects.summary(slug, mark_seen="claude", history=history)
     out: list = [s]
     if preview:
         out += [_thumb(r["path"]) for r in s["state"]["refs"].values()]
         out += [_thumb(a["file"]) for a in s["assets"].values()]
+        out += [_thumb(im["image"]) for im in s["board"]["images"] if im.get("rating") == "pick"][:8]
     return out
 
 
@@ -288,6 +293,24 @@ def project_keep(slug: str, asset: str, note: str) -> dict:
     """Mark a stale asset as fine as-is at the current project version (only when the user says so)."""
     import projects
     return projects.keep(slug, asset, note, "claude")
+
+
+@mcp.tool()
+def project_rate(slug: str, images: list[str], rating: str, note: str | None = None) -> list[dict]:
+    """Rate images on the project's board: "pick", "maybe", "reject", or "clear" to remove a rating.
+    images: pass ids "P:N" (pass P, image N, as project_get lists them) or image paths.
+    note (optional) is added to each image: say what you see. Rate as the user asked; when giving your
+    own opinion, prefer project_note so the user's picks stay theirs. Does not make a project version."""
+    import boards
+    return boards.rate(slug, images, rating, note, "claude")
+
+
+@mcp.tool()
+def project_note(slug: str, text: str, image: str | None = None) -> dict:
+    """Leave a note on the project's board, or on one image ("P:N" or a path): observations, why the
+    next prompt version changes what it does. The user sees it on the board page."""
+    import boards
+    return boards.note(slug, text, image, "claude")
 
 
 @mcp.tool()
