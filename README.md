@@ -30,6 +30,7 @@ gen "misty fjord at sunrise" -p wallpaper --open
 | `gen char new\|list\|status\|set` | Shared characters (lil tulu) that projects cast; a change flags the assets that show them |
 | `gen recent`, `gen sheet [RUN_DIR\|DATE]` | Recent runs; rebuild contact sheets |
 | `gen set-wallpaper PATH` | Set a Windows wallpaper |
+| `gen daily [--show] [--no-set]` | Today's wallpaper (theme and cast from `[daily]` in `config.toml`), then set it. Schedule: `windows/daily-task.sh on [--at 06:00]` |
 | `gen doctor` | Read-only health check |
 
 Every run ends with a timing line, e.g. `timing: 4 images in 210.3s (first 80.1s, then ~43.4s each): load 3.0s,
@@ -40,7 +41,18 @@ image after a model change is slower. `queue` is the wait before ComfyUI started
 
 Presets: `draft` (1024², quick), `wallpaper` (16:9, upscaled to 3840x2160), `wallpaper_ultrawide`
 (21:9, upscaled to 3440x1440), `icon` (centered object, background removed). Opt-in: `kontext` (edit only),
-`klein` and `qwen` (text-to-image and `gen edit -p ...`; no `gen vary`).
+`klein` and `qwen` (text-to-image and `gen edit -p ...`; no `gen vary`), `wallpaper_ref` (klein: a 4K 16:9
+wallpaper of the character in a ref image, `gen edit REF "scene" -p wallpaper_ref`; `gen daily` uses it).
+
+### How a preset works, and how to see it
+
+A preset is two parts: a `[presets.NAME]` table in `config.toml` (model files, size, steps, upscaler, ...) and a
+ComfyUI workflow in `workflows/*.json` (API format) whose `"{{key}}"` slots `gen` fills from that table.
+
+To see the graph that made an image, **drag the PNG onto ComfyUI** at http://127.0.0.1:8188: ComfyUI stores the
+filled-in workflow inside every image it saves, so you get the exact nodes and values as boxes and wires, and can
+tweak and re-run it there. This works for every run's PNGs except cut-outs (`icon`, `gen cutout`): removing the
+background rewrites the file without that data (the run's non-transparent PNG still has it).
 
 ## MCP tools (Claude desktop app)
 

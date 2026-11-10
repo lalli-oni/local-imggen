@@ -1,3 +1,7 @@
 #!/usr/bin/env bash
 # Fake powershell.exe: records the call (set_wallpaper sends an -EncodedCommand), does nothing.
+#   FAKE_POWERSHELL_OUT   printed as the answer (with Windows line endings), e.g. for daily-task.sh status
+#   FAKE_POWERSHELL_FAIL  exit with this code (after printing the answer)
 . "$(dirname "$0")/_log.sh"
+[ -z "${FAKE_POWERSHELL_OUT:-}" ] || printf '%s\r\n' "$FAKE_POWERSHELL_OUT"
+exit "${FAKE_POWERSHELL_FAIL:-0}"

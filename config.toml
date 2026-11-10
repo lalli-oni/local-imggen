@@ -60,6 +60,72 @@ negative_extra = ", busy background, multiple objects, photo, text, letters, fra
 # quarter of its size). trim: crop to the subject, centre it on a square (the canvas's shorter side).
 post = ["remove_bg", "keep_largest", "trim"]
 
+# gen daily (#3): one new wallpaper a day, set as the desktop background (old ones stay in output_dir).
+# Schedule it: windows/daily-task.sh on [--at 06:00]. Preview a day: gen daily --show [--date 2026-12-24].
+# Log: <output_dir>/daily.log. Themes are picked at random from the ones not used recently.
+[daily]
+preset = "wallpaper_ref"      # klein + the cast's ref image (on-model); "wallpaper" = SDXL from text only
+ref = ""                      # CHARACTER:REF, or an image path (relative = under output_dir); "" = first cast character's first ref
+ref_prompt = "exactly one character, the one from the reference image with the same design: huge round head, four curled face tentacles, amber eyes, small red bat wings, pale belly, short rounded tail. No other characters or creatures"
+count = 1                     # images per day; the first one becomes the wallpaper
+no_repeat_days = 7            # at least this many days between two uses of a theme (past daily runs)
+cast = ["tulu"]               # characters (gen char) in every daily; their descriptions lead the prompt
+style = "cosy whimsical storybook scene, soft light"
+themes = [
+  "relaxing in a tide pool at sunset, wide rocky coastline",
+  "reading a book in a cosy window nook on a rainy day",
+  "floating among glowing jellyfish in the deep blue sea",
+  "sipping tea on a mossy rock in a misty pine forest",
+  "stargazing on a grassy hill under the northern lights",
+  "surfing a small wave on a sunny tropical beach",
+  "napping on a lighthouse balcony at dawn",
+  "exploring a sunken ship full of treasure",
+  "building a sandcastle shaped like a sunken city",
+  "tending a tiny coral garden on the sea floor",
+  "watching puffins on a grassy sea cliff in Iceland",
+  "soaking in a steaming hot spring among Icelandic lava fields",
+  "cycling past the colourful old houses of Nyhavn in Copenhagen",
+  "riding a yellow Lisbon tram past blue azulejo-tiled houses",
+  "gazing at Angel Falls from a misty tepui in Venezuela",
+]
+
+# Optional: replaces `themes` on a day. The most specific entry wins: "YYYY-MM-DD", "MM-DD", month, weekday.
+# Movable feasts (Easter-based, Þorri) change date every year: add them as "YYYY-MM-DD", one year at a time.
+[daily.dates]
+"01-06" = "at an Icelandic Þrettándinn bonfire on Twelfth Night, elves dancing in the snow"
+"04-25" = "holding red carnations at a joyful street celebration in Lisbon"
+"05-04" = "as a space-opera hero with a glowing laser sword, starships and twin suns in the sky"
+"06-05" = "having a picnic under little Danish flags on Constitution Day"
+"06-10" = "celebrating Dia de Portugal on a sunny harbour in the Algarve"
+"06-13" = "grilling sardines at a Santo António street party in Lisbon, pots of basil and paper garlands"
+"06-17" = "waving a small Icelandic flag at a 17 June parade in Reykjavík, balloons and colourful houses"
+"06-23" = "by a Sankt Hans midsummer bonfire on a Danish beach in the late evening light"
+"06-24" = ["at the São João festival in Porto with a plastic hammer, balloons and fireworks over the river",
+           "drumming at the San Juan drum festival on a palm-lined Venezuelan coast"]
+"07-05" = "celebrating Venezuelan Independence Day with yellow, blue and red flags below Mount Ávila"
+"10-12" = "at the María Lionza gathering on Sorte mountain in Venezuela, candles, drums and mist in the jungle night"
+"11-10" = "at a cosy Danish Mortens aften dinner with roast duck and candles"
+"11-11" = "roasting chestnuts at a São Martinho magusto bonfire in a Portuguese village"
+"11-18" = "playing a cuatro at a lively gaita party in Maracaibo"
+"12-24" = ["dancing around a Danish Christmas tree with risalamande on the table",
+           "sharing hallacas and pan de jamón at a Venezuelan Christmas Eve feast"]
+"12-31" = "jumping off a chair at midnight on Danish New Year's Eve, fireworks over Copenhagen"
+"2027-01-22" = "at an Icelandic Þorrablót feast with hákarl, rye bread and singing"
+"2027-02-07" = "in a costume at Danish Fastelavn, hitting a candy barrel with a bat"
+"2027-05-27" = "dancing with the Diablos Danzantes de Yare in a red devil costume and painted mask, Corpus Christi in Venezuela"
+"2027-11-05" = "on Danish J-dag, the evening the Christmas beer arrives, a snowy pub street full of blue Santa hats"
+"2027-02-08" = ["handing out cream buns on Icelandic Bolludagur", "dancing in the Carnaval parade of El Callao, Venezuela"]
+
+[daily.months]
+oct = ["carving a jack-o'-lantern in a pumpkin patch at dusk", "trick-or-treating through a foggy harbour town",
+       "brewing a bubbling potion in a candlelit sea cave"]
+dec = ["sledding down a snowy hill under twinkling lights", "decorating a kelp tree with glowing ornaments",
+       "drinking hot cocoa by a fireplace on a snowy night",
+       "meeting the Icelandic Yule Lads on a snowy turf-roofed farm"]
+
+[daily.weekdays]
+# fri = "partying in a neon-lit underwater disco"
+
 # Opt-in model presets: `download` names the script in models/ that fetches their models (gen doctor
 # shows them as warn until then). Presets that load a diffusion model (`unet`) have no img2img/inpaint
 # (gen vary) unless they name an img2img_workflow / inpaint_workflow.
@@ -91,6 +157,23 @@ vae = "flux2-vae.safetensors"
 width = 1024
 height = 1024
 steps = 4
+
+# A 16:9 4K wallpaper that draws the character from a reference image (klein models, as above). The scene
+# comes from the prompt; the ref only shows the character, so it stays on-model. gen daily uses it.
+# By hand: gen edit REF.png "lil tulu reading in a rainy window nook, only one character" -p wallpaper_ref
+[presets.wallpaper_ref]
+description = "16:9 wallpaper (4K) of the character in a ref image (FLUX.2 klein): gen edit REF \"scene\" -p wallpaper_ref"
+edit_workflow = "flux2_klein_ref_upscale.json"
+download = "flux2-klein.sh"
+unet = "flux-2-klein-4b-fp8.safetensors"
+text_encoder = "qwen_3_4b.safetensors"
+vae = "flux2-vae.safetensors"
+out_width = 1536                # exactly 16:9 (and multiples of 16), so the 4K scale crops nothing
+out_height = 864
+steps = 4
+upscale_model = "RealESRGAN_x4plus.pth"
+target_width = 3840
+target_height = 2160
 
 # Qwen-Image-2.1 7B (~30 GB of bf16 files, Qwen Research licence): ~/imagegen/models/qwen-image-2.1.sh
 # weight_dtype loads the bf16 diffusion model as fp8 (half the VRAM). Not int8: int8 renders black here.
