@@ -238,7 +238,7 @@ def test_default_preset_draws_from_the_cast_ref(tulu, comfy, on_c_drive, stub_ca
     [wf] = comfy.workflows()
     assert _node(wf, "LoadImage")["image"] in comfy.uploads  # the ref went up as the reference
     latent = _node(wf, "EmptyFlux2LatentImage")
-    assert (latent["width"], latent["height"]) == (1344, 768)  # 16:9, not the ref's 3:4
+    assert (latent["width"], latent["height"]) == (1536, 864)  # 16:9, not the ref's 3:4
     assert (_node(wf, "ImageScale")["width"], _node(wf, "ImageScale")["height"]) == (3840, 2160)
     text = _node(wf, "CLIPTextEncode")["text"]
     assert text.startswith(TULU + ", ") and "exactly one character" in text
@@ -257,6 +257,15 @@ def test_ref_choices(tulu, daily_conf, make_image):
     daily_conf(ref="tulu:nope")
     with pytest.raises(ValueError, match="no ref 'nope'"):
         daily.plan(date(2026, 11, 12))
+    (imagegen.Path(imagegen.load_config()["output_dir"]) / "r").mkdir(parents=True)
+    (imagegen.Path(imagegen.load_config()["output_dir"]) / "r" / "a:b.png").write_bytes(other.read_bytes())
+    daily_conf(ref="r/a:b.png")  # a relative path with a colon is a file under output_dir, not CHAR:REF
+    assert daily.plan(date(2026, 11, 12))["ref"].endswith("/r/a:b.png")
+    daily_conf(ref="tulu:v1", preset="wallpaper")
+    with pytest.raises(ValueError, match="can't use a ref"):
+        daily.plan(date(2026, 11, 12))
+    daily_conf(ref="tulu:v1", preset="klein")  # does both: a ref makes it draw from the ref
+    assert daily.plan(date(2026, 11, 12))["ref"].endswith("refs/v1-v1.png")
     daily_conf(ref="/no/such.png")
     with pytest.raises(FileNotFoundError):
         daily.plan(date(2026, 11, 12))

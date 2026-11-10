@@ -42,7 +42,7 @@ DEFAULT_WAIT = 600  # seconds for ComfyUI to come up: a scheduled run may have j
 
 def settings(conf: dict | None = None) -> dict:
     conf = conf or imagegen.load_config()
-    d = {"preset": "wallpaper", "count": 1, "cast": [], "style": "", "no_repeat_days": 7, "themes": [],
+    d = {"preset": "wallpaper_ref", "count": 1, "cast": [], "style": "", "no_repeat_days": 7, "themes": [],
          "dates": {}, "months": {}, "weekdays": {}, "ref": "", "ref_prompt": "", **conf.get("daily", {})}
     for key, names in (("months", MONTHS), ("weekdays", DAYS)):
         bad = [k for k in d[key] if k not in names]
@@ -56,7 +56,10 @@ def settings(conf: dict | None = None) -> dict:
     p = conf["presets"][d["preset"]]
     if "workflow" not in p and "edit_workflow" not in p:
         raise ValueError(f"[daily] preset '{d['preset']}' has no workflow")
-    d["uses_ref"] = "workflow" not in p  # an edit-only preset draws the cast from a ref image
+    if (d["ref"] or "").strip() and "edit_workflow" not in p:
+        raise ValueError(f"[daily] ref is set, but preset '{d['preset']}' can't use a ref (no edit_workflow)")
+    # an edit-only preset always draws the cast from a ref image; one that does both does when ref is set
+    d["uses_ref"] = "workflow" not in p or bool((d["ref"] or "").strip())
     return d
 
 
@@ -65,10 +68,12 @@ def find_ref(d: dict) -> Path:
     character's first ref."""
     import characters
     ref = (d["ref"] or "").strip()
-    if ref and ":" in ref and not ref.startswith(("/", "~")) and not re.match(r"^[A-Za-z]:[\\/]", ref):
+    if re.fullmatch(r"[a-z0-9][a-z0-9_-]*:[A-Za-z0-9][A-Za-z0-9_-]*", ref):
         name, _, r = ref.partition(":")
     elif ref:
         path = imagegen.to_linux_path(ref)
+        if not path.is_absolute():  # the scheduled task runs from anywhere: relative = under output_dir
+            path = Path(imagegen.load_config()["output_dir"]).expanduser() / path
         if not path.is_file():
             raise FileNotFoundError(f"[daily] ref: no file {path}")
         return path

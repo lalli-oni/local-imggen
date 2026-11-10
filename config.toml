@@ -65,7 +65,7 @@ post = ["remove_bg", "keep_largest", "trim"]
 # Log: <output_dir>/daily.log. Themes are picked at random from the ones not used recently.
 [daily]
 preset = "wallpaper_ref"      # klein + the cast's ref image (on-model); "wallpaper" = SDXL from text only
-ref = ""                      # with an edit preset: CHARACTER:REF, or an image path; "" = the first cast character's first ref
+ref = ""                      # CHARACTER:REF, or an image path (relative = under output_dir); "" = first cast character's first ref
 ref_prompt = "exactly one character, the one from the reference image with the same design: huge round head, four curled face tentacles, amber eyes, small red bat wings, pale belly, short rounded tail. No other characters or creatures"
 count = 1                     # images per day; the first one becomes the wallpaper
 no_repeat_days = 7            # at least this many days between two uses of a theme (past daily runs)
@@ -168,8 +168,8 @@ download = "flux2-klein.sh"
 unet = "flux-2-klein-4b-fp8.safetensors"
 text_encoder = "qwen_3_4b.safetensors"
 vae = "flux2-vae.safetensors"
-out_width = 1344
-out_height = 768
+out_width = 1536                # exactly 16:9 (and multiples of 16), so the 4K scale crops nothing
+out_height = 864
 steps = 4
 upscale_model = "RealESRGAN_x4plus.pth"
 target_width = 3840
