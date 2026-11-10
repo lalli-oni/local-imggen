@@ -81,6 +81,17 @@ def test_vary_and_cutout(comfy, make_image):
     assert cut["path"].endswith("src-transparent.png")
 
 
+def test_edit_defaults_to_klein_and_takes_a_preset(comfy, make_image):
+    src = str(make_image())
+    out = mcp_server.edit(src, "make it wave", seed=1, preview=False)[0]
+    assert out["status"] == "done"
+    out = mcp_server.edit(src, "make it wave", seed=1, preset="kontext", guidance=3.0, preview=False)[0]
+    assert out["status"] == "done"
+    units = [next(n["inputs"]["unet_name"] for n in wf.values() if n["class_type"] == "UNETLoader")
+             for wf in comfy.workflows()]
+    assert units == ["flux-2-klein-4b-fp8.safetensors", "flux1-dev-kontext_fp8_scaled.safetensors"]
+
+
 def test_view_image_flattens_transparency(make_image):
     img = mcp_server.view_image(str(make_image("t.png", color=(0, 0, 0, 0), mode="RGBA")), size=64)
     assert img.data[:2] == b"\xff\xd8"

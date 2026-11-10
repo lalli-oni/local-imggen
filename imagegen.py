@@ -8,7 +8,7 @@ Usage:
   gen "x" --seed 123 --size 832x1216 --steps 40 --neg "people"
   gen vary PATH -n 4 --strength 0.4             # img2img variations of an image
   gen vary PATH --mask MASK.png --prompt "..."  # inpaint: repaint only the white part of MASK
-  gen edit PATH "make it wave, side view"      # instruction edit (FLUX.1 Kontext, opt-in models)
+  gen edit PATH "make it wave, side view"      # instruction edit (FLUX.2 klein; -p kontext|qwen; opt-in models)
   gen bakeoff PATH "instr" ["instr"...]         # same edits through kontext, klein, qwen; time/VRAM/RAM
   gen cutout PATH [--clean]                     # remove the background -> PATH-transparent.png
                                                 #   --clean: also drop stray shapes, centre on a square
@@ -885,13 +885,13 @@ def vary(path: str, count: int = 4, strength: float | None = None, prompt: str |
                     source_image=str(src), mask=mask, denoise=strength)
 
 
-EDIT_PRESET = "kontext"
+EDIT_PRESET = "klein"  # picked by the #40 bake-off: fastest, followed instructions; -p kontext|qwen still work
 
 
 def edit(path: str, instruction: str, count: int = 1, preset: str = EDIT_PRESET, seed: int | None = None,
          steps: int | None = None, guidance: float | None = None, label: str | None = None) -> dict:
-    """Edit an image by instruction ("make it wave, keep the same character"). Output is ~1 MP
-    at the Kontext size closest to the source's aspect ratio.
+    """Edit an image by instruction ("make it wave, keep the same character") with an edit preset
+    (default FLUX.2 klein). Output is ~1 MP at the Kontext bucket closest to the source's aspect ratio.
 
     Each image is a fresh edit of the source with its own seed, not a chain of edits.
     """
@@ -1092,8 +1092,8 @@ def main(argv: list[str]) -> int:
         return 0
     if argv and argv[0] == "edit":
         ep = argparse.ArgumentParser(
-            prog="gen edit", description="Edit an image by instruction (FLUX.1 Kontext; "
-            "-p klein / -p qwen for FLUX.2 klein / Qwen-Image-2.1). "
+            prog="gen edit", description="Edit an image by instruction (FLUX.2 klein by default; "
+            "-p kontext / -p qwen for FLUX.1 Kontext / Qwen-Image-2.1). "
             "Say what to change and what to keep, e.g. \"Make the character wave with one tentacle, "
             "seen from the side. Keep the same character design, colors and art style.\"")
         ep.add_argument("path")
