@@ -80,14 +80,43 @@ themes = [
   "exploring a sunken ship full of treasure",
   "building a sandcastle shaped like a sunken city",
   "tending a tiny coral garden on the sea floor",
+  "watching puffins on a grassy sea cliff in Iceland",
+  "soaking in a steaming hot spring among Icelandic lava fields",
+  "cycling past the colourful old houses of Nyhavn in Copenhagen",
+  "riding a yellow Lisbon tram past blue azulejo-tiled houses",
+  "gazing at Angel Falls from a misty tepui in Venezuela",
 ]
 
-# Optional: replaces `themes` for a month (jan..dec) or a weekday (mon..sun); a month wins over a weekday.
+# Optional: replaces `themes` on a day. The most specific entry wins: "YYYY-MM-DD", "MM-DD", month, weekday.
+# Movable feasts (Easter-based, Þorri) change date every year: add them as "YYYY-MM-DD", one year at a time.
+[daily.dates]
+"01-06" = "at an Icelandic Þrettándinn bonfire on Twelfth Night, elves dancing in the snow"
+"04-25" = "holding red carnations at a joyful street celebration in Lisbon"
+"05-04" = "as a space-opera hero with a glowing laser sword, starships and twin suns in the sky"
+"06-05" = "having a picnic under little Danish flags on Constitution Day"
+"06-10" = "celebrating Dia de Portugal on a sunny harbour in the Algarve"
+"06-13" = "grilling sardines at a Santo António street party in Lisbon, pots of basil and paper garlands"
+"06-17" = "waving a small Icelandic flag at a 17 June parade in Reykjavík, balloons and colourful houses"
+"06-23" = "by a Sankt Hans midsummer bonfire on a Danish beach in the late evening light"
+"06-24" = ["at the São João festival in Porto with a plastic hammer, balloons and fireworks over the river",
+           "drumming at the San Juan drum festival on a palm-lined Venezuelan coast"]
+"07-05" = "celebrating Venezuelan Independence Day with yellow, blue and red flags below Mount Ávila"
+"11-10" = "at a cosy Danish Mortens aften dinner with roast duck and candles"
+"11-11" = "roasting chestnuts at a São Martinho magusto bonfire in a Portuguese village"
+"11-18" = "playing a cuatro at a lively gaita party in Maracaibo"
+"12-24" = ["dancing around a Danish Christmas tree with risalamande on the table",
+           "sharing hallacas and pan de jamón at a Venezuelan Christmas Eve feast"]
+"12-31" = "jumping off a chair at midnight on Danish New Year's Eve, fireworks over Copenhagen"
+"2027-01-22" = "at an Icelandic Þorrablót feast with hákarl, rye bread and singing"
+"2027-02-07" = "in a costume at Danish Fastelavn, hitting a candy barrel with a bat"
+"2027-02-08" = ["handing out cream buns on Icelandic Bolludagur", "dancing in the Carnaval parade of El Callao, Venezuela"]
+
 [daily.months]
 oct = ["carving a jack-o'-lantern in a pumpkin patch at dusk", "trick-or-treating through a foggy harbour town",
        "brewing a bubbling potion in a candlelit sea cave"]
 dec = ["sledding down a snowy hill under twinkling lights", "decorating a kelp tree with glowing ornaments",
-       "drinking hot cocoa by a fireplace on a snowy night"]
+       "drinking hot cocoa by a fireplace on a snowy night",
+       "meeting the Icelandic Yule Lads on a snowy turf-roofed farm"]
 
 [daily.weekdays]
 # fri = "partying in a neon-lit underwater disco"

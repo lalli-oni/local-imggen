@@ -8,8 +8,10 @@ Settings live in config.toml under [daily]:
   themes   the scene for the day, picked at random (by the date: a re-run that day gets the same theme,
            with a new seed) from the ones the past daily runs haven't used in the last no_repeat_days
   no_repeat_days  at least this many days between two uses of a theme (default 7)
-  [daily.months]   jan..dec = a theme or a list: replaces `themes` for that month
-  [daily.weekdays] mon..sun = the same for a weekday (a month entry wins over a weekday one)
+  [daily.dates]    "MM-DD" (every year) or "YYYY-MM-DD" (one year: movable feasts) = a theme or a list
+  [daily.months]   jan..dec = the same for a month
+  [daily.weekdays] mon..sun = the same for a weekday
+                   The most specific entry for a day replaces `themes`: YYYY-MM-DD, MM-DD, month, weekday.
 
 Runs land in the normal output folder (<date>/<time>-<preset>-daily-<theme>/), so `gen recent` lists them;
 run.json gets a "daily" entry (date, theme, character versions). Every attempt adds one line to
@@ -37,15 +39,27 @@ DEFAULT_WAIT = 600  # seconds for ComfyUI to come up: a scheduled run may have j
 
 def settings(conf: dict | None = None) -> dict:
     conf = conf or imagegen.load_config()
-    d = {"preset": "wallpaper", "count": 1, "cast": [], "style": "", "no_repeat_days": 7, "themes": [], "months": {}, "weekdays": {},
+    d = {"preset": "wallpaper", "count": 1, "cast": [], "style": "", "no_repeat_days": 7, "themes": [], "dates": {}, "months": {},
+         "weekdays": {},
          **conf.get("daily", {})}
     for key, names in (("months", MONTHS), ("weekdays", DAYS)):
         bad = [k for k in d[key] if k not in names]
         if bad:
             raise ValueError(f"[daily.{key}]: unknown {', '.join(bad)} (use {', '.join(names)})")
+    bad = [k for k in d["dates"] if not _date_key_ok(k)]
+    if bad:
+        raise ValueError(f"[daily.dates]: {', '.join(bad)} is not \"MM-DD\" or \"YYYY-MM-DD\"")
     if d["preset"] not in conf["presets"]:
         raise ValueError(f"[daily] preset '{d['preset']}' is not a preset ({', '.join(conf['presets'])})")
     return d
+
+
+def _date_key_ok(k: str) -> bool:
+    try:
+        date.fromisoformat(k if len(k) == 10 else f"2000-{k}")  # 2000: a leap year, so 02-29 is fine
+        return len(k) in (5, 10)
+    except ValueError:
+        return False
 
 
 def _pool(value) -> list[str]:
@@ -70,7 +84,7 @@ def recent_themes(conf: dict, day: date, days: int) -> dict[str, date]:
 
 
 def pick_theme(d: dict, day: date, recent: dict[str, date] | None = None) -> tuple[str, str]:
-    """(theme, where it came from) for a day: the month's list, else the weekday's, else `themes`.
+    """(theme, where it came from) for a day: its date's list, else its month's, weekday's, else `themes`.
 
     recent: {theme: last day used}. A theme used within the last no_repeat_days - 1 days is skipped
     (so no_repeat_days = 7 means at least 7 days between uses). If that rules out the whole pool,
@@ -78,7 +92,9 @@ def pick_theme(d: dict, day: date, recent: dict[str, date] | None = None) -> tup
     on the same day gets the same theme (with a new seed)."""
     recent = recent or {}
     floor = max(1, int(d["no_repeat_days"]))
-    for where, pool in ((f"months.{MONTHS[day.month - 1]}", d["months"].get(MONTHS[day.month - 1])),
+    for where, pool in ((f"dates.{day.isoformat()}", d["dates"].get(day.isoformat())),
+                        (f"dates.{day:%m-%d}", d["dates"].get(f"{day:%m-%d}")),
+                        (f"months.{MONTHS[day.month - 1]}", d["months"].get(MONTHS[day.month - 1])),
                         (f"weekdays.{DAYS[day.weekday()]}", d["weekdays"].get(DAYS[day.weekday()])),
                         ("themes", d["themes"])):
         pool = sorted(set(_pool(pool)))  # only the date decides, not how config.toml lists them

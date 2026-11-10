@@ -18,13 +18,13 @@ TULU = "chibi green cthulhu, amber eyes"
 
 @pytest.fixture
 def daily_conf(monkeypatch):
-    """Override [daily] keys for a test: daily_conf(themes=[...], cast=[]) etc."""
+    """Override [daily] keys for a test: daily_conf(themes=[...], cast=[]) etc. No dates unless given."""
     real = imagegen.load_config
 
     def set_(**kw):
         def load():
             conf = real()
-            conf["daily"] = {**conf.get("daily", {}), **kw}
+            conf["daily"] = {**conf.get("daily", {}), "dates": {}, **kw}
             return conf
         monkeypatch.setattr(imagegen, "load_config", load)
     return set_
@@ -57,7 +57,7 @@ def _log_lines(out_dir) -> list[str]:
 def test_config_has_a_usable_daily_section():
     d = daily.settings()
     assert d["preset"] in imagegen.list_presets() and d["themes"] and d["cast"] == ["tulu"]
-    for day in (date(2026, 10, 3), date(2026, 11, 10), date(2026, 12, 24)):
+    for day in (date(2026, 10, 3), date(2026, 11, 12), date(2026, 12, 20)):  # no [daily.dates] entry
         theme, where = daily.pick_theme(d, day)
         assert theme in daily._pool(d["months"].get(daily.MONTHS[day.month - 1]) or d["themes"])
 
@@ -117,6 +117,27 @@ def test_month_beats_weekday_beats_themes(daily_conf):
     assert daily.pick_theme(d, date(2026, 12, 11)) == ("xmas", "months.dec")  # a Friday in December
 
 
+def test_dates_beat_months(daily_conf):
+    daily_conf(themes=["plain"], weekdays={}, months={"may": "spring"},
+               dates={"05-04": "space hero", "2027-05-04": ["only in 2027"]})
+    d = daily.settings()
+    assert daily.pick_theme(d, date(2026, 5, 4)) == ("space hero", "dates.05-04")
+    assert daily.pick_theme(d, date(2027, 5, 4)) == ("only in 2027", "dates.2027-05-04")
+    assert daily.pick_theme(d, date(2026, 5, 5)) == ("spring", "months.may")
+
+
+def test_config_dates_are_valid():
+    d = daily.settings()
+    assert d["dates"] and daily.pick_theme(d, date(2026, 5, 4))[1] == "dates.05-04"
+
+
+@pytest.mark.parametrize("key", ["5-4", "13-01", "02-30", "2026-02-29", "may-04", "2026-5-4"])
+def test_bad_date_keys(daily_conf, key):
+    daily_conf(dates={key: "x"})
+    with pytest.raises(ValueError, match=r"\[daily.dates\]"):
+        daily.settings()
+
+
 def test_bad_daily_settings(daily_conf):
     daily_conf(weekdays={"friday": "x"})
     with pytest.raises(ValueError, match="unknown friday"):
@@ -144,7 +165,7 @@ def test_cast_may_be_one_name(tulu, daily_conf):
 def test_show(tulu, capsys):
     assert imagegen.main(["daily", "--show", "--date", "2026-12-24"]) == 0
     out = capsys.readouterr().out
-    assert out.startswith("2026-12-24: ") and "(from months.dec)" in out and "tulu v1" in out
+    assert out.startswith("2026-12-24: ") and "(from dates.12-24)" in out and "tulu v1" in out
     assert f"prompt:  {TULU}, " in out
 
 

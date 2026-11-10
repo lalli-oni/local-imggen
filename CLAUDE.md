@@ -26,7 +26,7 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   descriptions first; a character change stales the assets that show it in every project (unless pinned).
   `gen char new tulu --from-project tulu` moves a single-subject project into a character without staling.
 - `daily.py`: `gen daily` (#3): picks the day's theme from `[daily]` in config.toml (a date-seeded pick among themes
-  not used by past daily runs in `no_repeat_days`; `[daily.months]` / `[daily.weekdays]` replace them), puts the `cast` characters' descriptions
+  not used by past daily runs in `no_repeat_days`; `[daily.dates]` ("MM-DD" or "YYYY-MM-DD"), `[daily.months]`, `[daily.weekdays]` replace them, most specific first), puts the `cast` characters' descriptions
   first, runs the preset, sets the first image as wallpaper. Failures leave the wallpaper alone; every attempt
   adds a line to `<output_dir>/daily.log`. `gen daily --show [--date D]` previews.
   `windows/daily-task.sh on [--at HH:MM]|off|status|run`: the Windows scheduled task (user-level, logged-on only,
