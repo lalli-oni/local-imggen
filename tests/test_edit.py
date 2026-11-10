@@ -16,7 +16,7 @@ def _node(wf, class_type):
 
 def test_edit_fills_kontext_workflow(comfy, make_image):
     src = make_image(size=(1920, 1080))
-    run = imagegen.edit(str(src), "make it night", count=2, seed=7, guidance=3.0)
+    run = imagegen.edit(str(src), "make it night", count=2, seed=7, guidance=3.0, preset="kontext")
     wfs = comfy.workflows()
     assert [_node(wf, "KSampler")["seed"] for wf in wfs] == [7, 8]
     wf = wfs[0]
@@ -70,7 +70,7 @@ def test_vary_of_an_edit_needs_a_prompt(comfy, make_image):
 
 
 def test_cli_edit(comfy, make_image, capsys):
-    assert imagegen.main(["edit", str(make_image()), "make it wave", "-n", "1", "-g", "2.0"]) == 0
+    assert imagegen.main(["edit", str(make_image()), "make it wave", "-n", "1", "-p", "kontext", "-g", "2.0"]) == 0
     assert "contact sheet:" in capsys.readouterr().out
     assert _node(comfy.workflows()[0], "FluxGuidance")["guidance"] == 2.0
     imagegen.main(["presets"])
@@ -111,3 +111,13 @@ def test_wait_reports_a_crash_that_lost_the_job(monkeypatch):
     monkeypatch.setattr(imagegen.time, "sleep", lambda s: None)
     with pytest.raises(RuntimeError, match="restarted and lost the job.*out of RAM"):
         c.wait("p1")
+
+
+def test_default_edit_preset_is_klein(comfy, make_image, capsys):
+    """#40 bake-off: klein is the default for gen edit (and MCP edit, which passes EDIT_PRESET)."""
+    assert imagegen.EDIT_PRESET == "klein"
+    run = imagegen.edit(str(make_image()), "make it wave", seed=1)
+    assert run["preset"] == "klein"
+    assert _node(comfy.workflows()[0], "UNETLoader")["unet_name"] == "flux-2-klein-4b-fp8.safetensors"
+    assert imagegen.main(["edit", str(make_image()), "make it wave"]) == 0
+    assert "-klein-edit-" in capsys.readouterr().out

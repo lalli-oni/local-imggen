@@ -8,7 +8,7 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
 - `workflows/*.json`: ComfyUI **API-format** workflows; string values `"{{key}}"` are filled from preset/args
 - `imagegen.py`: core + `gen` CLI (`gen --help`, `gen presets`, `gen recent`, `gen set-wallpaper PATH`,
   `gen vary PATH [--mask M] [-s 0.4]` for img2img/inpaint, `gen edit PATH "instruction"` for instruction edits
-  (FLUX.1 Kontext, `kontext` preset; `-p klein` / `-p qwen`), `gen cutout PATH [--clean]` for background removal,
+  (FLUX.2 klein by default since the #40 bake-off, `EDIT_PRESET`; `-p kontext` / `-p qwen`), `gen cutout PATH [--clean]` for background removal,
   `gen bakeoff PATH "instr"...` (bakeoff.py: same edits through several edit presets, time/VRAM/RAM, one sheet),
   `gen sheet [RUN_DIR|DATE]` to rebuild contact sheets (default: latest run), `gen doctor` for a health check)
 - `templates/contact_sheet.html`: the per-run `index.html` viewer (fit-all / size slider, A/B compare).
