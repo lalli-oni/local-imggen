@@ -17,7 +17,13 @@ VENV=${IMAGEGEN_VENV:-$HOME/venvs/imagegen}
 DISTRO=${WSL_DISTRO_NAME:-Ubuntu-24.04}
 
 usage() { sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'; }
-ps() { powershell.exe -NoProfile -NonInteractive -Command "$1" | tr -d '\r'; }
+# run a PowerShell command line; on failure say so (set -e then stops the script)
+ps() {
+  local out
+  out=$(powershell.exe -NoProfile -NonInteractive -Command "$1") \
+    || { echo "!! powershell.exe failed${out:+: ${out//$'\r'/}} (is WSL interop on?)" >&2; return 1; }
+  printf '%s\n' "${out//$'\r'/}"
+}
 
 cmd=${1:-}
 [ $# -gt 0 ] && shift
@@ -33,11 +39,11 @@ case "$cmd" in
   on)
     [[ $at =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]] || { echo "!! --at wants HH:MM (24h), got '$at'"; exit 2; }
     [ -x "$VENV/bin/python" ] || { echo "!! $VENV/bin/python not found: run ./setup.sh first"; exit 1; }
-    for p in "$HERE" "$VENV"; do
+    for p in "$HERE" "$VENV" "$DISTRO"; do
       [[ $p =~ ^[A-Za-z0-9_./-]+$ ]] || { echo "!! '$p' has characters the task command can't carry"; exit 1; }
     done
     args="--headless wsl.exe -d $DISTRO --cd $HERE -e $VENV/bin/python $HERE/imagegen.py daily"
-    ps "\$a = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument '$args'; \
+    ps "\$ErrorActionPreference = 'Stop'; \$a = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument '$args'; \
 \$t = New-ScheduledTaskTrigger -Daily -At '$at'; \
 \$s = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 1); \
 Register-ScheduledTask -TaskName '$TASK' -Action \$a -Trigger \$t -Settings \$s -Description 'imagegen: gen daily (new wallpaper)' -Force | Out-Null"
@@ -47,8 +53,12 @@ Register-ScheduledTask -TaskName '$TASK' -Action \$a -Trigger \$t -Settings \$s 
     echo "Undo:       $0 off"
     ;;
   off)
-    ps "if (Get-ScheduledTask -TaskName '$TASK' -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName '$TASK' -Confirm:\$false; 'removed' } else { 'absent' }" \
-      | grep -q removed && echo "==> Task '$TASK' removed" || echo "Task '$TASK' was not there"
+    out=$(ps "\$ErrorActionPreference = 'Stop'; if (Get-ScheduledTask -TaskName '$TASK' -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName '$TASK' -Confirm:\$false; 'removed' } else { 'absent' }")
+    case "$out" in
+      removed) echo "==> Task '$TASK' removed" ;;
+      absent) echo "Task '$TASK' was not there" ;;
+      *) echo "!! unexpected answer from PowerShell: $out"; exit 1 ;;
+    esac
     ;;
   status)
     out=$(ps "\$t = Get-ScheduledTask -TaskName '$TASK' -ErrorAction SilentlyContinue; if (\$t) { \$i = \$t | Get-ScheduledTaskInfo; 'state: ' + \$t.State; 'last run: ' + \$i.LastRunTime + ' (result ' + \$i.LastTaskResult + ')'; 'next run: ' + \$i.NextRunTime } else { 'absent' }")
@@ -66,7 +76,7 @@ Register-ScheduledTask -TaskName '$TASK' -Action \$a -Trigger \$t -Settings \$s 
     fi
     ;;
   run)
-    ps "Start-ScheduledTask -TaskName '$TASK'"
+    ps "\$ErrorActionPreference = 'Stop'; Start-ScheduledTask -TaskName '$TASK'" >/dev/null
     echo "==> Started '$TASK'. It takes a few minutes; check with: $0 status"
     ;;
   *) usage; exit 2 ;;

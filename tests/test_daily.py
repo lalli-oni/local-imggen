@@ -77,6 +77,24 @@ def test_each_theme_once_per_round_and_stable(daily_conf):
     assert daily.pick_theme(daily.settings(), start) == daily.pick_theme(d, start)
 
 
+def test_no_theme_twice_in_a_row(daily_conf):
+    for n in (2, 3, 4):
+        daily_conf(themes=[f"t{i}" for i in range(n)], months={}, weekdays={})
+        d = daily.settings()
+        picks = [daily.pick_theme(d, date(2026, 1, 1) + timedelta(days=i))[0] for i in range(400)]
+        assert all(a != b for a, b in zip(picks, picks[1:])), n
+
+
+def test_weekday_pool_counts_weeks(daily_conf):
+    themes = [f"fri {i}" for i in range(7)]
+    daily_conf(themes=["plain"], months={}, weekdays={"fri": themes})
+    d = daily.settings()
+    first = date(2026, 1, 2)  # a Friday
+    first += timedelta(weeks=-((first.toordinal() // 7) % 7))  # the first Friday of a round
+    fridays = [daily.pick_theme(d, first + timedelta(weeks=i))[0] for i in range(7)]
+    assert sorted(fridays) == themes  # 7 Fridays in a row: each theme once
+
+
 def test_month_beats_weekday_beats_themes(daily_conf):
     daily_conf(themes=["plain"], weekdays={"fri": "friday thing"}, months={"dec": ["xmas"]})
     d = daily.settings()
@@ -104,6 +122,11 @@ def test_prompt_puts_the_cast_first(tulu, daily_conf):
     assert p["cast"] == {"tulu": 1}
 
 
+def test_cast_may_be_one_name(tulu, daily_conf):
+    daily_conf(cast="tulu")
+    assert daily.plan(date(2026, 11, 10))["cast"] == {"tulu": 1}
+
+
 def test_show(tulu, capsys):
     assert imagegen.main(["daily", "--show", "--date", "2026-12-24"]) == 0
     out = capsys.readouterr().out
@@ -127,6 +150,8 @@ def test_daily_generates_and_sets_wallpaper(tulu, comfy, on_c_drive, stub_calls,
     assert "wallpaper set: C:\\imagegen\\" in capsys.readouterr().out
     [line] = _log_lines(out_dir)
     assert " ok: " in line and "C:\\imagegen\\" in line
+    assert meta["daily"]["theme"] in (Path(run["run_dir"]) / "index.html").read_text()  # in the prompt it shows
+    assert meta["daily"]["theme"] in (Path(run["run_dir"]) / "index.html").read_text()  # in the prompt it shows
 
 
 def test_comfyui_down_leaves_wallpaper_alone(tulu, on_c_drive, stub_calls, out_dir, capsys):
@@ -149,6 +174,15 @@ def test_failed_job_leaves_wallpaper_alone(tulu, comfy, on_c_drive, stub_calls, 
     assert imagegen.main(["daily", "--wait", "5"]) == 1
     assert _wallpaper_calls(stub_calls) == []
     assert "FAILED" in _log_lines(out_dir)[0]
+
+
+def test_broken_config_is_still_logged(tulu, monkeypatch, stub_calls, out_dir):
+    def broken():
+        raise ValueError("config.toml: bad line 3")
+    monkeypatch.setattr(imagegen, "load_config", broken)
+    assert daily.main(["--wait", "0"]) == 1
+    assert "ValueError: config.toml: bad line 3" in _log_lines(out_dir)[0]  # IMAGEGEN_OUTPUT_DIR still found
+    assert _wallpaper_calls(stub_calls) == []
 
 
 def test_no_set(tulu, comfy, stub_calls, out_dir):
@@ -206,6 +240,14 @@ def test_task_off(task_env, stub_calls):
     assert "Unregister-ScheduledTask -TaskName 'imagegen-daily' -Confirm:$false" in _ps(stub_calls)[0]
     r = run_script([SCRIPT, "off"], {**task_env, "FAKE_POWERSHELL_OUT": "absent"})
     assert r.code == 0 and "was not there" in r.out
+
+
+@pytest.mark.parametrize("cmd", ["on", "off", "status", "run"])
+def test_task_powershell_failure_is_reported(task_env, cmd):
+    r = run_script([SCRIPT, cmd], {**task_env, "FAKE_POWERSHELL_FAIL": "1", "FAKE_POWERSHELL_OUT": "Access denied"})
+    assert r.code == 1, r.out
+    assert "powershell.exe failed: Access denied" in r.out
+    assert "removed" not in r.out and "was not there" not in r.out and "runs daily" not in r.out
 
 
 def test_task_status(task_env, out_dir):

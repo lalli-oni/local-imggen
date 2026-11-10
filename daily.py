@@ -20,8 +20,10 @@ Scheduling (Windows Task Scheduler, starts WSL if needed): windows/daily-task.sh
 from __future__ import annotations
 
 import json
+import os
 import random
 import sys
+import tomllib
 from datetime import date, datetime
 from pathlib import Path
 
@@ -50,65 +52,86 @@ def _pool(value) -> list[str]:
     return [t.strip() for t in items if isinstance(t, str) and t.strip()]
 
 
+def _shuffled(pool: list[str], key: str, r: int) -> list[str]:
+    order = sorted(pool)  # only the key and round decide the order, not how config.toml lists them
+    random.Random(f"{key}:{r}").shuffle(order)
+    return order
+
+
+def _order(pool: list[str], key: str, r: int) -> list[str]:
+    """Round r of a pool: each theme once, and never the theme that ended round r - 1 first."""
+    if len(pool) <= 2:
+        return sorted(pool)  # 2 themes simply alternate
+    order = _shuffled(pool, key, r)
+    if order[0] == _shuffled(pool, key, r - 1)[-1]:
+        order[0], order[1] = order[1], order[0]  # the fix never moves a round's last theme, so this holds
+    return order
+
+
 def pick_theme(d: dict, day: date) -> tuple[str, str]:
-    """(theme, where it came from) for a day: the month's list, else the weekday's, else `themes`."""
-    for where, pool in ((f"months.{MONTHS[day.month - 1]}", d["months"].get(MONTHS[day.month - 1])),
-                        (f"weekdays.{DAYS[day.weekday()]}", d["weekdays"].get(DAYS[day.weekday()])),
-                        ("themes", d["themes"])):
+    """(theme, where it came from) for a day: the month's list, else the weekday's, else `themes`.
+    The pool is walked in rounds over the days it applies to (a weekday pool counts weeks, not days)."""
+    k = day.toordinal()
+    for where, pool, step in ((f"months.{MONTHS[day.month - 1]}", d["months"].get(MONTHS[day.month - 1]), k),
+                              (f"weekdays.{DAYS[day.weekday()]}", d["weekdays"].get(DAYS[day.weekday()]), k // 7),
+                              ("themes", d["themes"], k)):
         pool = _pool(pool)
         if pool:
-            n, k = len(pool), day.toordinal()
-            order = sorted(pool)  # only the date decides the order, not how config.toml lists them
-            random.Random(f"{where}:{k // n}").shuffle(order)
-            return order[k % n], where
+            n = len(pool)
+            return _order(pool, where, step // n)[step % n], where
     raise ValueError("[daily] has no themes: add themes = [\"...\"] to config.toml")
 
 
 def compose(d: dict, theme: str) -> tuple[str, dict]:
-    """The prompt (cast descriptions, theme, style) and {character: version} it used."""
+    """The prompt (cast descriptions, theme, style; joined like a project pass) and {character: version}."""
     import characters
-    used, parts = {}, []
-    for name in d["cast"]:
+    import projects
+    used, cast_text = {}, []
+    for name in _pool(d["cast"]):
         ch = characters.load(name)  # FileNotFoundError names the known characters
         desc = characters.state_at(ch)["description"]
         if not desc.strip():
             raise ValueError(f"character '{name}' has no description yet: gen char set {name} --desc '...'")
         used[name] = ch["version"]
-        parts.append(desc)
-    parts += [theme, d["style"]]
-    return ", ".join(p.strip().strip(",") for p in parts if p and p.strip()), used
+        cast_text.append(desc)
+    return projects.full_prompt({"prompt": theme, "snippets": {}}, d["style"], cast_text), used
 
 
-def plan(day: date | None = None) -> dict:
+def plan(day: date | None = None, conf: dict | None = None) -> dict:
     day = day or date.today()
-    d = settings()
+    d = settings(conf)
     theme, where = pick_theme(d, day)
     prompt, used = compose(d, theme)
     return {"date": day.isoformat(), "theme": theme, "from": where, "prompt": prompt, "cast": used,
             "preset": d["preset"], "count": max(1, int(d["count"]))}
 
 
-def log_file() -> Path:
-    return Path(imagegen.load_config()["output_dir"]).expanduser() / "daily.log"
+def log_file(conf: dict | None = None) -> Path:
+    conf = conf or imagegen.load_config()
+    return Path(conf["output_dir"]).expanduser() / "daily.log"
 
 
-def _log(line: str) -> None:
+def _log(line: str, conf: dict | None) -> None:
+    """stderr, and a line in daily.log. Never raises: it also reports a broken config.toml."""
     imagegen.log(line)
     try:
-        f = log_file()
+        f = log_file(conf) if conf else Path(os.environ.get("IMAGEGEN_OUTPUT_DIR")
+                                             or tomllib.loads((imagegen.ROOT / "config.toml").read_text())
+                                             ["output_dir"]).expanduser() / "daily.log"
         f.parent.mkdir(parents=True, exist_ok=True)
         with f.open("a", encoding="utf-8") as fh:
             fh.write(f"{datetime.now():%Y-%m-%d %H:%M:%S} {line}\n")
-    except OSError as e:
+    except Exception as e:  # a bad config.toml, or a missing output folder drive
         imagegen.log(f"warning: could not write the daily log: {e}")
 
 
 def run(day: date | None = None, wait: float = DEFAULT_WAIT, set_wallpaper: bool = True) -> dict:
     """Make today's wallpaper and set it. Raises (wallpaper untouched) on any failure; logs either way."""
+    conf = None
     try:
-        p = plan(day)
         conf = imagegen.load_config()
-        imagegen.Comfy(conf["comfy_url"]).wait_ready(timeout=wait)
+        p = plan(day, conf)
+        imagegen.Comfy(conf["comfy_url"]).wait_ready(timeout=wait)  # generate() then finds it up
         run = imagegen.generate(p["prompt"], p["preset"], p["count"], label=f"daily-{imagegen.slug(p['theme'], 30)}")
         if not run["images"]:
             raise RuntimeError(f"the run made no images ({run['run_dir']})")
@@ -119,9 +142,9 @@ def run(day: date | None = None, wait: float = DEFAULT_WAIT, set_wallpaper: bool
         image = run["images"][0]["path"]
         run["wallpaper"] = imagegen.set_wallpaper(image) if set_wallpaper else None
     except Exception as e:
-        _log(f"FAILED, wallpaper unchanged: {type(e).__name__}: {e}")
+        _log(f"FAILED, wallpaper unchanged: {type(e).__name__}: {e}", conf)
         raise
-    _log(f"ok: {p['theme']!r} -> {run['wallpaper'] or image}" + ("" if set_wallpaper else " (not set)"))
+    _log(f"ok: {p['theme']!r} -> {run['wallpaper'] or image}" + ("" if set_wallpaper else " (not set)"), conf)
     return run
 
 
