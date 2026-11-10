@@ -60,6 +60,37 @@ negative_extra = ", busy background, multiple objects, photo, text, letters, fra
 # quarter of its size). trim: crop to the subject, centre it on a square (the canvas's shorter side).
 post = ["remove_bg", "keep_largest", "trim"]
 
+# gen daily (#3): one new wallpaper a day, set as the desktop background (old ones stay in output_dir).
+# Schedule it: windows/daily-task.sh on [--at 06:00]. Preview a day: gen daily --show [--date 2026-12-24].
+# Log: <output_dir>/daily.log. Each theme comes up once per round, in an order the date decides.
+[daily]
+preset = "wallpaper"          # or wallpaper_ultrawide
+count = 1                     # images per day; the first one becomes the wallpaper
+cast = ["tulu"]               # characters (gen char) in every daily; their descriptions lead the prompt
+style = "cosy whimsical storybook scene, soft light"
+themes = [
+  "relaxing in a tide pool at sunset, wide rocky coastline",
+  "reading a book in a cosy window nook on a rainy day",
+  "floating among glowing jellyfish in the deep blue sea",
+  "sipping tea on a mossy rock in a misty pine forest",
+  "stargazing on a grassy hill under the northern lights",
+  "surfing a small wave on a sunny tropical beach",
+  "napping on a lighthouse balcony at dawn",
+  "exploring a sunken ship full of treasure",
+  "building a sandcastle shaped like a sunken city",
+  "tending a tiny coral garden on the sea floor",
+]
+
+# Optional: replaces `themes` for a month (jan..dec) or a weekday (mon..sun); a month wins over a weekday.
+[daily.months]
+oct = ["carving a jack-o'-lantern in a pumpkin patch at dusk", "trick-or-treating through a foggy harbour town",
+       "brewing a bubbling potion in a candlelit sea cave"]
+dec = ["sledding down a snowy hill under twinkling lights", "decorating a kelp tree with glowing ornaments",
+       "drinking hot cocoa by a fireplace on a snowy night"]
+
+[daily.weekdays]
+# fri = "partying in a neon-lit underwater disco"
+
 # Opt-in model presets: `download` names the script in models/ that fetches their models (gen doctor
 # shows them as warn until then). Presets that load a diffusion model (`unet`) have no img2img/inpaint
 # (gen vary) unless they name an img2img_workflow / inpaint_workflow.

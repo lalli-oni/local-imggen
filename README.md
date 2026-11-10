@@ -30,6 +30,7 @@ gen "misty fjord at sunrise" -p wallpaper --open
 | `gen char new\|list\|status\|set` | Shared characters (lil tulu) that projects cast; a change flags the assets that show them |
 | `gen recent`, `gen sheet [RUN_DIR\|DATE]` | Recent runs; rebuild contact sheets |
 | `gen set-wallpaper PATH` | Set a Windows wallpaper |
+| `gen daily [--show] [--no-set]` | Today's wallpaper (theme and cast from `[daily]` in `config.toml`), then set it. Schedule: `windows/daily-task.sh on [--at 06:00]` |
 | `gen doctor` | Read-only health check |
 
 Every run ends with a timing line, e.g. `timing: 4 images in 210.3s (first 80.1s, then ~43.4s each): load 3.0s,
