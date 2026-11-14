@@ -164,7 +164,10 @@ def _size(run: dict) -> str | None:
     """WxH of a run's images, from the first image's sidecar."""
     side = imagegen.find_sidecar(Path(run["images"][0]["path"])) if run.get("images") else None
     prm = (side or {}).get("params", {})
-    return f"{prm['width']}x{prm['height']}" if "width" in prm and "height" in prm else None
+    for w, h in (("out_width", "out_height"), ("width", "height")):  # out_*: wallpaper_ref sets its own size
+        if w in prm and h in prm:
+            return f"{prm[w]}x{prm[h]}"
+    return None
 
 
 def _bake(comfy: imagegen.Comfy, out: Path, columns: list[tuple[str, list[tuple[str, object]]]], texts: list[str],

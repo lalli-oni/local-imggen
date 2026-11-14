@@ -264,3 +264,11 @@ def test_t2i_ref_takes_an_edit_only_model(comfy, make_image, fake_proc):
     assert run["edit"] is False and run["source_image"]
     # file names keep the column name, so "klein+ref" can't collide with a preset called klein-ref
     assert any(Path(im["path"]).name.startswith("01-klein+ref-") for im in run["images"])
+
+
+def test_t2i_ref_size_of_a_preset_with_its_own_output_size(comfy, make_image, fake_proc):
+    """wallpaper_ref (#3) is edit-only and renders at out_width x out_height, not the ref's size."""
+    run = bakeoff.t2i_bakeoff(["x"], ["wallpaper_ref"], ref=str(make_image(size=(512, 512))), count=1,
+                              interval=0.01)
+    r = {r["preset"]: r for r in run["bakeoff"]["presets"]}["wallpaper_ref+ref"]
+    assert r["images"] == 1 and r["size"] == "1536x864"

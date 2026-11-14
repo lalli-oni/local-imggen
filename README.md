@@ -169,7 +169,8 @@ Which model should make wallpapers instead of SDXL base? The same prompts and se
 (`draft`), an SDXL finetune (`dreamshaper`), klein and Qwen, all at 1344x768 (`--size`). With `--ref`, klein
 and Qwen also run each prompt as an edit of the ref (columns `klein+ref`, `qwen+ref`), with a line added that
 the ref's character appears once in a new pose and the scene fills the frame. Their size follows the ref
-(square for lil tulu). SDXL has no ref input until IP-Adapter, so its `+ref` row says so.
+(square for lil tulu). SDXL has no ref input until IP-Adapter, so its `+ref` row says so. Edit-only presets
+work with `--ref` too: add `wallpaper_ref` to `-p` to compare today's daily wallpaper flow (klein + ref, 16:9, 4K).
 
 ```sh
 ~/imagegen/models/dreamshaper-xl-lightning.sh   # ~6.9 GB, asks y/N (klein and Qwen are already there)
@@ -177,5 +178,5 @@ gen doctor
 gen bakeoff --t2i --ref 'C:\Users\lalli\Pictures\lil-tulu.png' \
   "lil tulu, a chibi cute baby cthulhu with a huge round green head, four plump curled face tentacles, big amber eyes, small red bat wings with a green frame, a pale yellow belly and a short smooth rounded tail, reading a book in a cosy window nook on a rainy evening, warm lamp light, cosy whimsical storybook illustration" \
   "a misty Icelandic fjord at sunrise with a small red fishing boat, wide landscape, painterly storybook illustration, soft light" \
-  -n 2 --seed 1 --open
+  -p draft,dreamshaper,klein,qwen,wallpaper_ref -n 2 --seed 1 --open
 ```
