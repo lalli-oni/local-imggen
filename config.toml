@@ -7,11 +7,14 @@ output_dir = "/mnt/c/Users/lalli/Pictures/imagegen"   # change this line to move
 checkpoint       = "sd_xl_base_1.0.safetensors"
 default_negative = "blurry, low quality, watermark, text, signature, jpeg artifacts"
 
-# Each preset = a workflow template in workflows/ + the values poured into it.
+# Each preset = a workflow template in workflows/ + the values poured into it. `model` names the model for
+# people (gen presets, the bake-off sheet).
 # Keys a workflow uses as "{{key}}" must exist here (or come from CLI/MCP args).
 
 [presets.draft]
 description = "Quick square SDXL image for ideas and exploration"
+model = "SDXL base 1.0"
+ref_preset = "sdxl_ref"         # what draws with a ref image (gen bakeoff --t2i's ref test)
 workflow = "sdxl_base.json"
 width = 1024
 height = 1024
@@ -21,6 +24,7 @@ suffix = ""
 
 [presets.wallpaper]
 description = "16:9 landscape, upscaled to 4K (3840x2160)"
+model = "SDXL base 1.0"
 workflow = "sdxl_upscale.json"
 img2img_workflow = "sdxl_img2img_upscale.json"
 inpaint_workflow = "sdxl_inpaint_upscale.json"
@@ -35,6 +39,7 @@ suffix = ", wallpaper, wide landscape composition, highly detailed"
 
 [presets.wallpaper_ultrawide]
 description = "21:9 ultrawide, upscaled to 3440x1440"
+model = "SDXL base 1.0"
 workflow = "sdxl_upscale.json"
 img2img_workflow = "sdxl_img2img_upscale.json"
 inpaint_workflow = "sdxl_inpaint_upscale.json"
@@ -49,6 +54,7 @@ suffix = ", ultrawide panoramic wallpaper, highly detailed"
 
 [presets.icon]
 description = "Single centered icon, background removed -> transparent PNG"
+model = "SDXL base 1.0"
 workflow = "sdxl_base.json"
 width = 1024
 height = 1024
@@ -138,6 +144,8 @@ dec = ["sledding down a snowy hill under twinkling lights", "decorating a kelp t
 # (dpmpp_2m), which is not what Lightning is tuned for.
 [presets.dreamshaper]
 description = "DreamShaper XL Lightning (SDXL finetune, 6 steps): illustration-friendly, natural-language prompts"
+model = "DreamShaper XL Lightning"
+ref_preset = "dreamshaper_ref"
 workflow = "sdxl_lightning.json"
 download = "dreamshaper-xl-lightning.sh"
 checkpoint = "DreamShaperXL_Lightning.safetensors"
@@ -147,11 +155,42 @@ steps = 6
 cfg = 2.0
 suffix = ""
 
+# SDXL + IP-Adapter (#51): an SDXL model draws the character in a ref image into a new scene. Edit-only
+# (gen edit REF "scene" -p sdxl_ref); `ref_preset` on draft/dreamshaper points the bake-off's ref test here.
+# Opt-in: ~/imagegen/models/ipadapter-sdxl.sh (~3.4 GB) + the ComfyUI_IPAdapter_plus node (see that script).
+# ipadapter_weight: how strongly the ref steers (higher = closer to the ref, less to the prompt).
+[presets.sdxl_ref]
+description = "SDXL base + IP-Adapter: the character in a ref image in a new scene: gen edit REF \"scene\" -p sdxl_ref"
+model = "SDXL base 1.0 + IP-Adapter"
+edit_workflow = "sdxl_ipadapter.json"
+download = "ipadapter-sdxl.sh"
+checkpoint = "sd_xl_base_1.0.safetensors"
+ipadapter_model = "ip-adapter-plus_sdxl_vit-h.safetensors"
+clip_vision = "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors"
+ipadapter_weight = 0.8
+ref_negative = "blurry, low quality, watermark, text, multiple characters"
+steps = 25
+cfg = 7.0
+
+[presets.dreamshaper_ref]
+description = "DreamShaper XL Lightning + IP-Adapter: gen edit REF \"scene\" -p dreamshaper_ref"
+model = "DreamShaper XL Lightning + IP-Adapter"
+edit_workflow = "sdxl_lightning_ipadapter.json"
+download = "ipadapter-sdxl.sh"
+checkpoint = "DreamShaperXL_Lightning.safetensors"
+ipadapter_model = "ip-adapter-plus_sdxl_vit-h.safetensors"
+clip_vision = "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors"
+ipadapter_weight = 0.8
+ref_negative = "blurry, low quality, watermark, text, multiple characters"
+steps = 6
+cfg = 2.0
+
 # Edit-only preset: `gen edit IMAGE "instruction"` / MCP edit. Not usable for gen "prompt" or gen vary.
 # Models are opt-in (~17.7 GB): run ~/imagegen/models/flux-kontext.sh once.
 # FLUX.1 Kontext [dev] is under the FLUX.1 [dev] non-commercial licence.
 [presets.kontext]
 description = "Edit an image by instruction (FLUX.1 Kontext dev, fp8): gen edit IMAGE \"...\""
+model = "FLUX.1 Kontext dev"
 edit_workflow = "flux_kontext.json"
 download = "flux-kontext.sh"
 unet = "flux1-dev-kontext_fp8_scaled.safetensors"
@@ -165,6 +204,7 @@ guidance = 2.5
 # FLUX.2 [klein] 4B distilled, fp8 (~11.9 GB, Apache 2.0): ~/imagegen/models/flux2-klein.sh
 [presets.klein]
 description = "FLUX.2 klein 4B (fp8, 4 steps): text-to-image, and gen edit IMAGE \"...\" -p klein"
+model = "FLUX.2 klein 4B"
 workflow = "flux2_klein_t2i.json"
 edit_workflow = "flux2_klein_edit.json"
 download = "flux2-klein.sh"
@@ -180,6 +220,7 @@ steps = 4
 # By hand: gen edit REF.png "lil tulu reading in a rainy window nook, only one character" -p wallpaper_ref
 [presets.wallpaper_ref]
 description = "16:9 wallpaper (4K) of the character in a ref image (FLUX.2 klein): gen edit REF \"scene\" -p wallpaper_ref"
+model = "FLUX.2 klein 4B"
 edit_workflow = "flux2_klein_ref_upscale.json"
 download = "flux2-klein.sh"
 unet = "flux-2-klein-4b-fp8.safetensors"
@@ -197,6 +238,7 @@ target_height = 2160
 # resolution = the edit's pixel budget (1024 = ~1 MP; the model goes up to 2048). cfg 1 ignores the negative.
 [presets.qwen]
 description = "Qwen-Image-2.1 7B (fp8 at load): text-to-image, and gen edit IMAGE \"...\" -p qwen"
+model = "Qwen-Image 2.1"
 workflow = "qwen_image_21_t2i.json"
 edit_workflow = "qwen_image_21_edit.json"
 download = "qwen-image-2.1.sh"

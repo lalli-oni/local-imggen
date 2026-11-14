@@ -26,7 +26,7 @@ gen "misty fjord at sunrise" -p wallpaper --open
 | `gen cutout PATH [--clean]` | Remove the background (transparent PNG); `--clean` also drops stray shapes and centres it on a square |
 | `gen edit PATH "instruction" [-p klein\|kontext\|qwen]` | Edit with a plain-language instruction; FLUX.2 klein by default, opt-in models (`models/*.sh`) |
 | `gen bakeoff PATH "instr" ["instr"...] [-p kontext,klein,qwen] [-n 2]` | The same edits through several edit models (same seeds), time/VRAM/RAM per model, one contact sheet |
-| `gen bakeoff --t2i "prompt" ["prompt"...] [--ref IMG] [-p draft,dreamshaper,klein,qwen] [--size 1344x768] [--steps klein=16]` | The same prompts through several text-to-image models; with `--ref`, models that can edit also run each prompt with the ref as the character |
+| `gen bakeoff --t2i "fresh prompt"... [--ref IMG --ref-prompt "scene"...] [-p draft,dreamshaper,klein,qwen] [--steps klein=16]` | Compare text-to-image models: fresh prompts from text alone, and a character from a ref image (IP-Adapter for SDXL) |
 | `gen project new\|list\|status\|set\|gen\|promote\|keep\|import\|doc` | Creative projects: versioned prompt/palette/refs, named assets, docs, import an existing folder |
 | `gen project rate\|note\|board` | The project's board: pick/maybe/reject and notes on pass images (`P:N`), and its `index.html` page |
 | `gen char new\|list\|status\|set` | Shared characters (lil tulu) that projects cast; a change flags the assets that show them |
@@ -90,6 +90,7 @@ No GPU, ComfyUI or tulu needed: it uses a fake ComfyUI server and stubs. CI runs
 |---|---|---|---|---|---|---|---|---|
 | **SDXL base 1.0** (`sd_xl_base_1.0.safetensors`) | Generation, img2img, inpaint | every preset; `gen`, `gen vary`, `gen project gen` | `checkpoints` | 6.9 GB | ~8 GB VRAM at 1024² | CreativeML Open RAIL++-M | Jul 2023 | By hand from [stabilityai/stable-diffusion-xl-base-1.0](https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0) |
 | **DreamShaper XL Lightning** (`DreamShaperXL_Lightning.safetensors`) | SDXL finetune, 6 steps | `dreamshaper` preset, `gen bakeoff --t2i` (#51) | `checkpoints` | 6.94 GB | ~8 GB VRAM, like SDXL | CreativeML Open RAIL++-M | Feb 2024 | `models/dreamshaper-xl-lightning.sh` (opt-in, asks y/N) |
+| **IP-Adapter Plus SDXL** (`ip-adapter-plus_sdxl_vit-h.safetensors`) + CLIP ViT-H/14 image encoder | SDXL models draw the character in a ref image | `sdxl_ref`, `dreamshaper_ref` presets (#51) | `ipadapter`, `clip_vision` | 0.85 + 2.53 GB | small on top of SDXL | Apache 2.0 / MIT | 2023 | `models/ipadapter-sdxl.sh` (opt-in, asks y/N) + the ComfyUI_IPAdapter_plus node (by hand) |
 | **RealESRGAN x4plus** (`RealESRGAN_x4plus.pth`) | 4x upscale | `wallpaper`, `wallpaper_ultrawide` | `upscale_models` | 64 MB | ~1-2 GB VRAM (tiled) | BSD-3-Clause | Jul 2021 | `setup.sh` (GitHub release) |
 | **rembg u2net** (`u2net.onnx`) | Background removal | `icon` preset, `gen cutout` | not ComfyUI: `~/.u2net/` | 176 MB | ~1 GB RAM, CPU only | Apache 2.0 (rembg: MIT) | 2020 | `setup.sh` (rembg fetches it on first use) |
 | **FLUX.1 Kontext [dev] fp8** (`flux1-dev-kontext_fp8_scaled.safetensors`) | Instruction editing | `gen edit -p kontext` | `diffusion_models` | 11.9 GB | ~12 GB VRAM | FLUX.1 [dev] Non-Commercial | Jun 2025 | `models/flux-kontext.sh` (opt-in, asks y/N) |
@@ -165,21 +166,33 @@ tagged `preset · instruction`, and `bakeoff.json`.
 
 ### Text-to-image bake-off (#51)
 
-Which model should make wallpapers instead of SDXL base? The same prompts and seeds through SDXL base
-(`draft`), an SDXL finetune (`dreamshaper`), klein and Qwen, all at 1344x768 (`--size`). With `--ref`, klein
-and Qwen also run each prompt as an edit of the ref (columns `klein+ref`, `qwen+ref`), with a line added that
-the ref's character appears once in a new pose and the scene fills the frame. Their size follows the ref
-(square for lil tulu). SDXL has no ref input until IP-Adapter, so its `+ref` row says so.
-Each preset samples with its own steps (draft 25, dreamshaper 6, klein 4, wallpaper_ref 16, qwen 25);
-`--steps klein=16` overrides one (klein's 4 gave many small quirks on lil tulu). `--count` is images per
-prompt and model (new seed each), not steps. Edit-only presets
-work with `--ref` too: add `wallpaper_ref` to `-p` to compare today's daily wallpaper flow (klein + ref, 16:9, 4K).
+Which model should replace SDXL base as the default? Two tests on one contact sheet, with the same seeds for
+every model:
+
+1. **Fresh prompt, no ref** (the positional prompts): every model draws the scene from text alone, all at
+   1344x768 (`--size`). This shows general quality.
+2. **lil tulu with the ref** (`--ref IMAGE --ref-prompt "..."`): every model draws the character from the ref image
+   into the scene. klein and Qwen take the ref directly. SDXL base and DreamShaper take it through IP-Adapter
+   (presets `sdxl_ref`, `dreamshaper_ref`, picked by `ref_preset`). Their size follows the ref, which is
+   1024x1024 for the square lil tulu ref. This shows consistency. A line is added to each ref prompt saying the
+   character appears once, in a new pose, and the scene fills the frame.
+
+Each image is labelled with the model and its steps, for example "FLUX.2 klein 4B · 16 steps · ref · 2", where
+2 is the prompt number. Each model uses its preset's steps: SDXL 25, DreamShaper 6, klein 4, Qwen 25.
+`--steps klein=16` overrides one; klein's 4 steps gave many small quirks on lil tulu. `--count` is the number of
+images per prompt and model, each with a new seed. It is not steps.
 
 ```sh
-~/imagegen/models/dreamshaper-xl-lightning.sh   # ~6.9 GB, asks y/N (klein and Qwen are already there)
+~/imagegen/models/dreamshaper-xl-lightning.sh   # ~6.9 GB, asks y/N
+~/imagegen/models/ipadapter-sdxl.sh             # ~3.4 GB, asks y/N; its --help shows the one-time node install
 gen doctor
-gen bakeoff --t2i --ref 'C:\Users\lalli\Pictures\lil-tulu.png' \
-  "lil tulu, a chibi cute baby cthulhu with a huge round green head, four plump curled face tentacles, big amber eyes, small red bat wings with a green frame, a pale yellow belly and a short smooth rounded tail, reading a book in a cosy window nook on a rainy evening, warm lamp light, cosy whimsical storybook illustration" \
-  "a misty Icelandic fjord at sunrise with a small red fishing boat, wide landscape, painterly storybook illustration, soft light" \
-  --presets draft,dreamshaper,klein,qwen,wallpaper_ref --steps klein=16 --count 2 --seed 1 --open
+gen bakeoff --t2i \
+  --presets draft,dreamshaper,klein,qwen \
+  --steps klein=16 \
+  --count 2 \
+  --seed 1 \
+  --ref 'C:\Users\lalli\Pictures\lil-tulu.png' \
+  --ref-prompt "lil tulu reading a book in a cosy window nook on a rainy evening, warm lamp light, cosy whimsical storybook illustration" \
+  --open \
+  "a misty Icelandic fjord at sunrise with a small red fishing boat, wide landscape, painterly storybook illustration, soft light"
 ```

@@ -32,7 +32,8 @@ MODES = [("workflow", set()),
 EDIT_MODE = ("edit_workflow", {"image", "width", "height"})
 # Which ComfyUI model folder each model-like preset key lives in.
 MODEL_KEYS = {"checkpoint": "checkpoints", "upscale_model": "upscale_models", "unet": "diffusion_models",
-              "clip_l": "text_encoders", "t5": "text_encoders", "text_encoder": "text_encoders", "vae": "vae"}
+              "clip_l": "text_encoders", "t5": "text_encoders", "text_encoder": "text_encoders", "vae": "vae",
+              "ipadapter_model": "ipadapter", "clip_vision": "clip_vision"}
 MODELS_DIR = "~/imagegen/models"  # where a preset's `download` script lives
 
 

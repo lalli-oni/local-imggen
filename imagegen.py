@@ -10,7 +10,7 @@ Usage:
   gen vary PATH --mask MASK.png --prompt "..."  # inpaint: repaint only the white part of MASK
   gen edit PATH "make it wave, side view"      # instruction edit (FLUX.2 klein; -p kontext|qwen; opt-in models)
   gen bakeoff PATH "instr" ["instr"...]         # same edits through kontext, klein, qwen; time/VRAM/RAM
-  gen bakeoff --t2i "prompt"... [--ref IMG]     # same prompts through draft, dreamshaper, klein, qwen (#51)
+  gen bakeoff --t2i "prompt"... [--ref IMG --ref-prompt "scene"]  # compare text-to-image models (#51)
   gen cutout PATH [--clean]                     # remove the background -> PATH-transparent.png
                                                 #   --clean: also drop stray shapes, centre on a square
   gen presets                                   # list presets
@@ -70,7 +70,7 @@ def load_config() -> dict:
 
 # Preset keys that are not workflow values (generate() drops them before filling the workflow).
 NOT_PARAMS = {"workflow", "img2img_workflow", "inpaint_workflow", "edit_workflow", "description",
-              "suffix", "negative_extra", "post", "download"}
+              "suffix", "negative_extra", "post", "download", "model", "ref_preset"}
 
 # Default img2img/inpaint graphs (SDXL). Presets that load a diffusion model (`unet`: Flux, Qwen) get none.
 DEFAULT_MODE_WORKFLOWS = {"img2img_workflow": "sdxl_img2img.json", "inpaint_workflow": "sdxl_inpaint.json"}

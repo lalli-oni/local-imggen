@@ -10,7 +10,8 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   `gen vary PATH [--mask M] [-s 0.4]` for img2img/inpaint, `gen edit PATH "instruction"` for instruction edits
   (FLUX.2 klein by default since the #40 bake-off, `EDIT_PRESET`; `-p kontext` / `-p qwen`), `gen cutout PATH [--clean]` for background removal,
   `gen bakeoff PATH "instr"...` (bakeoff.py: same edits through several edit presets, time/VRAM/RAM, one sheet;
-  `--t2i "prompt"... [--ref IMG]` does the same for text-to-image, #51, with `<preset>+ref` columns for edit presets),
+  `--t2i "fresh prompt"... [--ref IMG --ref-prompt "scene"...]` compares text-to-image models, #51: fresh prompts from text,
+  and the ref test through each preset's edit_workflow or its `ref_preset` (SDXL -> sdxl_ref, IP-Adapter); labels from `model`),
   `gen sheet [RUN_DIR|DATE]` to rebuild contact sheets (default: latest run), `gen doctor` for a health check)
 - `templates/contact_sheet.html`: the per-run `index.html` viewer (fit-all / size slider, A/B compare).
   Static, no build, opened via file://; `write_contact_sheet` inlines the run data as JSON.
@@ -49,7 +50,7 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
 - `windows/install-wslconfig.sh`: writes `%USERPROFILE%\.wslconfig` (cores/RAM for WSL). Manual, never overwrites,
   always-on once applied (needs `wsl --shutdown`), so it is not part of the on/off toggle.
 - `models/*.sh`: opt-in downloads (ask y/N, resumable, sha256) into `~/comfyui/models`, sharing `models/_fetch.sh`:
-  `flux-kontext.sh` (~17.7 GB), `flux2-klein.sh` (~11.9 GB), `dreamshaper-xl-lightning.sh` (~6.9 GB, SDXL finetune), `qwen-image-2.1.sh` (~30 GB, bf16: no int8, it renders
+  `flux-kontext.sh` (~17.7 GB), `flux2-klein.sh` (~11.9 GB), `dreamshaper-xl-lightning.sh` (~6.9 GB, SDXL finetune), `ipadapter-sdxl.sh` (~3.4 GB; the ComfyUI_IPAdapter_plus node is a manual git clone), `qwen-image-2.1.sh` (~30 GB, bf16: no int8, it renders
   black on gfx1201). A preset's `download` key names its script; `gen doctor` shows those models (and nodes only
   they use) as warn while missing. Never run automatically.
 - `test.sh` + `tests/`: the test suite (see Testing below). `requirements-dev.txt` / `requirements-browser.txt`

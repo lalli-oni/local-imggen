@@ -59,7 +59,8 @@ def test_bakeoff_runs_every_instruction_through_every_preset(comfy, make_image, 
     assert "-bakeoff-src" in out.name
     # instruction-major on the sheet: instruction 1 from each preset, then instruction 2
     assert [im["tag"] for im in run["images"]] == \
-        [f"{p} · {n}" for n in (1, 2) for p in ("kontext", "klein", "qwen") for _ in range(2)]
+        [f"{p} · {n}" for n in (1, 2) for p in ("FLUX.1 Kontext dev · 20 steps", "FLUX.2 klein 4B · 4 steps",
+                                                 "Qwen-Image 2.1 · 25 steps") for _ in range(2)]
     for im in run["images"]:
         assert Path(im["path"]).is_file() and Path(im["path"]).parent == out
         assert Path(im["path"]).with_suffix(".json").is_file()
@@ -78,9 +79,9 @@ def test_bakeoff_runs_every_instruction_through_every_preset(comfy, make_image, 
     assert len(k["runs"]) == 2 and all(Path(r).is_dir() for r in k["runs"])
 
     html = (out / "index.html").read_text()
-    assert '"bakeoff": {' in html and '"tag": "klein · 2"' in html
+    assert '"bakeoff": {' in html and '"tag": "FLUX.2 klein 4B · 4 steps · 2"' in html
     rebuilt = imagegen.rebuild_contact_sheets(str(out))  # gen sheet works on a bake-off folder too
-    assert rebuilt == [out / "index.html"] and '"tag": "qwen · 1"' in rebuilt[0].read_text()
+    assert rebuilt == [out / "index.html"] and '"tag": "Qwen-Image 2.1 · 25 steps · 1"' in rebuilt[0].read_text()
 
 
 def test_a_failing_preset_is_recorded_and_the_rest_still_run(comfy, make_image, fake_proc):
@@ -90,7 +91,7 @@ def test_a_failing_preset_is_recorded_and_the_rest_still_run(comfy, make_image, 
     assert "ComfyUI rejected the workflow" in klein["error"] and klein["images"] == 0
     assert klein["first_seconds"] is None
     assert qwen["error"] is None and qwen["images"] == 1
-    assert [im["tag"] for im in run["images"]] == ["qwen · 1"]
+    assert [im["tag"] for im in run["images"]] == ["Qwen-Image 2.1 · 25 steps · 1"]
     assert "klein" in bakeoff.table(run) and "rejected" in bakeoff.table(run)
 
 
@@ -134,8 +135,8 @@ def test_cli(comfy, make_image, fake_proc, capsys):
                           "--seed", "3"])
     out = capsys.readouterr().out
     assert code == 0
-    assert out.splitlines()[0].split()[:5] == ["preset", "images", "size", "steps", "first"]
-    assert "kontext" in out and "klein" in out and "contact sheet:" in out and "bakeoff.json" in out
+    assert out.splitlines()[0].split()[:5] == ["model", "images", "size", "steps", "first"]
+    assert "Kontext" in out and "klein" in out and "contact sheet:" in out and "bakeoff.json" in out
     comfy.fail_preset = "kontext"
     assert imagegen.main(["bakeoff", str(make_image()), "x", "-p", "kontext", "-n", "1"]) == 1
 
@@ -158,144 +159,162 @@ def _latent_size(wf):
     return n["width"], n["height"]
 
 
-def test_t2i_runs_every_prompt_through_every_model_at_one_size(comfy, fake_proc):
-    run = bakeoff.t2i_bakeoff(["a cosy window nook", "a tide pool"], count=2, seed=7, interval=0.01)
+def _steps(wf):
+    n = _node(wf, "KSampler") or _node(wf, "Flux2Scheduler")
+    return n["steps"]
+
+
+SDXL, DS, KLEIN, QWEN = "SDXL base 1.0", "DreamShaper XL Lightning", "FLUX.2 klein 4B", "Qwen-Image 2.1"
+
+
+def test_fresh_prompts_go_through_every_model_at_one_size(comfy, fake_proc):
+    run = bakeoff.t2i_bakeoff(["a misty fjord", "a tide pool"], count=2, seed=7, interval=0.01)
     wfs = comfy.workflows()
     assert len(wfs) == 4 * 2 * 2 and comfy.frees == 4
-    # default order: SDXL base, the SDXL finetune, klein, qwen; preset-major in ComfyUI
-    models = [_ckpt(wf) or _unet(wf) for wf in wfs[::4]]
+    models = [_ckpt(wf) or _unet(wf) for wf in wfs[::4]]  # preset-major in ComfyUI
     assert models == ["sd_xl_base_1.0.safetensors", "DreamShaperXL_Lightning.safetensors",
                       "flux-2-klein-4b-fp8.safetensors", "qwen_image_2.1_bf16.safetensors"]
     assert {_latent_size(wf) for wf in wfs} == {(1344, 768)}
     assert [_seed(wf) for wf in wfs] == [7, 8] * 8
     assert _node(wfs[4], "KSampler")["sampler_name"] == "dpmpp_sde"  # Lightning's sampler
-    assert _node(wfs[4], "KSampler")["steps"] == 6 and _node(wfs[4], "KSampler")["cfg"] == 2.0
+    assert [_steps(wf) for wf in wfs[::4]] == [25, 6, 4, 25]
     assert all(_node(wf, "LoadImage") is None for wf in wfs)
 
+    labels = [f"{SDXL} · 25 steps", f"{DS} · 6 steps", f"{KLEIN} · 4 steps", f"{QWEN} · 25 steps"]
+    assert [im["tag"] for im in run["images"]] == [f"{lb} · {n}" for n in (1, 2) for lb in labels for _ in range(2)]
     out = Path(run["run_dir"])
-    assert "-bakeoff-t2i-a-cosy-window-nook" in out.name
-    assert [im["tag"] for im in run["images"]] == \
-        [f"{p} · {n}" for n in (1, 2) for p in bakeoff.T2I_PRESETS for _ in range(2)]
+    assert "-bakeoff-t2i-a-misty-fjord" in out.name
     stats = json.loads((out / "bakeoff.json").read_text())
     assert stats["mode"] == "t2i" and stats["size"] == "1344x768" and stats["ref"] is None
-    assert stats["instructions"] == ["a cosy window nook", "a tide pool"]
-    assert [r["preset"] for r in stats["presets"]] == list(bakeoff.T2I_PRESETS)
+    assert [r["label"] for r in stats["presets"]] == labels
     assert all(r["size"] == "1344x768" and r["images"] == 4 and r["error"] is None for r in stats["presets"])
-    assert run["source_image"] is None and not run["edit"] and not (out / imagegen.SHEET_SOURCE).exists()
-    html = (out / "index.html").read_text()
-    assert '"tag": "dreamshaper · 2"' in html and '"size": "1344x768"' in html
+    assert [r["steps"] for r in stats["presets"]] == [25, 6, 4, 25]
+    assert run["source_image"] is None and not (out / imagegen.SHEET_SOURCE).exists()
+    assert bakeoff.table(run).splitlines()[1].startswith(SDXL)
+    assert f'"tag": "{DS} · 6 steps · 2"' in (out / "index.html").read_text()
 
 
-def test_t2i_with_ref_adds_ref_columns_where_the_model_can_edit(comfy, make_image, fake_proc):
+def test_fresh_and_ref_tests_together(comfy, make_image, fake_proc):
+    """The fresh prompt runs on every model without the ref; the lil tulu prompt runs only with the ref
+    (SDXL models through their ref_preset: IP-Adapter) and is never drawn from text alone."""
     ref = make_image(size=(512, 512))
-    run = bakeoff.t2i_bakeoff(["reading in a window nook"], ["draft", "klein", "qwen"], ref=str(ref), count=1,
-                              seed=3, size=(1536, 864), interval=0.01)
+    run = bakeoff.t2i_bakeoff(["a misty fjord"], ["draft", "dreamshaper", "klein", "qwen"], ref=str(ref),
+                              ref_prompts=["lil tulu reading in a window nook"], count=1, seed=3,
+                              steps={"klein": 16}, interval=0.01)
     res = {r["preset"]: r for r in run["bakeoff"]["presets"]}
-    assert list(res) == ["draft", "draft+ref", "klein", "klein+ref", "qwen", "qwen+ref"]
-    assert res["draft+ref"]["note"] == bakeoff.NO_REF and res["draft+ref"]["images"] == 0
-    assert res["draft+ref"]["error"] is None
-    assert comfy.frees == 3  # once per model: the +ref column runs with the model still loaded
+    assert list(res) == ["draft", "draft+ref", "dreamshaper", "dreamshaper+ref", "klein", "klein+ref", "qwen",
+                         "qwen+ref"]
+    assert all(r["error"] is None and r["images"] == 1 for r in res.values())
+    assert comfy.frees == 4  # once per model: its ref column runs with the model still loaded
 
     wfs = comfy.workflows()
-    assert len(wfs) == 5
-    text_wfs, ref_wfs = [wfs[0], wfs[1], wfs[3]], [wfs[2], wfs[4]]
-    assert all(_node(wf, "LoadImage") is None for wf in text_wfs)
-    assert {_latent_size(wf) for wf in text_wfs} == {(1536, 864)}
-    for wf in ref_wfs:
+    assert len(wfs) == 8
+    fresh, with_ref = wfs[0::2], wfs[1::2]
+    for wf in fresh:
+        assert _node(wf, "LoadImage") is None and _latent_size(wf) == (1344, 768)
+        assert "fjord" in json.dumps(wf) and "tulu" not in json.dumps(wf)
+    for wf in with_ref:
         assert _node(wf, "LoadImage") is not None
-    klein_ref = _node(wfs[2], "CLIPTextEncode")["text"]
-    assert klein_ref.startswith("reading in a window nook") and klein_ref.endswith(bakeoff.REF_SUFFIX)
-    assert res["klein+ref"]["size"] == "1024x1024"  # an edit's size follows the (square) ref
-    assert [_seed(wf) for wf in wfs] == [3] * 5
+        assert "tulu" in json.dumps(wf) and "fjord" not in json.dumps(wf)
+    # SDXL + IP-Adapter: the same checkpoint as the fresh column, the ref steering the model
+    for wf, ckpt, sampler in ((wfs[1], "sd_xl_base_1.0.safetensors", "dpmpp_2m"),
+                              (wfs[3], "DreamShaperXL_Lightning.safetensors", "dpmpp_sde")):
+        assert _ckpt(wf) == ckpt and _node(wf, "KSampler")["sampler_name"] == sampler
+        ipa = _node(wf, "IPAdapterAdvanced")
+        assert ipa["weight"] == 0.8 and ipa["model"] == ["4", 0]
+        assert _node(wf, "KSampler")["model"] == ["23", 0]
+        assert _node(wf, "IPAdapterModelLoader")["ipadapter_file"] == "ip-adapter-plus_sdxl_vit-h.safetensors"
+        assert _node(wf, "CLIPVisionLoader")["clip_name"] == "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors"
+        assert _latent_size(wf) == (1024, 1024)  # the ref test's size: the (square) ref's, like klein's
+    klein_ref = _node(wfs[5], "CLIPTextEncode")["text"]
+    assert klein_ref.startswith("lil tulu reading") and klein_ref.endswith(bakeoff.REF_SUFFIX)
+    assert [_steps(wf) for wf in wfs] == [25, 25, 6, 6, 16, 16, 25, 25]  # --steps klein=16 in both tests
+    assert {res[k]["size"] for k in res if k.endswith("+ref")} == {"1024x1024"}
+    assert res["klein"]["size"] == "1344x768"
+    assert res["draft+ref"]["label"] == "SDXL base 1.0 + IP-Adapter · 25 steps · ref"
+    assert res["klein+ref"]["label"] == f"{KLEIN} · 16 steps · ref"
 
-    assert [im["tag"] for im in run["images"]] == ["draft · 1", "klein · 1", "klein+ref · 1", "qwen · 1",
-                                                   "qwen+ref · 1"]
-    assert any("klein+ref" in Path(im["path"]).name for im in run["images"])
+    # prompt 1 = the fresh one, prompt 2 = the ref one
+    assert [im["tag"] for im in run["images"]][:4] == [
+        f"{SDXL} · 25 steps · 1", f"{DS} · 6 steps · 1", f"{KLEIN} · 16 steps · 1", f"{QWEN} · 25 steps · 1"]
+    assert run["images"][4]["tag"] == "SDXL base 1.0 + IP-Adapter · 25 steps · ref · 2"
+    assert run["bakeoff"]["instructions"] == ["a misty fjord", "with the ref: lil tulu reading in a window nook"]
     out = Path(run["run_dir"])
-    assert "-bakeoff-t2i-ref-src" in out.name and (out / imagegen.SHEET_SOURCE).is_file()
-    assert run["bakeoff"]["ref"] == str(ref) and run["bakeoff"]["ref_suffix"] == bakeoff.REF_SUFFIX
-    assert run["preset"] == "bakeoff: draft vs klein vs klein+ref vs qwen vs qwen+ref"
-    table = bakeoff.table(run)
-    assert "draft+ref" in table and "no ref input" in table
-    html = (out / "index.html").read_text()
-    assert '"note": "no ref input' in html
+    assert (out / imagegen.SHEET_SOURCE).is_file() and run["bakeoff"]["ref"] == str(ref)
+    assert any(Path(im["path"]).name.startswith("02-klein+ref-") for im in run["images"])
 
 
-def test_t2i_failing_model_and_bad_args(comfy, make_image, fake_proc):
-    comfy.fail_preset = "DreamShaper"  # the finetune not downloaded yet
+def test_a_model_without_a_ref_input_is_noted(comfy, make_image, fake_proc):
+    run = bakeoff.t2i_bakeoff(["x"], ["icon", "klein"], ref=str(make_image()), ref_prompts=["y"], count=1,
+                              interval=0.01)
+    res = {r["preset"]: r for r in run["bakeoff"]["presets"]}
+    assert res["icon+ref"]["note"] == bakeoff.NO_REF and res["icon+ref"]["images"] == 0
+    assert res["icon+ref"]["error"] is None and "no ref input" in bakeoff.table(run)
+
+
+def test_ref_test_alone_and_edit_only_models(comfy, make_image, fake_proc):
+    run = bakeoff.t2i_bakeoff(None, ["klein", "kontext"], ref=str(make_image()), ref_prompts=["x"], count=1,
+                              seed=1, interval=0.01)
+    assert [r["preset"] for r in run["bakeoff"]["presets"]] == ["klein+ref", "kontext+ref"]
+    assert all(_node(wf, "LoadImage") is not None for wf in comfy.workflows())
+    with pytest.raises(ValueError, match="no ref input: icon"):
+        bakeoff.t2i_bakeoff(None, ["icon", "klein"], ref=str(make_image()), ref_prompts=["x"])
+
+
+def test_t2i_bad_args_and_a_failing_model(comfy, make_image, fake_proc):
+    comfy.fail_preset = "DreamShaper"  # not downloaded yet
     run = bakeoff.t2i_bakeoff(["x"], ["dreamshaper", "klein"], count=1, seed=1, interval=0.01)
     ds, klein = run["bakeoff"]["presets"]
     assert "rejected" in ds["error"] and ds["images"] == 0 and klein["images"] == 1
+    ref = str(make_image())
     with pytest.raises(ValueError, match="not a text-to-image preset: kontext"):
-        bakeoff.t2i_bakeoff(["x"], ["klein", "kontext"])  # edit-only: fine with a ref, not without
+        bakeoff.t2i_bakeoff(["x"], ["klein", "kontext"])  # edit-only: only in a ref test
     with pytest.raises(ValueError, match="twice"):
         bakeoff.t2i_bakeoff(["x"], ["klein", "klein"])
     with pytest.raises(ValueError, match="multiple of 16"):
         bakeoff.t2i_bakeoff(["x"], ["klein"], size=(1000, 770))
-    with pytest.raises(ValueError, match="prompt"):
-        bakeoff.t2i_bakeoff([" "], ["klein"])
+    with pytest.raises(ValueError, match="at least one prompt"):
+        bakeoff.t2i_bakeoff([], ["klein"])
+    with pytest.raises(ValueError, match="go together"):
+        bakeoff.t2i_bakeoff(["x"], ["klein"], ref=ref)
+    with pytest.raises(ValueError, match="go together"):
+        bakeoff.t2i_bakeoff(["x"], ["klein"], ref_prompts=["y"])
+    with pytest.raises(ValueError, match="isn't in the bake-off: qwen"):
+        bakeoff.t2i_bakeoff(["x"], ["klein"], steps={"qwen": 30})
+    with pytest.raises(ValueError, match="1-150"):
+        bakeoff.t2i_bakeoff(["x"], ["klein"], steps={"klein": 0})
     with pytest.raises(FileNotFoundError):
-        bakeoff.t2i_bakeoff(["x"], ["klein"], ref=str(make_image()) + ".missing")
+        bakeoff.t2i_bakeoff(["x"], ["klein"], ref=ref + ".missing", ref_prompts=["y"])
 
 
 def test_t2i_cli(comfy, make_image, fake_proc, capsys):
-    code = imagegen.main(["bakeoff", "--t2i", "a tide pool", "a lighthouse", "-p", "draft,klein", "-n", "1",
-                          "--size", "1024x576", "--seed", "5"])
+    code = imagegen.main(["bakeoff", "--t2i", "a tide pool", "--presets", "draft,klein", "--count", "1",
+                          "--size", "1024x576", "--seed", "5", "--steps", "klein=16",
+                          "--ref", str(make_image()), "--ref-prompt", "lil tulu at the beach"])
     out = capsys.readouterr().out
     assert code == 0
-    assert "draft" in out and "klein" in out and "1024x576" in out and "contact sheet:" in out
-    assert len(comfy.workflows()) == 4
+    assert out.splitlines()[0].split()[:2] == ["model", "images"]
+    assert f"{KLEIN} · 16 steps · ref" in out and "1024x576" in out and "contact sheet:" in out
+    assert len(comfy.workflows()) == 4  # draft, draft+ref (IP-Adapter), klein, klein+ref
     comfy.fail_preset = "klein"
-    assert imagegen.main(["bakeoff", "--t2i", "x", "-p", "klein", "-n", "1", "--ref", str(make_image())]) == 1
-    for bad in (["bakeoff", str(make_image()), "x", "--ref", "y.png"],  # --ref without --t2i
-                ["bakeoff", str(make_image()), "x", "--size", "1344x768"],  # --size without --t2i, even the default
-                ["bakeoff", str(make_image())],                          # edit mode without instructions
+    assert imagegen.main(["bakeoff", "--t2i", "x", "--presets", "klein", "--count", "1"]) == 1
+    img = str(make_image())
+    for bad in (["bakeoff", img, "x", "--ref", "y.png"],                 # --ref without --t2i
+                ["bakeoff", img, "x", "--size", "1344x768"],             # --size without --t2i, even the default
+                ["bakeoff", img, "x", "--steps", "klein=8"],
+                ["bakeoff", img],                                        # edit mode without instructions
+                ["bakeoff", "--t2i"],                                    # nothing to run
+                ["bakeoff", "--t2i", "x", "--ref", img],                 # a ref without a ref prompt
+                ["bakeoff", "--t2i", "x", "--ref-prompt", "y"],          # a ref prompt without a ref
+                ["bakeoff", "--t2i", "x", "--steps", "klein"],
                 ["bakeoff", "--t2i", "x", "--size", "big"]):
         with pytest.raises(SystemExit):
             imagegen.main(bad)
 
 
-def test_t2i_ref_takes_an_edit_only_model(comfy, make_image, fake_proc):
-    run = bakeoff.t2i_bakeoff(["x"], ["klein", "kontext"], ref=str(make_image()), count=1, seed=1, interval=0.01)
-    res = {r["preset"]: r for r in run["bakeoff"]["presets"]}
-    assert list(res) == ["klein", "klein+ref", "kontext", "kontext+ref"]
-    assert res["kontext"]["note"] == bakeoff.NO_TEXT and res["kontext+ref"]["images"] == 1
-    assert [_unet(wf) for wf in comfy.workflows()][-1] == "flux1-dev-kontext_fp8_scaled.safetensors"
-    assert run["edit"] is False and run["source_image"]
-    # file names keep the column name, so "klein+ref" can't collide with a preset called klein-ref
-    assert any(Path(im["path"]).name.startswith("01-klein+ref-") for im in run["images"])
-
-
 def test_t2i_ref_size_of_a_preset_with_its_own_output_size(comfy, make_image, fake_proc):
     """wallpaper_ref (#3) is edit-only and renders at out_width x out_height, not the ref's size."""
-    run = bakeoff.t2i_bakeoff(["x"], ["wallpaper_ref"], ref=str(make_image(size=(512, 512))), count=1,
-                              interval=0.01)
-    r = {r["preset"]: r for r in run["bakeoff"]["presets"]}["wallpaper_ref+ref"]
-    assert r["images"] == 1 and r["size"] == "1536x864"
-
-
-def test_t2i_steps_per_preset(comfy, make_image, fake_proc):
-    """klein's preset says 4 steps; on tulu 16 gave far fewer quirks (#3), so a fair bake-off sets it."""
-    run = bakeoff.t2i_bakeoff(["x"], ["draft", "klein"], ref=str(make_image()), count=1, seed=1,
-                              steps={"klein": 16}, interval=0.01)
-    wfs = comfy.workflows()
-    assert _node(wfs[0], "KSampler")["steps"] == 25  # draft keeps its own
-    assert [_node(wf, "Flux2Scheduler")["steps"] for wf in wfs[1:]] == [16, 16]  # klein and klein+ref
-    assert run["bakeoff"]["steps"] == {"klein": 16}
-    res = {r["preset"]: r for r in run["bakeoff"]["presets"]}
-    assert res["klein"]["steps"] == 16 and res["klein+ref"]["steps"] == 16 and res["draft"]["steps"] == 25
-    assert "klein+ref" in bakeoff.table(run) and " 16 " in bakeoff.table(run)
-    with pytest.raises(ValueError, match="isn't in the bake-off: qwen"):
-        bakeoff.t2i_bakeoff(["x"], ["klein"], steps={"qwen": 30})
-    with pytest.raises(ValueError, match="1-150"):
-        bakeoff.t2i_bakeoff(["x"], ["klein"], steps={"klein": 0})
-
-
-def test_t2i_steps_cli(comfy, fake_proc, capsys):
-    assert imagegen.main(["bakeoff", "--t2i", "x", "--presets", "klein,qwen", "--count", "1",
-                          "--steps", "klein=16, qwen=30"]) == 0
-    wfs = comfy.workflows()
-    assert _node(wfs[0], "Flux2Scheduler")["steps"] == 16 and _node(wfs[1], "KSampler")["steps"] == 30
-    for bad in (["bakeoff", "--t2i", "x", "--steps", "klein"], ["bakeoff", "img.png", "x", "--steps", "klein=8"]):
-        with pytest.raises(SystemExit):
-            imagegen.main(bad)
+    run = bakeoff.t2i_bakeoff(None, ["wallpaper_ref"], ref=str(make_image(size=(512, 512))), ref_prompts=["x"],
+                              count=1, interval=0.01)
+    r = run["bakeoff"]["presets"][0]
+    assert r["images"] == 1 and r["size"] == "1536x864" and r["label"] == f"{KLEIN} · 16 steps · ref"

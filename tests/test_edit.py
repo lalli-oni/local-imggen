@@ -47,7 +47,7 @@ def test_edit_only_preset_and_bad_args(comfy, make_image):
         imagegen.generate("x", "kontext")
     with pytest.raises(ValueError, match="edit-only"):
         imagegen.vary(src, prompt="x", preset="kontext")
-    with pytest.raises(ValueError, match="can't edit; edit presets: kontext"):
+    with pytest.raises(ValueError, match="can.t edit; edit presets: .*kontext"):
         imagegen.edit(src, "x", preset="draft")
     with pytest.raises(ValueError, match="does not take cfg"):
         imagegen.generate("x", "kontext", source_image=src, edit=True, cfg=3)
