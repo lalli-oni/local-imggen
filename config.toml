@@ -64,6 +64,21 @@ post = ["remove_bg", "keep_largest", "trim"]
 # shows them as warn until then). Presets that load a diffusion model (`unet`) have no img2img/inpaint
 # (gen vary) unless they name an img2img_workflow / inpaint_workflow.
 
+# SDXL finetune for the text-to-image bake-off (#51). One checkpoint file, so no new nodes.
+# Models are opt-in (~6.9 GB, CreativeML Open RAIL++-M): run ~/imagegen/models/dreamshaper-xl-lightning.sh once.
+# Lightning is distilled: 4-8 steps at cfg ~2 with DPM++ SDE Karras. gen vary on it uses the SDXL img2img graph
+# (dpmpp_2m), which is not what Lightning is tuned for.
+[presets.dreamshaper]
+description = "DreamShaper XL Lightning (SDXL finetune, 6 steps): illustration-friendly, natural-language prompts"
+workflow = "sdxl_lightning.json"
+download = "dreamshaper-xl-lightning.sh"
+checkpoint = "DreamShaperXL_Lightning.safetensors"
+width = 1024
+height = 1024
+steps = 6
+cfg = 2.0
+suffix = ""
+
 # Edit-only preset: `gen edit IMAGE "instruction"` / MCP edit. Not usable for gen "prompt" or gen vary.
 # Models are opt-in (~17.7 GB): run ~/imagegen/models/flux-kontext.sh once.
 # FLUX.1 Kontext [dev] is under the FLUX.1 [dev] non-commercial licence.

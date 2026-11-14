@@ -62,6 +62,30 @@ def test_renders_all_images(make_run, open_sheet):
     assert not errors, errors
 
 
+def test_t2i_bakeoff_sheet_shows_size_notes_and_letterboxes_mixed_sizes(make_run, open_sheet):
+    """gen bakeoff --t2i --ref (#51): a size column, skipped columns as a muted note, and in fit mode the
+    square +ref images sit in cells of the text-only images' aspect instead of overflowing them."""
+    run = make_run(n=3, preset="bakeoff: klein vs klein+ref", prompt="1. a tide pool")
+    run["images"][2]["tag"] = "klein+ref · 1"
+    from PIL import Image
+    for im, size in zip(run["images"], [(1344, 768), (1344, 768), (1024, 1024)]):
+        Image.new("RGB", size, (20, 90, 160)).save(im["path"])
+    run["bakeoff"] = {"mode": "t2i", "instructions": ["a tide pool"], "presets": [
+        {"preset": "klein", "images": 2, "size": "1344x768", "error": None, "peak": {}},
+        {"preset": "draft+ref", "images": 0, "error": None, "note": "no ref input for this model", "peak": {}}]}
+    page, errors = open_sheet(run)
+    rows = page.locator("#bake tr")
+    assert rows.nth(1).locator("td").all_inner_texts()[:3] == ["klein", "2", "1344x768"]
+    assert rows.nth(2).locator("td.note").inner_text() == "no ref input for this model"
+    assert rows.nth(2).locator("td.err").count() == 0
+    page.locator("#mode-fit").click()
+    page.wait_for_function("[...document.querySelectorAll('#grid img')].every(i => i.complete && i.naturalWidth)")
+    boxes = [page.locator("#grid figure img").nth(i).bounding_box() for i in range(3)]
+    assert all(abs(b["height"] - boxes[0]["height"]) < 2 for b in boxes)  # one cell shape for all
+    assert abs(boxes[0]["width"] / boxes[0]["height"] - 1344 / 768) < 0.05
+    assert not errors, errors
+
+
 def test_fit_all_keeps_everything_on_screen(make_run, open_sheet):
     page, _ = open_sheet(make_run(n=8))
     page.locator("#mode-fit").click()
@@ -131,7 +155,8 @@ def test_bakeoff_sheet_shows_tags_and_numbers(make_run, open_sheet):
     assert page.locator("#bake li").all_inner_texts() == ["make it wave"]
     rows = page.locator("#bake tr")
     assert rows.count() == 3
-    assert rows.nth(1).locator("td").all_inner_texts()[:7] == ["kontext", "1", "180.2", "-", "14.3", "20.0", "15.5"]
+    assert rows.nth(1).locator("td").all_inner_texts()[:8] == ["kontext", "1", "-", "180.2", "-", "14.3", "20.0",
+                                                                "15.5"]
     assert rows.nth(2).locator("td.err").inner_text() == "RuntimeError: <b>crashed</b>"  # text, not HTML
     caps = page.locator("#grid figcaption").all_inner_texts()
     assert caps[0].startswith("kontext · 1") and "81.5s" in caps[0] and caps[1].startswith("klein · 1")

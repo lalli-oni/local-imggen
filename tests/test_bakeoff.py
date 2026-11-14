@@ -1,4 +1,4 @@
-"""gen bakeoff (#40): same seeds per preset, models unloaded between presets, peak memory sampling,
+"""gen bakeoff (#40 edits, #51 --t2i): same seeds per preset, models unloaded between presets, peak memory sampling,
 a failing preset doesn't stop the rest, one contact sheet with tags and the numbers."""
 import json
 from pathlib import Path
@@ -134,7 +134,7 @@ def test_cli(comfy, make_image, fake_proc, capsys):
                           "--seed", "3"])
     out = capsys.readouterr().out
     assert code == 0
-    assert out.splitlines()[0].split()[:3] == ["preset", "images", "first"]
+    assert out.splitlines()[0].split()[:4] == ["preset", "images", "size", "first"]
     assert "kontext" in out and "klein" in out and "contact sheet:" in out and "bakeoff.json" in out
     comfy.fail_preset = "kontext"
     assert imagegen.main(["bakeoff", str(make_image()), "x", "-p", "kontext", "-n", "1"]) == 1
@@ -143,4 +143,110 @@ def test_cli(comfy, make_image, fake_proc, capsys):
 def test_table_handles_missing_numbers():
     run = {"bakeoff": {"presets": [{"preset": "qwen", "error": "boom", "peak": {}}]}}
     line = bakeoff.table(run).splitlines()[1]
-    assert line.split()[:3] == ["qwen", "0", "-"] and line.endswith("boom")
+    assert line.split()[:4] == ["qwen", "0", "-", "-"] and line.endswith("boom")
+
+
+# ---------------------------------------------------------------- text-to-image (#51)
+
+def _ckpt(wf):
+    n = _node(wf, "CheckpointLoaderSimple")
+    return n["ckpt_name"] if n else None
+
+
+def _latent_size(wf):
+    n = _node(wf, "EmptyLatentImage") or _node(wf, "EmptyFlux2LatentImage")
+    return n["width"], n["height"]
+
+
+def test_t2i_runs_every_prompt_through_every_model_at_one_size(comfy, fake_proc):
+    run = bakeoff.t2i_bakeoff(["a cosy window nook", "a tide pool"], count=2, seed=7, interval=0.01)
+    wfs = comfy.workflows()
+    assert len(wfs) == 4 * 2 * 2 and comfy.frees == 4
+    # default order: SDXL base, the SDXL finetune, klein, qwen; preset-major in ComfyUI
+    models = [_ckpt(wf) or _unet(wf) for wf in wfs[::4]]
+    assert models == ["sd_xl_base_1.0.safetensors", "DreamShaperXL_Lightning.safetensors",
+                      "flux-2-klein-4b-fp8.safetensors", "qwen_image_2.1_bf16.safetensors"]
+    assert {_latent_size(wf) for wf in wfs} == {(1344, 768)}
+    assert [_seed(wf) for wf in wfs] == [7, 8] * 8
+    assert _node(wfs[4], "KSampler")["sampler_name"] == "dpmpp_sde"  # Lightning's sampler
+    assert _node(wfs[4], "KSampler")["steps"] == 6 and _node(wfs[4], "KSampler")["cfg"] == 2.0
+    assert all(_node(wf, "LoadImage") is None for wf in wfs)
+
+    out = Path(run["run_dir"])
+    assert "-bakeoff-t2i-a-cosy-window-nook" in out.name
+    assert [im["tag"] for im in run["images"]] == \
+        [f"{p} · {n}" for n in (1, 2) for p in bakeoff.T2I_PRESETS for _ in range(2)]
+    stats = json.loads((out / "bakeoff.json").read_text())
+    assert stats["mode"] == "t2i" and stats["size"] == "1344x768" and stats["ref"] is None
+    assert stats["instructions"] == ["a cosy window nook", "a tide pool"]
+    assert [r["preset"] for r in stats["presets"]] == list(bakeoff.T2I_PRESETS)
+    assert all(r["size"] == "1344x768" and r["images"] == 4 and r["error"] is None for r in stats["presets"])
+    assert run["source_image"] is None and not run["edit"] and not (out / imagegen.SHEET_SOURCE).exists()
+    html = (out / "index.html").read_text()
+    assert '"tag": "dreamshaper · 2"' in html and '"size": "1344x768"' in html
+
+
+def test_t2i_with_ref_adds_ref_columns_where_the_model_can_edit(comfy, make_image, fake_proc):
+    ref = make_image(size=(512, 512))
+    run = bakeoff.t2i_bakeoff(["reading in a window nook"], ["draft", "klein", "qwen"], ref=str(ref), count=1,
+                              seed=3, size=(1536, 864), interval=0.01)
+    res = {r["preset"]: r for r in run["bakeoff"]["presets"]}
+    assert list(res) == ["draft", "draft+ref", "klein", "klein+ref", "qwen", "qwen+ref"]
+    assert res["draft+ref"]["note"] == bakeoff.NO_REF and res["draft+ref"]["images"] == 0
+    assert res["draft+ref"]["error"] is None
+    assert comfy.frees == 3  # once per model: the +ref column runs with the model still loaded
+
+    wfs = comfy.workflows()
+    assert len(wfs) == 5
+    text_wfs, ref_wfs = [wfs[0], wfs[1], wfs[3]], [wfs[2], wfs[4]]
+    assert all(_node(wf, "LoadImage") is None for wf in text_wfs)
+    assert {_latent_size(wf) for wf in text_wfs} == {(1536, 864)}
+    for wf in ref_wfs:
+        assert _node(wf, "LoadImage") is not None
+    klein_ref = _node(wfs[2], "CLIPTextEncode")["text"]
+    assert klein_ref.startswith("reading in a window nook") and klein_ref.endswith(bakeoff.REF_SUFFIX)
+    assert res["klein+ref"]["size"] == "1024x1024"  # an edit's size follows the (square) ref
+    assert [_seed(wf) for wf in wfs] == [3] * 5
+
+    assert [im["tag"] for im in run["images"]] == ["draft · 1", "klein · 1", "klein+ref · 1", "qwen · 1",
+                                                   "qwen+ref · 1"]
+    assert any("klein-ref" in Path(im["path"]).name for im in run["images"])
+    out = Path(run["run_dir"])
+    assert "-bakeoff-t2i-ref-src" in out.name and (out / imagegen.SHEET_SOURCE).is_file()
+    assert run["bakeoff"]["ref"] == str(ref) and run["bakeoff"]["ref_suffix"] == bakeoff.REF_SUFFIX
+    assert run["preset"] == "bakeoff: draft vs klein vs klein+ref vs qwen vs qwen+ref"
+    table = bakeoff.table(run)
+    assert "draft+ref" in table and "no ref input" in table
+    html = (out / "index.html").read_text()
+    assert '"note": "no ref input' in html
+
+
+def test_t2i_failing_model_and_bad_args(comfy, make_image, fake_proc):
+    comfy.fail_preset = "DreamShaper"  # the finetune not downloaded yet
+    run = bakeoff.t2i_bakeoff(["x"], ["dreamshaper", "klein"], count=1, seed=1, interval=0.01)
+    ds, klein = run["bakeoff"]["presets"]
+    assert "rejected" in ds["error"] and ds["images"] == 0 and klein["images"] == 1
+    with pytest.raises(ValueError, match="not a text-to-image preset: kontext"):
+        bakeoff.t2i_bakeoff(["x"], ["klein", "kontext"])
+    with pytest.raises(ValueError, match="multiple of 16"):
+        bakeoff.t2i_bakeoff(["x"], ["klein"], size=(1000, 770))
+    with pytest.raises(ValueError, match="prompt"):
+        bakeoff.t2i_bakeoff([" "], ["klein"])
+    with pytest.raises(FileNotFoundError):
+        bakeoff.t2i_bakeoff(["x"], ["klein"], ref=str(make_image()) + ".missing")
+
+
+def test_t2i_cli(comfy, make_image, fake_proc, capsys):
+    code = imagegen.main(["bakeoff", "--t2i", "a tide pool", "a lighthouse", "-p", "draft,klein", "-n", "1",
+                          "--size", "1024x576", "--seed", "5"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "draft" in out and "klein" in out and "1024x576" in out and "contact sheet:" in out
+    assert len(comfy.workflows()) == 4
+    comfy.fail_preset = "klein"
+    assert imagegen.main(["bakeoff", "--t2i", "x", "-p", "klein", "-n", "1", "--ref", str(make_image())]) == 1
+    for bad in (["bakeoff", str(make_image()), "x", "--ref", "y.png"],  # --ref without --t2i
+                ["bakeoff", str(make_image())],                          # edit mode without instructions
+                ["bakeoff", "--t2i", "x", "--size", "big"]):
+        with pytest.raises(SystemExit):
+            imagegen.main(bad)

@@ -10,6 +10,7 @@ Usage:
   gen vary PATH --mask MASK.png --prompt "..."  # inpaint: repaint only the white part of MASK
   gen edit PATH "make it wave, side view"      # instruction edit (FLUX.2 klein; -p kontext|qwen; opt-in models)
   gen bakeoff PATH "instr" ["instr"...]         # same edits through kontext, klein, qwen; time/VRAM/RAM
+  gen bakeoff --t2i "prompt"... [--ref IMG]     # same prompts through draft, dreamshaper, klein, qwen (#51)
   gen cutout PATH [--clean]                     # remove the background -> PATH-transparent.png
                                                 #   --clean: also drop stray shapes, centre on a square
   gen presets                                   # list presets

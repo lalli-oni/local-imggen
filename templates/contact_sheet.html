@@ -11,7 +11,7 @@
   s side-by-side / w wipe, x swap.
   img2img/inpaint runs show their input image (source.png, saved by generate) as the
   first card; project runs get a "promote" button that copies the `gen project promote` command.
-  gen bakeoff runs tag each image (preset · instruction #) and show a table of time/VRAM/RAM per preset.
+  gen bakeoff runs tag each image (preset · instruction/prompt #) and show a table of time/VRAM/RAM per preset.
 -->
 <style>
 :root {
@@ -49,6 +49,8 @@ details p { margin: 4px 0 0; overflow-wrap: anywhere; }
 main { display: grid; gap: var(--gap); padding: var(--pad);
   grid-template-columns: repeat(auto-fill, minmax(min(var(--thumb), 100%), 1fr)); }
 main.fit { justify-content: center; align-content: start; }
+/* fit cells share one aspect (the first output's); a bake-off with +ref columns mixes sizes: letterbox them */
+main.fit figure img { aspect-ratio: var(--aspect, auto); object-fit: contain; }
 figure { margin: 0; min-width: 0; position: relative; }
 figure a { display: block; }
 figure img { width: 100%; display: block; border-radius: 8px; outline: 2px solid transparent; outline-offset: 2px; }
@@ -71,7 +73,9 @@ figure.b .pick { border-color: var(--pick-b); color: var(--pick-b); }
 #bake th, #bake td { padding: 3px 10px 3px 0; text-align: right; white-space: nowrap; }
 #bake th:first-child, #bake td:first-child, #bake td.err { text-align: left; }
 #bake td { color: var(--text); }
-#bake td.err { color: #ff8a80; white-space: normal; min-width: 200px; }
+#bake td.err, #bake td.note { text-align: left; white-space: normal; min-width: 200px; }
+#bake td.err { color: #ff8a80; }
+#bake td.note { color: var(--muted); }
 .seed { cursor: copy; }
 .seed:hover { color: var(--text); }
 .checker { background: repeating-conic-gradient(#3a3a3a 0 25%, #2a2a2a 0 50%) 0 0 / 20px 20px; }
@@ -204,13 +208,13 @@ $("prompt").textContent = RUN.prompt;
     $("bake").hidden = false;
     $("bake").querySelector("ol").append(...RUN.bakeoff.instructions.map((t) => el("li", { textContent: t })));
     const num = (v, d = 1) => (v == null ? "-" : Number(v).toFixed(d));
-    const head = ["preset", "images", "first s (with load)", "median s", "VRAM GiB", "system RAM GiB", "comfy RAM GiB",
-      "comfy swap GiB", "system swap GiB", "error"];
+    const head = ["preset", "images", "size", "first s (with load)", "median s", "VRAM GiB", "system RAM GiB", "comfy RAM GiB",
+      "comfy swap GiB", "system swap GiB", "error / note"];
     const rows = RUN.bakeoff.presets.map((r) => {
       const pk = r.peak || {};
-      return el("tr", {}, ...[r.preset, r.images ?? 0, num(r.first_seconds), num(r.median_seconds),
+      return el("tr", {}, ...[r.preset, r.images ?? 0, r.size || "-", num(r.first_seconds), num(r.median_seconds),
         num(pk.vram_gib), num(pk.ram_gib), num(pk.comfy_rss_gib), num(pk.comfy_swap_gib), num(pk.swap_gib)]
-        .map((v) => el("td", { textContent: String(v) })), el("td", { className: "err", textContent: r.error || "" }));
+        .map((v) => el("td", { textContent: String(v) })), el("td", { className: r.error ? "err" : "note", textContent: r.error || r.note || "" }));
     });
     $("bake").querySelector("table").append(
       el("tr", {}, ...head.map((h) => el("th", { textContent: h }))), ...rows);
@@ -299,6 +303,7 @@ function layout() {
   const W = grid.clientWidth - 2 * pad;
   const H = window.innerHeight - grid.getBoundingClientRect().top - window.scrollY - 2 * pad;
   const { cols, w } = bestFit(images.length || 1, W, Math.max(H, 120), state.aspect, gap, cap);
+  grid.style.setProperty("--aspect", state.aspectKnown ? String(state.aspect) : "auto");
   grid.style.gridTemplateColumns = `repeat(${cols}, ${Math.max(w, 60)}px)`;
 }
 

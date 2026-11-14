@@ -57,7 +57,7 @@ class FakeComfy:
         self.vram_free = 12 * 1024 ** 3   # /system_stats numbers (tests may change them mid-run)
         self.ram_free = 20 * 1024 ** 3
         self.frees = 0            # POST /free calls (unload models)
-        self.fail_preset: str | None = None  # /prompt rejects workflows whose unet_name contains this
+        self.fail_preset: str | None = None  # /prompt rejects workflows whose unet_name or ckpt_name contains this
         self.models = {"checkpoints": ["sd_xl_base_1.0.safetensors"],
                        "upscale_models": ["RealESRGAN_x4plus.pth"],
                        "diffusion_models": ["flux1-dev-kontext_fp8_scaled.safetensors",
@@ -214,8 +214,9 @@ class FakeComfy:
                 body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
                 if u.path == "/prompt":
                     wf = json.loads(body)["prompt"]
-                    unets = [n["inputs"].get("unet_name", "") for n in wf.values() if n["class_type"] == "UNETLoader"]
-                    if fake.reject or (fake.fail_preset and any(fake.fail_preset in u for u in unets)):
+                    models = [n["inputs"].get("unet_name") or n["inputs"].get("ckpt_name") or "" for n in wf.values()
+                              if n["class_type"] in ("UNETLoader", "CheckpointLoaderSimple")]
+                    if fake.reject or (fake.fail_preset and any(fake.fail_preset in m for m in models)):
                         return self._send(400, {"error": fake.reject or "value_not_in_list: unet_name"})
                     pid = uuid.uuid4().hex
                     req = json.loads(body)

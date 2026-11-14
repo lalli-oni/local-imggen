@@ -26,6 +26,7 @@ gen "misty fjord at sunrise" -p wallpaper --open
 | `gen cutout PATH [--clean]` | Remove the background (transparent PNG); `--clean` also drops stray shapes and centres it on a square |
 | `gen edit PATH "instruction" [-p klein\|kontext\|qwen]` | Edit with a plain-language instruction; FLUX.2 klein by default, opt-in models (`models/*.sh`) |
 | `gen bakeoff PATH "instr" ["instr"...] [-p kontext,klein,qwen] [-n 2]` | The same edits through several edit models (same seeds), time/VRAM/RAM per model, one contact sheet |
+| `gen bakeoff --t2i "prompt" ["prompt"...] [--ref IMG] [-p draft,dreamshaper,klein,qwen] [--size 1344x768]` | The same prompts through several text-to-image models; with `--ref`, models that can edit also run each prompt with the ref as the character |
 | `gen project new\|list\|status\|set\|gen\|promote\|keep\|import\|doc` | Creative projects: versioned prompt/palette/refs, named assets, docs, import an existing folder |
 | `gen project rate\|note\|board` | The project's board: pick/maybe/reject and notes on pass images (`P:N`), and its `index.html` page |
 | `gen char new\|list\|status\|set` | Shared characters (lil tulu) that projects cast; a change flags the assets that show them |
@@ -76,6 +77,7 @@ No GPU, ComfyUI or tulu needed: it uses a fake ComfyUI server and stubs. CI runs
 | Model | Used for | Used by | ComfyUI folder | Size on disk | Memory | Licence | Released | How it's downloaded |
 |---|---|---|---|---|---|---|---|---|
 | **SDXL base 1.0** (`sd_xl_base_1.0.safetensors`) | Generation, img2img, inpaint | every preset; `gen`, `gen vary`, `gen project gen` | `checkpoints` | 6.9 GB | ~8 GB VRAM at 1024² | CreativeML Open RAIL++-M | Jul 2023 | By hand from [stabilityai/stable-diffusion-xl-base-1.0](https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0) |
+| **DreamShaper XL Lightning** (`DreamShaperXL_Lightning.safetensors`) | SDXL finetune, 6 steps | `dreamshaper` preset, `gen bakeoff --t2i` (#51) | `checkpoints` | 6.94 GB | ~8 GB VRAM, like SDXL | CreativeML Open RAIL++-M | Feb 2024 | `models/dreamshaper-xl-lightning.sh` (opt-in, asks y/N) |
 | **RealESRGAN x4plus** (`RealESRGAN_x4plus.pth`) | 4x upscale | `wallpaper`, `wallpaper_ultrawide` | `upscale_models` | 64 MB | ~1-2 GB VRAM (tiled) | BSD-3-Clause | Jul 2021 | `setup.sh` (GitHub release) |
 | **rembg u2net** (`u2net.onnx`) | Background removal | `icon` preset, `gen cutout` | not ComfyUI: `~/.u2net/` | 176 MB | ~1 GB RAM, CPU only | Apache 2.0 (rembg: MIT) | 2020 | `setup.sh` (rembg fetches it on first use) |
 | **FLUX.1 Kontext [dev] fp8** (`flux1-dev-kontext_fp8_scaled.safetensors`) | Instruction editing | `gen edit -p kontext` | `diffusion_models` | 11.9 GB | ~12 GB VRAM | FLUX.1 [dev] Non-Commercial | Jun 2025 | `models/flux-kontext.sh` (opt-in, asks y/N) |
@@ -148,3 +150,20 @@ Each preset runs after ComfyUI unloads every model, so its first image includes 
 whole GPU (the desktop's share included), RAM/swap are the comfyui process and the system. A preset that fails
 (missing models, OOM) is noted in the table and the rest still run. Results: one contact sheet with every image
 tagged `preset · instruction`, and `bakeoff.json`.
+
+### Text-to-image bake-off (#51)
+
+Which model should make wallpapers instead of SDXL base? The same prompts and seeds through SDXL base
+(`draft`), an SDXL finetune (`dreamshaper`), klein and Qwen, all at 1344x768 (`--size`). With `--ref`, klein
+and Qwen also run each prompt as an edit of the ref (columns `klein+ref`, `qwen+ref`), with a line added that
+the ref's character appears once in a new pose and the scene fills the frame. Their size follows the ref
+(square for lil tulu). SDXL has no ref input until IP-Adapter, so its `+ref` row says so.
+
+```sh
+~/imagegen/models/dreamshaper-xl-lightning.sh   # ~6.9 GB, asks y/N (klein and Qwen are already there)
+gen doctor
+gen bakeoff --t2i --ref 'C:\Users\lalli\Pictures\lil-tulu.png' \
+  "lil tulu, a chibi cute baby cthulhu with a huge round green head, four plump curled face tentacles, big amber eyes, small red bat wings with a green frame, a pale yellow belly and a short smooth rounded tail, reading a book in a cosy window nook on a rainy evening, warm lamp light, cosy whimsical storybook illustration" \
+  "a misty Icelandic fjord at sunrise with a small red fishing boat, wide landscape, painterly storybook illustration, soft light" \
+  -n 2 --seed 1 --open
+```
