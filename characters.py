@@ -136,6 +136,9 @@ def set_state(name: str, note: str | None = None, author: str = "human", **chang
             raise ValueError("nothing changed")
         v = _commit(ch, changed, author, note)
         save(ch)
+    import boards
+    for slug in used_by(name):  # their board pages show the cast prompt and stale flags
+        boards.refresh(slug)
     return v
 
 
