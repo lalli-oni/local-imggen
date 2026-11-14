@@ -191,13 +191,17 @@ def test_live_server_gone(live):
     assert page.locator("#gen-more").is_disabled()
 
 
-def test_static_keys_copy_commands(board):
+@pytest.mark.parametrize("clipboard", ["api", "fallback"])
+def test_static_keys_copy_commands(board, clipboard):
     page, errors = board
+    if clipboard == "fallback":  # as in CI: the clipboard API refuses, so copy() uses a scratch textarea
+        page.evaluate("() => { navigator.clipboard.writeText = () => Promise.reject(new Error('denied')); }")
     page.keyboard.press("j")
     page.keyboard.press("1")
     page.wait_for_selector(".toast.show")
     assert "2:1" in page.locator("#toast").inner_text()
     assert not page.locator("#gen-more").is_visible()
+    assert page.evaluate("document.activeElement.dataset.label") == "2:1"  # copying kept the selection
     page.keyboard.press("n")
     assert page.locator("#note-save").inner_text() == "Copy command"
     page.keyboard.press("Escape")

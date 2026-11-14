@@ -175,12 +175,14 @@ function copy(text, msg) {
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(text).then(done, () => fallback());
   } else fallback();
-  function fallback() {
+  function fallback() {  // e.g. no clipboard permission: copy from a scratch textarea, then give focus back
+    const back = document.activeElement;
     const ta = el("textarea", { value: text });
     document.body.append(ta);
     ta.select();
     try { document.execCommand("copy"); done(); } catch { toast(text); }
     ta.remove();
+    if (back && back !== document.body && back.isConnected) back.focus({ preventScroll: true });
   }
 }
 const noteList = (notes) => notes && notes.length
