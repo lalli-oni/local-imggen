@@ -824,6 +824,7 @@ USAGE = """usage: gen project COMMAND ...
                                                       triage images: IMAGE is P:N (pass P, image N) or a path
   note SLUG TEXT [--image IMAGE]                      a note on an image, or on the board
   board SLUG [--open]                                 rebuild the board page (index.html) and open it
+                                                      (clickable, live: gen board serve SLUG --open)
 state options: --prompt --neg -p/--preset --param K=V --snippet NAME=TEXT --palette '#hex,...' --ref NAME=PATH
                --cast CHAR[@V] --doc [NAME=]PATH; set also takes --uncast CHAR --drop-doc NAME
 characters are shared between projects: gen char -h

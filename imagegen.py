@@ -19,6 +19,7 @@ Usage:
   gen doctor                                    # health check (service, GPU, torch, models, ...)
   gen sheet [RUN_DIR|DATE]                      # rebuild contact sheet(s); no arg = latest run
   gen project new|list|status|set|gen|promote|keep|import|doc ...  # creative projects (see projects.py)
+  gen board serve [SLUG] [--open]               # the clickable project board on http://127.0.0.1:8190
   gen char new|list|status|set ...              # shared characters projects cast (see characters.py)
 """
 from __future__ import annotations
@@ -1064,6 +1065,9 @@ def main(argv: list[str]) -> int:
     if argv and argv[0] == "project":
         import projects
         return projects.main(argv[1:])
+    if argv and argv[0] == "board":
+        import boardserve
+        return boardserve.main(argv[1:])
     if argv and argv[0] in ("char", "character"):
         import characters
         return characters.main(argv[1:])

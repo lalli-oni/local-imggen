@@ -8,6 +8,10 @@
   below; rebuilt after every project change, rating and note. Static and self-contained (file://):
   it cannot write, so its pick / maybe / reject / note buttons copy the `gen project` command,
   and Claude rates through the MCP project_rate tool.
+  Served by `gen board serve` (boardserve.py, #55) the data says "live": the buttons and keys rate and
+  note through the server's /api, "Generate 4 more" runs a pass, and the page re-renders itself when the
+  project or board changes (polling /api/projects/SLUG/stamp).
+  Keys: 1 pick, 2 maybe, 3 reject, 0 clear, n note, j/k or arrows move between cards, h history.
   Passes are grouped by the project version they were made from, newest first. The History button (h)
   lists every version, including the ones without a pass.
 -->
@@ -85,6 +89,19 @@ dialog.history::backdrop { background: rgba(0, 0, 0, .6); }
   border-radius: 6px; background: var(--panel); border: 1px solid var(--line); opacity: 0; transition: opacity .2s;
   pointer-events: none; max-width: calc(100% - 32px); overflow-wrap: anywhere; }
 .toast.show { opacity: 1; }
+.card { border-radius: 10px; }
+.card:focus { outline: none; }
+.card:focus-visible, .card:focus-within { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent); }
+.live-status { color: var(--muted); font-size: 12px; }
+.live-status.off { color: var(--reject); }
+dialog.note { width: min(520px, calc(100% - 32px)); padding: var(--pad); background: var(--panel); color: var(--text);
+  border: 1px solid var(--line); border-radius: 10px; }
+dialog.note::backdrop { background: rgba(0, 0, 0, .6); }
+dialog.note h2 { margin: 0; }
+dialog.note textarea { width: 100%; margin: 10px 0; font: inherit; color: inherit; background: var(--bg);
+  border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; resize: vertical; }
+dialog.note .row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; }
+.keys { color: var(--muted); font-size: 12px; }
 </style>
 
 <script id="board-data" type="application/json">{{BOARD_JSON}}</script>
@@ -108,6 +125,9 @@ dialog.history::backdrop { background: rgba(0, 0, 0, .6); }
   <label><input type="checkbox" id="hide-rejects" checked> hide rejects</label>
   <label>Size <input id="size" type="range" min="120" max="800" step="20"></label>
   <span class="counts" id="counts"></span>
+  <button id="board-note">Board note</button>
+  <button id="gen-more" hidden title="Run a pass of 4 from the current project state">Generate 4 more</button>
+  <span class="live-status" id="live-status"></span>
   <button id="history-open" title="Every project version, including the ones without a pass (h)">History</button>
 </div>
 
@@ -116,11 +136,20 @@ dialog.history::backdrop { background: rgba(0, 0, 0, .6); }
   <div class="head"><h2 id="history-title">History</h2><button id="history-close" title="Close (Esc)">Close</button></div>
   <ol></ol>
 </dialog>
+<dialog class="note" id="note-dlg" aria-labelledby="note-title">
+  <form method="dialog">
+    <h2 id="note-title">Note</h2>
+    <textarea id="note-text" rows="3" placeholder="what works, what doesn't"></textarea>
+    <div class="row"><span class="keys">Enter saves · Shift+Enter new line · Esc cancels</span>
+      <span><button value="cancel">Cancel</button> <button value="save" id="note-save">Save</button></span></div>
+  </form>
+</dialog>
 <div class="toast" id="toast"></div>
 
 <script>
 "use strict";
-const B = JSON.parse(document.getElementById("board-data").textContent);
+let B = JSON.parse(document.getElementById("board-data").textContent);
+const LIVE = !!B.live && location.protocol.startsWith("http");  // served by `gen board serve`
 const $ = (id) => document.getElementById(id);
 const el = (tag, props = {}, ...kids) => {
   const e = Object.assign(document.createElement(tag), props);
@@ -134,12 +163,12 @@ const store = {  // per-viewer settings; file:// storage can be missing or throw
 const when = (t) => (t || "").replace("T", " ");
 const shq = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'";  // POSIX shell single quotes
 let toastTimer;
-function toast(msg) {
+function toast(msg, ms) {
   const t = $("toast");
   t.textContent = msg;
   t.classList.add("show");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove("show"), 2200);
+  toastTimer = setTimeout(() => t.classList.remove("show"), ms || 2200);
 }
 function copy(text, msg) {
   const done = () => toast(msg || "copied");
@@ -158,14 +187,90 @@ const noteList = (notes) => notes && notes.length
   ? el("ul", { className: "notes" }, ...notes.map((n) => el("li", {}, el("span", { className: "who", textContent: n.author + ": " }), n.text)))
   : null;
 
-/* ---------- header ---------- */
-$("title").textContent = `${B.title} · v${B.version}`;
-$("brief").textContent = B.brief || "";
-{
+/* ---------- actions: the API when served, else copy the gen project command ---------- */
+async function api(path, body) {
+  const opts = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const r = await fetch(`/api/projects/${encodeURIComponent(B.slug)}/${path}`, opts);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || `${r.status} ${r.statusText}`);
+  return j;
+}
+async function rate(c, r) {
+  const { target, label } = c.dataset;
+  if (!LIVE) {
+    if (r === "clear") return toast("clear needs gen board serve (or: gen project rate ... clear)");
+    return copy(`gen project rate ${B.slug} ${r} ${shq(target)}`, `rate command for ${label} copied`);
+  }
+  const rating = r !== "clear" && c.dataset.rating === r ? "clear" : r;  // same rating again: toggle off
+  try {
+    const j = await api("rate", { images: [target], rating });
+    update(j);
+    toast(`${label}: ${rating === "clear" ? "unrated" : rating}`);
+  } catch (e) { toast(`could not rate ${label}: ${e.message}`, 5000); }
+}
+let noteFor = null;  // the card the note dialog is for (null = the board)
+function openNote(c) {
+  noteFor = c;
+  $("note-title").textContent = c ? `Note on ${c.dataset.label}` : "Note on the board";
+  $("note-save").textContent = LIVE ? "Save" : "Copy command";
+  $("note-text").value = "";
+  $("note-dlg").showModal();
+  $("note-text").focus();
+}
+async function saveNote() {
+  const text = $("note-text").value.trim();
+  const c = noteFor;
+  if (!text) return;
+  if (!LIVE) {
+    return copy(`gen project note ${B.slug} ${shq(text)}` + (c ? ` --image ${shq(c.dataset.target)}` : ""), "note command copied");
+  }
+  try {
+    update(await api("note", { text, ...(c ? { image: c.dataset.target } : {}) }));
+    toast("note saved");
+  } catch (e) { toast(`could not save the note: ${e.message}`, 5000); }
+}
+$("note-dlg").addEventListener("close", () => {
+  if ($("note-dlg").returnValue === "save") saveNote();
+  if (noteFor && noteFor.isConnected) noteFor.focus({ preventScroll: true });
+});
+$("note-text").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); $("note-dlg").close("save"); }
+});
+$("board-note").addEventListener("click", () => openNote(null));
+
+/* ---------- rendering (again on every change while served) ---------- */
+let cards = [];
+function card(im) {
+  const label = im.id || im.path.split("/").pop();
+  const fig = el("figure", { className: "card" + (im.rating ? " " + im.rating : ""), tabIndex: 0 });
+  Object.assign(fig.dataset, { target: im.id || im.path, label, rating: im.rating || "unrated", key: im.id || im.path });
+  const acts = el("span", { className: "acts" });
+  ["pick", "maybe", "reject"].forEach((r, i) => {
+    const b = el("button", { textContent: r, title: LIVE ? `${r} (${i + 1})` : `copy: gen project rate ... ${r} (${i + 1})` });
+    if (LIVE) b.setAttribute("aria-pressed", String(im.rating === r));
+    b.addEventListener("click", () => rate(fig, r));
+    acts.append(b);
+  });
+  const nb = el("button", { textContent: "note", title: LIVE ? "note (n)" : "copy: gen project note ... (n)" });
+  nb.addEventListener("click", () => openNote(fig));
+  acts.append(nb);
+  fig.append(...[
+    el("a", { href: im.src, target: "_blank", tabIndex: -1 }, el("img", { src: im.src, loading: "lazy", decoding: "async", alt: label })),
+    el("figcaption", {}, el("span", { className: "id", textContent: label }),
+      im.seed != null ? `seed ${im.seed}` : null,
+      im.rating ? el("span", { className: "badge " + im.rating, textContent: im.rating }) : null, acts),
+    noteList(im.notes)].filter(Boolean));
+  cards.push(fig);
+  return fig;
+}
+function renderHeader() {
+  $("title").textContent = `${B.title} · v${B.version}`;
+  document.title = `${B.title} · board`;
+  $("brief").textContent = B.brief || "";
   const s = B.state;
   const kv = (k, ...v) => el("p", { className: "kv" }, el("b", { textContent: k }), ...v);
   const params = Object.entries(s.params || {}).map(([k, v]) => `${k}=${v}`).join(" ");
-  $("state").append(...[
+  $("state").replaceChildren(...[
     kv("prompt", s.prompt || "(none yet)"),
     s.negative ? kv("negative", s.negative) : null,
     kv("preset", s.preset + (params ? ` · ${params}` : "")),
@@ -174,86 +279,77 @@ $("brief").textContent = B.brief || "";
   ].filter(Boolean));
   const thumb = (src, cap, cls) => el("figure", {}, el("a", { href: src, target: "_blank" }, el("img", { src, loading: "lazy", alt: cap })),
     el("figcaption", { className: cls || "" }, cap));
-  $("refs").append(
+  $("refs").replaceChildren(
     ...s.refs.map((r) => thumb(r.src, `ref ${r.name}${r.role ? ` (${r.role})` : ""}`)),
     ...B.assets.map((a) => thumb(a.src, `${a.name} ${a.current}${a.stale ? " · stale" : ""}`, a.stale ? "stale" : "")));
-  if (B.notes.length) $("board-notes").append(el("h2", { textContent: "Board notes" }), noteList(B.notes));
+  $("board-notes").replaceChildren(...(B.notes.length ? [el("h2", { textContent: "Board notes" }), noteList(B.notes)] : []));
+}
+function renderPasses() {
+  cards = [];
+  const versions = new Map(B.versions.map((v) => [v.version, v]));
+  const byVersion = new Map();
+  for (const p of B.passes) {
+    if (!byVersion.has(p.version)) byVersion.set(p.version, []);
+    byVersion.get(p.version).push(p);
+  }
+  const out = [];
+  for (const vn of [...byVersion.keys()].sort((a, b) => b - a)) {
+    const v = versions.get(vn) || { version: vn, author: "?", note: "", changed: [] };
+    const sec = el("section", { className: "version" },
+      el("h2", { textContent: `v${v.version}` + (v.note ? ` · ${v.note}` : "") }),
+      el("div", { className: "muted", textContent: `${v.author} · ${when(v.at)}` + (v.changed.length ? ` · changed ${v.changed.join(", ")}` : "") }));
+    if (v.prompt) sec.append(el("details", {}, el("summary", { textContent: "project prompt at this version" }), el("p", { textContent: v.prompt })));
+    for (const p of byVersion.get(vn).slice().reverse()) {
+      const bits = [`${p.images.length} image(s)`, p.author, when(p.at)];
+      if (p.extra) bits.push(`extra: ${p.extra}`);
+      if (p.ref) bits.push(`from ref ${p.ref}`);
+      const h = el("h3", {}, el("b", { textContent: `Pass ${p.n}` }), " · " + bits.join(" · ") + " · ",
+        el("a", { href: p.sheet, target: "_blank", textContent: "contact sheet" }));
+      const pass = el("div", { className: "pass" }, h);
+      if (p.missing) pass.append(el("p", { className: "muted", textContent: "run folder is gone" }));
+      else pass.append(el("div", { className: "grid" }, ...p.images.map(card)));
+      sec.append(pass);
+    }
+    out.push(sec);
+  }
+  if (B.others.length) {
+    out.push(el("section", { className: "version" }, el("h2", { textContent: "Other rated images" }),
+      el("div", { className: "grid", style: "margin-top:8px" }, ...B.others.map(card))));
+  }
+  if (!B.passes.length && !B.others.length) {
+    out.push(el("p", { className: "empty", textContent: LIVE ? "No passes yet: press Generate 4 more." : `No passes yet. Run one with: gen project gen ${B.slug}` }));
+  }
+  $("main").replaceChildren(...out);
+}
+function renderHistory() {
+  /* every version, also the ones without a pass (params, promote, keep) */
+  $("history").querySelector("ol").replaceChildren(...B.versions.slice().reverse().map((v) => el("li", {},
+    el("b", { textContent: `v${v.version} ` }), el("span", { className: "muted", textContent: `${when(v.at)} ${v.author} ` }),
+    v.note || "", v.changed.length ? el("span", { className: "muted", textContent: ` [${v.changed.join(", ")}]` }) : null)));
+  $("history-open").textContent = `History (${B.versions.length})`;
+}
+function render() {
+  const focused = document.activeElement && document.activeElement.closest && document.activeElement.closest(".card");
+  const keep = focused && focused.dataset.key;
+  renderHeader();
+  renderPasses();
+  renderHistory();
+  const c = B.counts;  // the same numbers gen project status and project_get report
+  $("counts").textContent = `${c.pick} pick · ${c.maybe} maybe · ${c.reject} reject · ${c.unrated} unrated`;
+  apply();
+  if (keep) {  // keep the selection; when its card got filtered out (rated reject), go to the next one
+    const i = cards.findIndex((x) => x.dataset.key === keep);
+    const next = i < 0 ? null : cards.slice(i).find((x) => !x.hidden) || cards.slice(0, i).reverse().find((x) => !x.hidden);
+    if (next) next.focus({ preventScroll: true });
+  }
 }
 
-/* ---------- passes, grouped by project version ---------- */
-const cards = [];
-const versions = new Map(B.versions.map((v) => [v.version, v]));
-const byVersion = new Map();
-for (const p of B.passes) {
-  if (!byVersion.has(p.version)) byVersion.set(p.version, []);
-  byVersion.get(p.version).push(p);
-}
-function card(im) {
-  const fig = el("figure", { className: "card" + (im.rating ? " " + im.rating : "") });
-  const label = im.id || im.path.split("/").pop();
-  const target = im.id || im.path;
-  const acts = el("span", { className: "acts" });
-  for (const r of ["pick", "maybe", "reject"]) {
-    const b = el("button", { textContent: r, title: `copy: gen project rate ... ${r}` });
-    b.addEventListener("click", () => copy(`gen project rate ${B.slug} ${r} ${shq(target)}`, `rate command for ${label} copied`));
-    acts.append(b);
-  }
-  const nb = el("button", { textContent: "note", title: "copy: gen project note ..." });
-  nb.addEventListener("click", () => copy(`gen project note ${B.slug} '...' --image ${shq(target)}`, `note command for ${label} copied`));
-  acts.append(nb);
-  fig.append(...[
-    el("a", { href: im.src, target: "_blank" }, el("img", { src: im.src, loading: "lazy", decoding: "async", alt: label })),
-    el("figcaption", {}, el("span", { className: "id", textContent: label }),
-      im.seed != null ? `seed ${im.seed}` : null,
-      im.rating ? el("span", { className: "badge " + im.rating, textContent: im.rating }) : null, acts),
-    noteList(im.notes)].filter(Boolean));
-  fig.dataset.rating = im.rating || "unrated";
-  cards.push(fig);
-  return fig;
-}
-const main = $("main");
-const shown = [...byVersion.keys()].sort((a, b) => b - a);
-for (const vn of shown) {
-  const v = versions.get(vn) || { version: vn, author: "?", note: "", changed: [] };
-  const sec = el("section", { className: "version" },
-    el("h2", { textContent: `v${v.version}` + (v.note ? ` · ${v.note}` : "") }),
-    el("div", { className: "muted", textContent: `${v.author} · ${when(v.at)}` + (v.changed.length ? ` · changed ${v.changed.join(", ")}` : "") }));
-  if (v.prompt) sec.append(el("details", {}, el("summary", { textContent: "project prompt at this version" }), el("p", { textContent: v.prompt })));
-  for (const p of byVersion.get(vn).slice().reverse()) {
-    const bits = [`${p.images.length} image(s)`, p.author, when(p.at)];
-    if (p.extra) bits.push(`extra: ${p.extra}`);
-    if (p.ref) bits.push(`from ref ${p.ref}`);
-    const h = el("h3", {}, el("b", { textContent: `Pass ${p.n}` }), " · " + bits.join(" · ") + " · ",
-      el("a", { href: p.sheet, target: "_blank", textContent: "contact sheet" }));
-    const pass = el("div", { className: "pass" }, h);
-    if (p.missing) pass.append(el("p", { className: "muted", textContent: "run folder is gone" }));
-    else pass.append(el("div", { className: "grid" }, ...p.images.map(card)));
-    sec.append(pass);
-  }
-  main.append(sec);
-}
-if (B.others.length) {
-  main.append(el("section", { className: "version" }, el("h2", { textContent: "Other rated images" }),
-    el("div", { className: "grid", style: "margin-top:8px" }, ...B.others.map(card))));
-}
-if (!B.passes.length && !B.others.length) {
-  main.append(el("p", { className: "empty", textContent: `No passes yet. Run one with: gen project gen ${B.slug}` }));
-}
-/* ---------- history popup: every version, also the ones without a pass (params, promote, keep) ---------- */
-$("history").querySelector("ol").append(...B.versions.slice().reverse().map((v) => el("li", {},
-  el("b", { textContent: `v${v.version} ` }), el("span", { className: "muted", textContent: `${when(v.at)} ${v.author} ` }),
-  v.note || "", v.changed.length ? el("span", { className: "muted", textContent: ` [${v.changed.join(", ")}]` }) : null)));
-$("history-open").textContent = `History (${B.versions.length})`;
+/* ---------- history popup ---------- */
 $("history-open").addEventListener("click", () => $("history").showModal());
 $("history-close").addEventListener("click", () => $("history").close());
 $("history").addEventListener("click", (e) => { if (e.target === e.currentTarget) e.currentTarget.close(); });  // backdrop
-document.addEventListener("keydown", (e) => {
-  if (e.key === "h" && !e.ctrlKey && !e.metaKey && !e.altKey && !$("history").open) $("history").showModal();
-});
 
 /* ---------- filter + size ---------- */
-const counts = B.counts;  // the same numbers gen project status and project_get report
-$("counts").textContent = `${counts.pick} pick · ${counts.maybe} maybe · ${counts.reject} reject · ${counts.unrated} unrated`;
 const state = { filter: store.get("filter", "all"), hideRejects: store.get("hideRejects", true), thumb: store.get("thumb", 240) };
 function apply() {
   for (const c of cards) {
@@ -271,5 +367,82 @@ for (const b of document.querySelectorAll("[data-filter]")) {
 }
 $("hide-rejects").addEventListener("change", (e) => { state.hideRejects = e.target.checked; store.set("hideRejects", state.hideRejects); apply(); });
 $("size").addEventListener("input", (e) => { state.thumb = Number(e.target.value); store.set("thumb", state.thumb); apply(); });
-apply();
+
+/* ---------- keys: 1/2/3/0 rate, n note, j/k or arrows move, h history ---------- */
+const visible = () => cards.filter((c) => !c.hidden);
+function move(step) {
+  const vis = visible();
+  if (!vis.length) return;
+  const cur = document.activeElement && document.activeElement.closest && document.activeElement.closest(".card");
+  const i = vis.indexOf(cur);
+  const next = vis[i < 0 ? (step > 0 ? 0 : vis.length - 1) : Math.min(vis.length - 1, Math.max(0, i + step))];
+  next.focus({ preventScroll: true });
+  next.scrollIntoView({ block: "nearest" });
+}
+document.addEventListener("keydown", (e) => {
+  if (e.ctrlKey || e.metaKey || e.altKey || document.querySelector("dialog[open]")) return;
+  if (e.target.closest && e.target.closest("input, textarea, select")) return;
+  const c = e.target.closest && e.target.closest(".card");
+  const k = e.key;
+  if (k === "h") { $("history").showModal(); return; }
+  if (k === "j" || k === "ArrowRight" || k === "ArrowDown") { if (k.startsWith("Arrow") && !c) return; e.preventDefault(); move(1); return; }
+  if (k === "k" || k === "ArrowLeft" || k === "ArrowUp") { if (k.startsWith("Arrow") && !c) return; e.preventDefault(); move(-1); return; }
+  if (!c) return;
+  const r = { 1: "pick", 2: "maybe", 3: "reject", 0: "clear" }[k];
+  if (r) { e.preventDefault(); rate(c, r); }
+  else if (k === "n") { e.preventDefault(); openNote(c); }
+});
+
+/* ---------- live: generate more, and follow changes made anywhere ---------- */
+let stamp = B.stamp;
+let job = null;
+const shownFail = new Set();
+function update(j) {
+  if (j.data) { B = j.data; render(); }
+  if (j.stamp) stamp = j.stamp;
+  if ("job" in j) setJob(j.job);
+}
+function setJob(jb) {
+  job = jb;
+  const btn = $("gen-more");
+  const running = jb && jb.state === "running";
+  btn.disabled = !!running;
+  btn.textContent = running
+    ? (jb.slug === B.slug ? `Generating ${jb.count}… ${Math.round(Date.now() / 1000 - jb.started)}s` : `GPU busy (${jb.slug})`)
+    : "Generate 4 more";
+  if (jb && jb.state === "failed" && jb.slug === B.slug && !shownFail.has(jb.id)) {
+    shownFail.add(jb.id);
+    toast(`generate failed: ${jb.error}`, 8000);
+  }
+}
+function setOnline(ok) {
+  const s = $("live-status");
+  s.classList.toggle("off", !ok);
+  s.textContent = ok ? "live" : "server stopped: run gen board serve";
+  $("gen-more").disabled = !ok || !!(job && job.state === "running");
+}
+async function poll() {
+  if (document.hidden) return;
+  try {
+    const s = await api("stamp");
+    setOnline(true);
+    if (s.stamp !== stamp) update(await api("board"));
+    else setJob(s.job);
+  } catch { setOnline(false); }
+}
+if (LIVE) {
+  $("gen-more").hidden = false;
+  $("gen-more").addEventListener("click", async () => {
+    try { update(await api("gen", { count: 4 })); toast("generating 4 more"); }
+    catch (e) { toast(`could not start: ${e.message}`, 6000); }
+  });
+  $("board-note").title = "A note on the whole board";
+  setOnline(true);
+  setInterval(poll, 2000);
+  document.addEventListener("visibilitychange", poll);
+} else {
+  $("board-note").title = "copy: gen project note ... (live with gen board serve)";
+}
+
+render();
 </script>

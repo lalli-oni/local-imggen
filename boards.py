@@ -262,13 +262,21 @@ def page_data(proj: dict, b: dict) -> dict:
     }
 
 
-def write_page(slug: str, proj: dict | None = None, b: dict | None = None) -> Path:
-    """(Re)write <project>/index.html from project.json and board.json."""
+def render_page(slug: str, proj: dict | None = None, b: dict | None = None, live: bool = False,
+                extra: dict | None = None) -> str:
+    """The board page as HTML. live: served by boardserve.py, so its buttons call the API."""
     proj = proj or projects.load(slug)
     data = page_data(proj, b if b is not None else load(slug))
+    if live:
+        data.update(live=True, **(extra or {}))
     fills = {"TITLE": html.escape(f"{proj['title']} · board"),
              "BOARD_JSON": json.dumps(data, ensure_ascii=False).replace("<", "\\u003c")}
-    page = re.sub(r"\{\{(TITLE|BOARD_JSON)\}\}", lambda m: fills[m.group(1)], TEMPLATE.read_text(encoding="utf-8"))
+    return re.sub(r"\{\{(TITLE|BOARD_JSON)\}\}", lambda m: fills[m.group(1)], TEMPLATE.read_text(encoding="utf-8"))
+
+
+def write_page(slug: str, proj: dict | None = None, b: dict | None = None) -> Path:
+    """(Re)write <project>/index.html from project.json and board.json."""
+    page = render_page(slug, proj, b)
     out = page_file(slug)
     # tmp + replace, like project.json: a browser reload or a second writer never sees half a page
     tmp = out.with_name(f".{out.name}.{os.getpid()}.{threading.get_ident()}.tmp")
