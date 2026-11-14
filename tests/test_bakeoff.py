@@ -334,3 +334,16 @@ def test_t2i_labels_stay_unique_and_bad_ref_preset(comfy, make_image, fake_proc,
     monkeypatch.setattr(imagegen, "load_config", lambda: conf)
     with pytest.raises(ValueError, match="ref_preset 'sdxl_reff' is not an edit preset"):
         bakeoff.t2i_bakeoff(["x"], ["draft"], ref=str(make_image()), ref_prompts=["y"])
+
+
+def test_t2i_missing_custom_node_is_a_note_not_a_comfy_error(comfy, make_image, fake_proc):
+    """On tulu the IPAdapter node wasn't loaded: say so in the table instead of a raw ComfyUI rejection."""
+    comfy.nodes -= {"IPAdapterModelLoader", "IPAdapterAdvanced"}
+    run = bakeoff.t2i_bakeoff(["x"], ["draft", "klein"], ref=str(make_image()), ref_prompts=["y"], count=1,
+                              interval=0.01)
+    res = {r["preset"]: r for r in run["bakeoff"]["presets"]}
+    assert "IPAdapterAdvanced, IPAdapterModelLoader" in res["draft+ref"]["note"]
+    assert res["draft+ref"]["images"] == 0 and res["draft+ref"]["error"] is None
+    assert res["draft"]["images"] == 1 and res["klein+ref"]["images"] == 1
+    assert not any(_node(wf, "IPAdapterAdvanced") for wf in comfy.workflows())  # never sent
+    assert "custom node not installed" in bakeoff.table(run)

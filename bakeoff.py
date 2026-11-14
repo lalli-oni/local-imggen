@@ -307,6 +307,16 @@ def _label(p: dict, name: str, steps: int | None = None, ref: bool = False) -> s
     return " · ".join([p.get("model", name)] + ([f"{steps} steps"] if steps else []) + (["ref"] if ref else []))
 
 
+def _missing_nodes(comfy: imagegen.Comfy, workflow: str) -> list[str]:
+    """Node types a workflow uses that ComfyUI doesn't have (a custom node not installed), [] if unknown."""
+    try:
+        have = set(json.loads(comfy._get("/object_info")))
+        wf = json.loads((imagegen.ROOT / "workflows" / workflow).read_text())
+    except Exception:
+        return []  # can't tell: let ComfyUI say so
+    return sorted({n["class_type"] for n in wf.values()} - have)
+
+
 def t2i_bakeoff(prompts: list[str] | None = None, presets: list[str] | tuple[str, ...] = T2I_PRESETS,
                 ref: str | None = None, ref_prompts: list[str] | None = None, count: int = 2,
                 seed: int | None = None, size: tuple[int, int] = T2I_SIZE, free: bool = True,
@@ -367,15 +377,20 @@ def t2i_bakeoff(prompts: list[str] | None = None, presets: list[str] | tuple[str
                                                  label=f"bakeoff-{preset}-ref-{n}-{imagegen.slug(text, 20)}")
     text_items = list(enumerate(prompts, 1))
     ref_items = list(enumerate(ref_prompts, len(prompts) + 1))  # numbered after the fresh prompts
+    def runnable(call, workflow):  # a missing custom node becomes a note up front, not a ComfyUI error
+        missing = _missing_nodes(comfy, workflow)
+        return f"custom node not installed (gen doctor): ComfyUI has no {', '.join(missing)}" \
+            if missing else call
     columns = []
     for p in presets:
         cols = []
         if text_items and "workflow" in pconf[p]:
-            cols.append((p, _label(pconf[p], p, steps.get(p)), text_call(p), text_items))
+            cols.append((p, _label(pconf[p], p, steps.get(p)), runnable(text_call(p), pconf[p]["workflow"]),
+                         text_items))
         if ref_items:
             rp = _ref_preset(pconf, p)
             cols.append((p + "+ref", _label(pconf[rp or p], rp or p, steps.get(p), ref=True),
-                         ref_call(p, rp) if rp else NO_REF, ref_items))
+                         runnable(ref_call(p, rp), pconf[rp]["edit_workflow"]) if rp else NO_REF, ref_items))
         columns.append((p, cols))
     # two presets on the same model and steps (wallpaper, icon) would share a label: name the preset too
     seen: dict[str, int] = {}
@@ -411,7 +426,7 @@ def table(run: dict) -> str:
                      str(r["steps"]) if r.get("steps") is not None else "-", f(r.get("first_seconds")),
                      f(r.get("median_seconds")), f(pk.get("vram_gib")), f(pk.get("ram_gib")),
                      f(pk.get("comfy_rss_gib")), f(pk.get("comfy_swap_gib")), f(pk.get("swap_gib")),
-                     (r.get("error") or r.get("note") or "")[:80]))
+                     (r.get("error") or r.get("note") or "")[:100]))
     w = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
     return "\n".join("  ".join(c.ljust(w[i]) for i, c in enumerate(row)).rstrip() for row in rows)
 
