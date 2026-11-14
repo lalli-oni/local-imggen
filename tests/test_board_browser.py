@@ -202,3 +202,32 @@ def test_static_keys_copy_commands(board):
     assert page.locator("#note-save").inner_text() == "Copy command"
     page.keyboard.press("Escape")
     assert not errors, errors
+
+
+def test_live_rerender_keeps_images(live):
+    """A rating re-renders the board, but moves the loaded <img> elements instead of fetching them again."""
+    page, errors, *_ = live
+    page.evaluate("window.__img = document.querySelector('.card img')")
+    page.keyboard.press("j")
+    page.keyboard.press("1")
+    page.wait_for_selector(".card.pick")
+    assert page.evaluate("document.querySelector('.card img') === window.__img")
+    assert not errors, errors
+
+
+def test_keys_work_after_the_size_slider(board):
+    page, errors = board
+    page.locator("#size").focus()
+    page.keyboard.press("h")
+    assert page.locator("#history").is_visible()
+    assert not errors, errors
+
+
+def test_live_old_failure_not_toasted_again(live):
+    import time
+    page, errors, srv, jobs = live
+    jobs.current = {"id": 9, "slug": "fjord", "count": 4, "state": "failed", "error": "RuntimeError: old",
+                    "started": time.time() - 60, "finished": time.time() - 50}
+    page.reload()
+    page.wait_for_timeout(2600)  # one poll
+    assert "old" not in page.locator("#toast").inner_text()

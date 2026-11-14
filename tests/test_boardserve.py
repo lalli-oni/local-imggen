@@ -224,3 +224,50 @@ def test_cli_serves_and_opens(proj, monkeypatch, capsys, stub_calls):
     out = capsys.readouterr().out
     assert "http://127.0.0.1:" in out and "/projects/fjord/" in out
     assert any(c.startswith("explorer.exe http://127.0.0.1:") for c in stub_calls())
+
+
+def test_images_revalidate(proj, server, out_dir):
+    port, _ = server
+    st, _, data = req(port, "GET", "/api/projects/fjord/board")
+    src = data["data"]["passes"][0]["images"][0]["src"]
+    url = "/" + (out_dir.resolve() / "projects" / "fjord" / src).resolve().relative_to(out_dir.resolve()).as_posix()
+    st, h, _ = req(port, "GET", url)
+    assert st == 200 and h["Cache-Control"] == "no-cache" and h["Last-Modified"]
+    st, _, body = req(port, "GET", url, headers={"If-Modified-Since": h["Last-Modified"]})
+    assert st == 304 and body == b""
+    assert req(port, "GET", "/favicon.ico")[0] == 204
+
+
+def test_stamp_follows_cast_characters(out_dir, server):
+    import characters
+    characters.new("tulu", description="a tiny green cthulhu")
+    projects.new("wall", "Wall", prompt="a beach", cast={"tulu": None})
+    port, _ = server
+    s1 = req(port, "GET", "/api/projects/wall/stamp")[2]["stamp"]
+    time.sleep(0.01)
+    characters.set_state("tulu", description="a tiny teal cthulhu")  # stales assets showing tulu
+    assert req(port, "GET", "/api/projects/wall/stamp")[2]["stamp"] != s1
+
+
+def test_unexpected_errors_get_an_answer(proj, server, monkeypatch):
+    def boom(*a, **k):
+        raise PermissionError("board.json is read-only")
+    monkeypatch.setattr(boards, "rate", boom)
+    st, _, r = req(server[0], "POST", "/api/projects/fjord/rate", {"images": ["1:1"], "rating": "pick"})
+    assert st == 500 and "read-only" in r["error"]
+
+
+def test_ctrl_c_waits_for_a_running_pass(proj, monkeypatch, capsys):
+    finished = []
+
+    def fake_forever(self, *a, **k):
+        def slow(slug, n):
+            time.sleep(0.3)
+            finished.append(slug)
+            return {}
+        self.RequestHandlerClass.jobs.start("fjord", 1, run=slow)
+        raise KeyboardInterrupt
+    monkeypatch.setattr(boardserve.ThreadingHTTPServer, "serve_forever", fake_forever)
+    assert imagegen.main(["board", "serve", "--port", "0"]) == 0
+    assert finished == ["fjord"]
+    assert "still generating" in capsys.readouterr().out

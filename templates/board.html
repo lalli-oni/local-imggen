@@ -240,6 +240,12 @@ $("board-note").addEventListener("click", () => openNote(null));
 
 /* ---------- rendering (again on every change while served) ---------- */
 let cards = [];
+let oldImgs = new Map();  // src -> <img> of the previous render: moved into the new cards, so nothing reloads
+const img = (src, props) => {
+  const old = oldImgs.get(src);
+  if (old) { oldImgs.delete(src); return old; }
+  return el("img", { src, loading: "lazy", decoding: "async", ...props });
+};
 function card(im) {
   const label = im.id || im.path.split("/").pop();
   const fig = el("figure", { className: "card" + (im.rating ? " " + im.rating : ""), tabIndex: 0 });
@@ -255,7 +261,7 @@ function card(im) {
   nb.addEventListener("click", () => openNote(fig));
   acts.append(nb);
   fig.append(...[
-    el("a", { href: im.src, target: "_blank", tabIndex: -1 }, el("img", { src: im.src, loading: "lazy", decoding: "async", alt: label })),
+    el("a", { href: im.src, target: "_blank", tabIndex: -1 }, img(im.src, { alt: label })),
     el("figcaption", {}, el("span", { className: "id", textContent: label }),
       im.seed != null ? `seed ${im.seed}` : null,
       im.rating ? el("span", { className: "badge " + im.rating, textContent: im.rating }) : null, acts),
@@ -331,8 +337,10 @@ function renderHistory() {
 function render() {
   const focused = document.activeElement && document.activeElement.closest && document.activeElement.closest(".card");
   const keep = focused && focused.dataset.key;
+  oldImgs = new Map([...document.querySelectorAll("#main .card img")].map((i) => [i.getAttribute("src"), i]));
   renderHeader();
   renderPasses();
+  oldImgs = new Map();
   renderHistory();
   const c = B.counts;  // the same numbers gen project status and project_get report
   $("counts").textContent = `${c.pick} pick · ${c.maybe} maybe · ${c.reject} reject · ${c.unrated} unrated`;
@@ -381,7 +389,8 @@ function move(step) {
 }
 document.addEventListener("keydown", (e) => {
   if (e.ctrlKey || e.metaKey || e.altKey || document.querySelector("dialog[open]")) return;
-  if (e.target.closest && e.target.closest("input, textarea, select")) return;
+  // typing goes to text fields; the size slider and checkboxes leave the keys to the board
+  if (e.target.closest && e.target.closest("textarea, select, input:not([type=range]):not([type=checkbox])")) return;
   const c = e.target.closest && e.target.closest(".card");
   const k = e.key;
   if (k === "h") { $("history").showModal(); return; }
@@ -397,6 +406,7 @@ document.addEventListener("keydown", (e) => {
 let stamp = B.stamp;
 let job = null;
 const shownFail = new Set();
+const loadedAt = Date.now() / 1000;  // failures from before this page was opened were already reported
 function update(j) {
   if (j.data) { B = j.data; render(); }
   if (j.stamp) stamp = j.stamp;
@@ -410,7 +420,7 @@ function setJob(jb) {
   btn.textContent = running
     ? (jb.slug === B.slug ? `Generating ${jb.count}… ${Math.round(Date.now() / 1000 - jb.started)}s` : `GPU busy (${jb.slug})`)
     : "Generate 4 more";
-  if (jb && jb.state === "failed" && jb.slug === B.slug && !shownFail.has(jb.id)) {
+  if (jb && jb.state === "failed" && jb.slug === B.slug && !shownFail.has(jb.id) && jb.finished > loadedAt) {
     shownFail.add(jb.id);
     toast(`generate failed: ${jb.error}`, 8000);
   }

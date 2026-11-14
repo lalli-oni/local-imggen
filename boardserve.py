@@ -18,13 +18,12 @@ from __future__ import annotations
 
 import html
 import json
-import shutil
-import subprocess
 import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from email.utils import formatdate
 from urllib.parse import quote, unquote, urlsplit
 
 import boards
@@ -44,6 +43,7 @@ class Jobs:
         self._lock = threading.Lock()
         self.current: dict | None = None
         self._seq = 0
+        self.thread: threading.Thread | None = None
 
     def get(self) -> dict | None:
         with self._lock:
@@ -70,14 +70,27 @@ class Jobs:
             with self._lock:
                 job.update(upd, finished=time.time())
 
-        threading.Thread(target=work, name=f"board-gen-{slug}", daemon=True).start()
+        self.thread = threading.Thread(target=work, name=f"board-gen-{slug}", daemon=True)
+        self.thread.start()
         return dict(job)
+
+    def running(self) -> bool:
+        return bool(self.thread and self.thread.is_alive())
 
 
 def stamp(slug: str) -> str:
-    """Changes whenever project.json or board.json does: the page re-fetches its data when it moves."""
+    """Changes whenever project.json, board.json or a cast character's character.json does (a character
+    change can stale assets): the page re-fetches its data when it moves."""
+    import characters
+    pf = projects.project_dir(slug) / "project.json"
+    files = [pf, boards.board_file(slug)]
+    try:
+        cast = json.loads(pf.read_text(encoding="utf-8")).get("state", {}).get("cast") or {}
+        files += [characters.char_dir(c) / "character.json" for c in sorted(cast)]
+    except (OSError, ValueError, AttributeError):
+        pass
     parts = []
-    for f in (projects.project_dir(slug) / "project.json", boards.board_file(slug)):
+    for f in files:
         try:
             parts.append(str(f.stat().st_mtime_ns))
         except OSError:
@@ -85,7 +98,7 @@ def stamp(slug: str) -> str:
     return ".".join(parts)
 
 
-def _index_page(port: int) -> str:
+def _index_page() -> str:
     rows = []
     for slug in projects.list_projects():
         try:
@@ -115,9 +128,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        extra = dict(extra or {})
+        self.send_header("Cache-Control", extra.pop("Cache-Control", "no-store"))
         self.send_header("X-Content-Type-Options", "nosniff")
-        for k, v in (extra or {}).items():
+        for k, v in extra.items():
             self.send_header(k, v)
         self.end_headers()
         if self.command != "HEAD":
@@ -138,14 +152,18 @@ class Handler(BaseHTTPRequestHandler):
         return origin is None or origin == f"http://{self.headers.get('Host')}"
 
     def _slug(self, slug: str) -> str | None:
+        """The project's slug when it exists (one stat: list_projects() globs /mnt/c on every poll)."""
         slug = unquote(slug)
-        return slug if slug in projects.list_projects() else None
+        try:
+            return slug if (projects.project_dir(slug) / "project.json").is_file() else None
+        except ValueError:  # not a valid slug
+            return None
 
-    def _state(self, slug: str, data: bool = False) -> dict:
+    def _state(self, slug: str, data: bool = False, fresh: dict | None = None) -> dict:
+        """fresh: page data just built by the change (boards.rate/note rebuild the page anyway)."""
         out = {"stamp": stamp(slug), "job": self.jobs.get()}
         if data:
-            out["data"] = boards.page_data(projects.load(slug), boards.load(slug))
-            out["data"]["live"] = True
+            out["data"] = {**(fresh or boards.page_data(projects.load(slug), boards.load(slug))), "live": True}
         return out
 
     # ------------------------------------------------------------ GET
@@ -160,7 +178,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/favicon.ico":  # browsers ask for it; a 404 would be console noise
             return self._send(204, b"", "image/x-icon")
         if not parts:
-            return self._send(200, _index_page(self.server.server_port).encode(), "text/html; charset=utf-8")
+            return self._send(200, _index_page().encode(), "text/html; charset=utf-8")
         if parts[0] == "api" and len(parts) == 4 and parts[1] == "projects":
             slug = self._slug(parts[2])
             if not slug:
@@ -192,10 +210,15 @@ class Handler(BaseHTTPRequestHandler):
                  ".gif": "image/gif", ".bmp": "image/bmp", ".html": "text/html; charset=utf-8"
                  }.get(f.suffix.lower(), "application/octet-stream")
         try:
+            st = f.stat()
+            lm = formatdate(st.st_mtime, usegmt=True)
+            if self.headers.get("If-Modified-Since") == lm:
+                return self._send(304, b"", ctype, {"Last-Modified": lm})
             body = f.read_bytes()
         except OSError:
             return self._err(404, "not found")
-        self._send(200, body, ctype)
+        # no-cache = revalidate each time: a cut-out rewritten in place must not show stale
+        self._send(200, body, ctype, {"Last-Modified": lm, "Cache-Control": "no-cache"})
 
     # ------------------------------------------------------------ POST
     def do_POST(self):
@@ -247,9 +270,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(202, {"result": result, **self._state(slug)})
             else:
                 return self._err(404, "unknown endpoint")
-        except (ValueError, FileNotFoundError, KeyError) as e:
-            return self._err(400, str(e) if not isinstance(e, FileNotFoundError) else f"no such image: {e}")
-        return self._json(200, {"result": result, **self._state(slug, data=True)})
+        except FileNotFoundError as e:
+            return self._err(400, f"no such image: {e}")
+        except (ValueError, KeyError) as e:
+            return self._err(400, str(e))
+        except Exception as e:  # noqa: BLE001 - a lock or /mnt/c write failure: say so instead of dropping the connection
+            imagegen.log(f"board serve: {action} on {slug} failed: {type(e).__name__}: {e}")
+            return self._err(500, f"{type(e).__name__}: {e}")
+        return self._json(200, {"result": result, **self._state(slug, data=True, fresh=boards.last_data(slug))})
 
 
 def make_server(port: int = DEFAULT_PORT, host: str = "127.0.0.1", jobs: Jobs | None = None) -> ThreadingHTTPServer:
@@ -259,12 +287,6 @@ def make_server(port: int = DEFAULT_PORT, host: str = "127.0.0.1", jobs: Jobs | 
     srv = ThreadingHTTPServer((host, port), handler)
     srv.daemon_threads = True
     return srv
-
-
-def open_url(url: str) -> None:
-    """The Windows default browser (explorer.exe opens URLs too); nothing outside WSL."""
-    if shutil.which("explorer.exe"):
-        subprocess.run(["explorer.exe", url])  # explorer returns 1 even on success
 
 
 USAGE = """usage: gen board serve [SLUG] [--port N] [--open]
@@ -298,11 +320,18 @@ def main(argv: list[str]) -> int:
     url = f"http://127.0.0.1:{srv.server_port}/" + (f"projects/{quote(a.slug)}/" if a.slug else "")
     print(f"board: {url}  (Ctrl+C stops)", flush=True)
     if a.open:
-        open_url(url)
+        imagegen.open_in_windows(url)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
         print()
+        if srv.RequestHandlerClass.jobs.running():
+            print("a pass is still generating; waiting for it so it lands on the board (Ctrl+C again quits)",
+                  flush=True)
+            try:
+                srv.RequestHandlerClass.jobs.thread.join()
+            except KeyboardInterrupt:
+                print("\nquit: that pass's images may be in its run folder but not on the board", file=sys.stderr)
     finally:
         srv.server_close()
     return 0

@@ -1035,7 +1035,8 @@ def set_wallpaper(path: str) -> str:
 
 
 def open_in_windows(path: str) -> None:
-    win = to_windows_path(path)
+    """A file (or folder) in its Windows app, or an http(s) URL in the default browser."""
+    win = path if path.startswith(("http://", "https://")) else to_windows_path(path)
     if win and shutil.which("explorer.exe"):
         subprocess.run(["explorer.exe", win])  # explorer returns 1 even on success
 
