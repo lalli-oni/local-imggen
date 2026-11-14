@@ -210,7 +210,7 @@ def test_t2i_with_ref_adds_ref_columns_where_the_model_can_edit(comfy, make_imag
 
     assert [im["tag"] for im in run["images"]] == ["draft · 1", "klein · 1", "klein+ref · 1", "qwen · 1",
                                                    "qwen+ref · 1"]
-    assert any("klein-ref" in Path(im["path"]).name for im in run["images"])
+    assert any("klein+ref" in Path(im["path"]).name for im in run["images"])
     out = Path(run["run_dir"])
     assert "-bakeoff-t2i-ref-src" in out.name and (out / imagegen.SHEET_SOURCE).is_file()
     assert run["bakeoff"]["ref"] == str(ref) and run["bakeoff"]["ref_suffix"] == bakeoff.REF_SUFFIX
@@ -227,7 +227,9 @@ def test_t2i_failing_model_and_bad_args(comfy, make_image, fake_proc):
     ds, klein = run["bakeoff"]["presets"]
     assert "rejected" in ds["error"] and ds["images"] == 0 and klein["images"] == 1
     with pytest.raises(ValueError, match="not a text-to-image preset: kontext"):
-        bakeoff.t2i_bakeoff(["x"], ["klein", "kontext"])
+        bakeoff.t2i_bakeoff(["x"], ["klein", "kontext"])  # edit-only: fine with a ref, not without
+    with pytest.raises(ValueError, match="twice"):
+        bakeoff.t2i_bakeoff(["x"], ["klein", "klein"])
     with pytest.raises(ValueError, match="multiple of 16"):
         bakeoff.t2i_bakeoff(["x"], ["klein"], size=(1000, 770))
     with pytest.raises(ValueError, match="prompt"):
@@ -246,7 +248,19 @@ def test_t2i_cli(comfy, make_image, fake_proc, capsys):
     comfy.fail_preset = "klein"
     assert imagegen.main(["bakeoff", "--t2i", "x", "-p", "klein", "-n", "1", "--ref", str(make_image())]) == 1
     for bad in (["bakeoff", str(make_image()), "x", "--ref", "y.png"],  # --ref without --t2i
+                ["bakeoff", str(make_image()), "x", "--size", "1344x768"],  # --size without --t2i, even the default
                 ["bakeoff", str(make_image())],                          # edit mode without instructions
                 ["bakeoff", "--t2i", "x", "--size", "big"]):
         with pytest.raises(SystemExit):
             imagegen.main(bad)
+
+
+def test_t2i_ref_takes_an_edit_only_model(comfy, make_image, fake_proc):
+    run = bakeoff.t2i_bakeoff(["x"], ["klein", "kontext"], ref=str(make_image()), count=1, seed=1, interval=0.01)
+    res = {r["preset"]: r for r in run["bakeoff"]["presets"]}
+    assert list(res) == ["klein", "klein+ref", "kontext", "kontext+ref"]
+    assert res["kontext"]["note"] == bakeoff.NO_TEXT and res["kontext+ref"]["images"] == 1
+    assert [_unet(wf) for wf in comfy.workflows()][-1] == "flux1-dev-kontext_fp8_scaled.safetensors"
+    assert run["edit"] is False and run["source_image"]
+    # file names keep the column name, so "klein+ref" can't collide with a preset called klein-ref
+    assert any(Path(im["path"]).name.startswith("01-klein+ref-") for im in run["images"])

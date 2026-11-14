@@ -184,9 +184,16 @@ const state = {
   compareMode: store.get("compareMode", "side"),  // "side" | "wipe"
   picks: [],      // up to two image indexes; [0] is A, [1] is B
   view: null,     // null | {kind: "one", i} | {kind: "two"}
-  aspect: 1,      // width / height of the images, from the first one that loads
+  aspect: 1,      // width / height of the images: the most common output size, else the first one that loads
   aspectKnown: false,
 };
+
+{  // outputs' sizes from the sidecars; a t2i bake-off with +ref columns mixes them, so take the most common
+  const n = {};
+  for (const im of images) if (!im.source && im.width && im.height) n[im.width / im.height] = (n[im.width / im.height] || 0) + 1;
+  const best = Object.keys(n).sort((a, b) => n[b] - n[a])[0];
+  if (best) { state.aspect = +best; state.aspectKnown = true; }
+}
 
 /* ---------- header ---------- */
 $("prompt").textContent = RUN.prompt;
@@ -196,7 +203,8 @@ $("prompt").textContent = RUN.prompt;
   if (p0.width && p0.height) parts.push([null, `${p0.width}×${p0.height}`]);
   if (p0.steps != null) parts.push(["steps", p0.steps]);
   if (p0.cfg != null) parts.push(["cfg", p0.cfg]);
-  if (RUN.source_image) parts.push(RUN.edit ? ["edit of", RUN.source_image]
+  if (RUN.bakeoff && RUN.bakeoff.ref) parts.push(["+ref columns use", RUN.source_image]);
+  else if (RUN.source_image) parts.push(RUN.edit ? ["edit of", RUN.source_image]
     : [RUN.mask ? "inpaint from" : "img2img from", `${RUN.source_image} @ ${RUN.denoise}`]);
   if (p0.guidance != null) parts.push(["guidance", p0.guidance]);
   if (RUN.project) parts.push(["project", `${RUN.project.slug} v${RUN.project.version}`]);

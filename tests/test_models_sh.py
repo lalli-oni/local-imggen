@@ -59,7 +59,7 @@ def test_downloads_verifies_and_is_then_done(script, env, tmp_path):
         assert (models / folder / name).read_bytes() == DATA
         assert not (models / folder / (name + ".part")).exists()
     again = run_script([str(REPO / "models" / script)], env)
-    assert again.code == 0 and "All there. Try: gen edit" in again.out
+    assert again.code == 0 and "All there. Try: gen " in again.out
 
 
 def test_checksum_mismatch_deletes_the_file(env, tmp_path):

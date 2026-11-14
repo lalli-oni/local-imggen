@@ -167,14 +167,13 @@ def _size(run: dict) -> str | None:
     return f"{prm['width']}x{prm['height']}" if "width" in prm and "height" in prm else None
 
 
-def _bake(out: Path, columns: list[tuple[str, list[tuple[str, object]]]], texts: list[str], free: bool,
-          interval: float) -> tuple[list[dict], list[dict]]:
+def _bake(comfy: imagegen.Comfy, out: Path, columns: list[tuple[str, list[tuple[str, object]]]], texts: list[str],
+          free: bool, interval: float) -> tuple[list[dict], list[dict]]:
     """Run the columns. columns: [(preset, [(column name, call or skip note), ...]), ...], one /free per
     preset. call(n, text) -> a generate() run dict; a str instead of a call = skipped, with that note.
     Returns (per-column results, sheet images in prompt-major order)."""
     results = []
     copied: dict[tuple[int, str], list[dict]] = {}  # (prompt #, column) -> image entries
-    comfy = imagegen.Comfy(imagegen.load_config()["comfy_url"])
     for preset, cols in columns:
         imagegen.log(f"== {preset}")
         if free and any(callable(c) for _, c in cols):
@@ -202,7 +201,7 @@ def _bake(out: Path, columns: list[tuple[str, list[tuple[str, object]]]], texts:
                         if im.get("seconds") is not None:  # one per job (a job may save several images)
                             res["seconds"].append(im["seconds"])
                         src = Path(im["path"])
-                        dest = out / f"{n:02d}-{name.replace('+', '-')}-{src.name}"
+                        dest = out / f"{n:02d}-{name}-{src.name}"  # "klein+ref": + is fine in file names
                         shutil.copy2(src, dest)
                         if (side := src.with_suffix(".json")).is_file():
                             shutil.copy2(side, dest.with_suffix(".json"))
@@ -256,13 +255,14 @@ def bakeoff(path: str, instructions: list[str], presets: list[str] | tuple[str, 
         raise FileNotFoundError(src)
     count = max(1, int(count))
     base_seed = seed if seed is not None else random.randrange(imagegen.MAX_SEED)
-    imagegen.Comfy(conf["comfy_url"]).wait_ready()
+    comfy = imagegen.Comfy(conf["comfy_url"])
+    comfy.wait_ready()
     out = _out_dir(conf, label or src.stem)
 
     def call(preset):
         return lambda n, text: imagegen.edit(str(src), text, count, preset, seed=base_seed,
                                              label=f"bakeoff-{preset}-{n}-{imagegen.slug(text, 20)}")
-    results, images = _bake(out, [(p, [(p, call(p))]) for p in presets], instructions, free, interval)
+    results, images = _bake(comfy, out, [(p, [(p, call(p))]) for p in presets], instructions, free, interval)
     run = {"preset": "bakeoff: " + " vs ".join(presets),
            "prompt": " | ".join(f"{n}. {i}" for n, i in enumerate(instructions, 1)),
            "base_seed": base_seed, "count": len(images), "run_dir": str(out), "images": images,
@@ -272,12 +272,13 @@ def bakeoff(path: str, instructions: list[str], presets: list[str] | tuple[str, 
 
 
 T2I_PRESETS = ("draft", "dreamshaper", "klein", "qwen")
-T2I_SIZE = (1344, 768)  # the wallpaper preset's SDXL size (~16:9); every model here takes multiples of 64
+T2I_SIZE = (1344, 768)  # the wallpaper preset's SDXL size (~16:9); sizes must be multiples of 16 (klein's latent)
 # Added to the prompt in a +ref column: the ref is the character sheet, the prompt is the scene. From the
 # daily wallpaper work (#3): without it klein copied the ref as-is, white background included.
 REF_SUFFIX = (" The character from the reference image appears exactly once, with the same design and colours,"
               " in a new pose that fits the scene. The scene fills the whole frame: no white or empty background.")
 NO_REF = "no ref input for this model (SDXL needs IP-Adapter, #51)"
+NO_TEXT = "edit-only model: no text-to-image"
 
 
 def t2i_bakeoff(prompts: list[str], presets: list[str] | tuple[str, ...] = T2I_PRESETS, ref: str | None = None,
@@ -288,18 +289,23 @@ def t2i_bakeoff(prompts: list[str], presets: list[str] | tuple[str, ...] = T2I_P
     presets = list(presets)
     prompts = _clean(prompts, "prompt")
     conf = imagegen.load_config()
-    _check_presets(presets, conf["presets"], t2i=True)
-    w, h = (int(v) for v in size)
-    if w < 256 or h < 256 or w % 16 or h % 16:
-        raise ValueError(f"size {w}x{h}: each side needs to be 256 or more and a multiple of 16")
     src = None
     if ref is not None:
         src = imagegen.to_linux_path(ref)
         if not src.is_file():
             raise FileNotFoundError(src)
+    # with a ref, an edit-only preset (kontext) is welcome: it gets only its +ref column
+    _check_presets([p for p in presets if src is None or "edit_workflow" not in conf["presets"].get(p, {})],
+                   conf["presets"], t2i=True)
+    if len(set(presets)) != len(presets):
+        raise ValueError("a preset is listed twice")
+    w, h = (int(v) for v in size)
+    if w < 256 or h < 256 or w % 16 or h % 16:
+        raise ValueError(f"size {w}x{h}: each side needs to be 256 or more and a multiple of 16")
     count = max(1, int(count))
     base_seed = seed if seed is not None else random.randrange(imagegen.MAX_SEED)
-    imagegen.Comfy(conf["comfy_url"]).wait_ready()
+    comfy = imagegen.Comfy(conf["comfy_url"])
+    comfy.wait_ready()
     out = _out_dir(conf, label or ("t2i-ref-" + src.stem if src else "t2i-" + prompts[0]))
 
     def text_call(preset):
@@ -311,17 +317,17 @@ def t2i_bakeoff(prompts: list[str], presets: list[str] | tuple[str, ...] = T2I_P
                                                  edit=True, label=f"bakeoff-{preset}-ref-{n}-{imagegen.slug(text, 20)}")
     columns = []
     for p in presets:
-        cols = [(p, text_call(p))]
+        cols = [(p, text_call(p) if "workflow" in conf["presets"][p] else NO_TEXT)]
         if src is not None:
             cols.append((p + "+ref", ref_call(p) if "edit_workflow" in conf["presets"][p] else NO_REF))
         columns.append((p, cols))
-    results, images = _bake(out, columns, prompts, free, interval)
+    results, images = _bake(comfy, out, columns, prompts, free, interval)
     names = [r["preset"] for r in results if "note" not in r]
     run = {"preset": "bakeoff: " + " vs ".join(names),
            "prompt": " | ".join(f"{n}. {p}" for n, p in enumerate(prompts, 1)),
            "base_seed": base_seed, "count": len(images), "run_dir": str(out), "images": images,
            "transparent": False, "source_image": str(src) if src else None, "mask": None, "denoise": None,
-           "edit": src is not None,
+           "edit": False,  # only the +ref columns are edits; the sheet names the ref from bakeoff.ref
            "bakeoff": {"mode": "t2i", "instructions": prompts, "count": count, "size": f"{w}x{h}",
                        "ref": str(src) if src else None, "ref_suffix": REF_SUFFIX if src else None,
                        "presets": results}}
@@ -362,7 +368,7 @@ def main(argv: list[str]) -> int:
                          "with --t2i: one or more prompts")
     ap.add_argument("--t2i", action="store_true", help="text-to-image bake-off (#51) instead of edits")
     ap.add_argument("--ref", help="with --t2i: also run each prompt with this ref image, on presets that can edit")
-    ap.add_argument("--size", type=_parse_size, default=T2I_SIZE,
+    ap.add_argument("--size", type=_parse_size,
                     help=f"with --t2i: WxH for every text-only image (default {T2I_SIZE[0]}x{T2I_SIZE[1]})")
     ap.add_argument("-p", "--presets", help=f"comma-separated presets, in order (default {','.join(DEFAULT_PRESETS)}; "
                                             f"with --t2i {','.join(T2I_PRESETS)})")
@@ -372,14 +378,14 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--label", help="folder name instead of bakeoff-<image or prompt>")
     ap.add_argument("--open", action="store_true", help="open the contact sheet in the Windows browser")
     a = ap.parse_args(argv)
-    if not a.t2i and (a.ref or a.size != T2I_SIZE):
+    if not a.t2i and (a.ref or a.size):
         ap.error("--ref and --size go with --t2i")
     if not a.t2i and len(a.args) < 2:
         ap.error("edit mode needs an image and at least one instruction (text-to-image: --t2i)")
     default = T2I_PRESETS if a.t2i else DEFAULT_PRESETS
     presets = [p.strip() for p in re.split(r"[,\s]+", a.presets or ",".join(default)) if p.strip()]
     if a.t2i:
-        run = t2i_bakeoff(a.args, presets, a.ref, a.count, a.seed, a.size, not a.no_free, a.label)
+        run = t2i_bakeoff(a.args, presets, a.ref, a.count, a.seed, a.size or T2I_SIZE, not a.no_free, a.label)
     else:
         run = bakeoff(a.args[0], a.args[1:], presets, a.count, a.seed, not a.no_free, a.label)
     print(table(run))

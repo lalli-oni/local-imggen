@@ -58,7 +58,7 @@ class FakeComfy:
         self.ram_free = 20 * 1024 ** 3
         self.frees = 0            # POST /free calls (unload models)
         self.fail_preset: str | None = None  # /prompt rejects workflows whose unet_name or ckpt_name contains this
-        self.models = {"checkpoints": ["sd_xl_base_1.0.safetensors"],
+        self.models = {"checkpoints": ["sd_xl_base_1.0.safetensors", "DreamShaperXL_Lightning.safetensors"],
                        "upscale_models": ["RealESRGAN_x4plus.pth"],
                        "diffusion_models": ["flux1-dev-kontext_fp8_scaled.safetensors",
                                             "flux-2-klein-4b-fp8.safetensors", "qwen_image_2.1_bf16.safetensors"],

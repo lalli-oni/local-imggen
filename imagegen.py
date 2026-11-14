@@ -934,7 +934,7 @@ def write_contact_sheet(run_dir: Path, run: dict) -> Path:
         transparent = any(e["file"].endswith("-transparent.png") for e in images)
     data = {"prompt": run["prompt"], "preset": run["preset"], "base_seed": run["base_seed"],
             "count": run["count"], "transparent": transparent, "images": images,
-            "negative": (first or {}).get("negative"),
+            "negative": None if run.get("bakeoff") else (first or {}).get("negative"),  # bake-off: differs per model
             "source_image": Path(run["source_image"]).name if run.get("source_image") else None,
             "source_file": _sheet_source(run_dir, run.get("source_image")),
             "mask": bool(run.get("mask")), "denoise": run.get("denoise"), "edit": bool(run.get("edit")),

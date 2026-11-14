@@ -5,6 +5,7 @@ when either is missing, unless IMAGEGEN_REQUIRE_BROWSER=1 (CI sets it), which tu
 into a failure. IMAGEGEN_TEST_CHROMIUM points at a Chromium binary to use instead of
 Playwright's own download.
 """
+import json
 import os
 from pathlib import Path
 
@@ -66,11 +67,17 @@ def test_t2i_bakeoff_sheet_shows_size_notes_and_letterboxes_mixed_sizes(make_run
     """gen bakeoff --t2i --ref (#51): a size column, skipped columns as a muted note, and in fit mode the
     square +ref images sit in cells of the text-only images' aspect instead of overflowing them."""
     run = make_run(n=3, preset="bakeoff: klein vs klein+ref", prompt="1. a tide pool")
-    run["images"][2]["tag"] = "klein+ref · 1"
     from PIL import Image
-    for im, size in zip(run["images"], [(1344, 768), (1344, 768), (1024, 1024)]):
+    for im, size in zip(run["images"], [(1024, 1024), (1344, 768), (1344, 768)]):  # the square one comes first
         Image.new("RGB", size, (20, 90, 160)).save(im["path"])
-    run["bakeoff"] = {"mode": "t2i", "instructions": ["a tide pool"], "presets": [
+        side = Path(im["path"]).with_suffix(".json")
+        meta = json.loads(side.read_text())
+        meta["params"].update(width=size[0], height=size[1])
+        side.write_text(json.dumps(meta))
+    run["images"][0]["tag"] = "klein+ref · 1"
+    run["images"][2]["tag"] = "klein · 1"
+    run["source_image"] = str(Path(run["images"][0]["path"]))  # stands in for the ref
+    run["bakeoff"] = {"mode": "t2i", "instructions": ["a tide pool"], "ref": run["source_image"], "presets": [
         {"preset": "klein", "images": 2, "size": "1344x768", "error": None, "peak": {}},
         {"preset": "draft+ref", "images": 0, "error": None, "note": "no ref input for this model", "peak": {}}]}
     page, errors = open_sheet(run)
@@ -78,10 +85,14 @@ def test_t2i_bakeoff_sheet_shows_size_notes_and_letterboxes_mixed_sizes(make_run
     assert rows.nth(1).locator("td").all_inner_texts()[:3] == ["klein", "2", "1344x768"]
     assert rows.nth(2).locator("td.note").inner_text() == "no ref input for this model"
     assert rows.nth(2).locator("td.err").count() == 0
+    meta = page.locator("#meta").inner_text()
+    assert "+ref columns use" in meta and "img2img from" not in meta and "edit of" not in meta
+    assert page.locator("#neg").is_hidden()  # each model has its own negative (or none)
     page.locator("#mode-fit").click()
     page.wait_for_function("[...document.querySelectorAll('#grid img')].every(i => i.complete && i.naturalWidth)")
     boxes = [page.locator("#grid figure img").nth(i).bounding_box() for i in range(3)]
     assert all(abs(b["height"] - boxes[0]["height"]) < 2 for b in boxes)  # one cell shape for all
+    # the most common size (16:9) sets the cell shape, even though the square +ref image is listed first
     assert abs(boxes[0]["width"] / boxes[0]["height"] - 1344 / 768) < 0.05
     assert not errors, errors
 
