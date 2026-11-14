@@ -160,14 +160,13 @@ def _clean(texts: list[str], what: str) -> list[str]:
     return texts
 
 
-def _size(run: dict) -> str | None:
-    """WxH of a run's images, from the first image's sidecar."""
+def _size_steps(run: dict) -> tuple[str | None, int | None]:
+    """WxH and sampling steps of a run's images, from the first image's sidecar."""
     side = imagegen.find_sidecar(Path(run["images"][0]["path"])) if run.get("images") else None
     prm = (side or {}).get("params", {})
-    for w, h in (("out_width", "out_height"), ("width", "height")):  # out_*: wallpaper_ref sets its own size
-        if w in prm and h in prm:
-            return f"{prm[w]}x{prm[h]}"
-    return None
+    size = next((f"{prm[w]}x{prm[h]}" for w, h in (("out_width", "out_height"), ("width", "height"))
+                 if w in prm and h in prm), None)  # out_*: wallpaper_ref sets its own size
+    return size, prm.get("steps")
 
 
 def _bake(comfy: imagegen.Comfy, out: Path, columns: list[tuple[str, list[tuple[str, object]]]], texts: list[str],
@@ -198,7 +197,7 @@ def _bake(comfy: imagegen.Comfy, out: Path, columns: list[tuple[str, list[tuple[
                     run = call(n, text)
                     res["runs"].append(run["run_dir"])
                     if not res.get("size"):
-                        res["size"] = _size(run)
+                        res["size"], res["steps"] = _size_steps(run)
                     entries = copied.setdefault((n, name), [])
                     for im in run["images"]:
                         if im.get("seconds") is not None:  # one per job (a job may save several images)
@@ -286,9 +285,10 @@ NO_TEXT = "edit-only model: no text-to-image"
 
 def t2i_bakeoff(prompts: list[str], presets: list[str] | tuple[str, ...] = T2I_PRESETS, ref: str | None = None,
                 count: int = 2, seed: int | None = None, size: tuple[int, int] = T2I_SIZE, free: bool = True,
-                label: str | None = None, interval: float = 1.0) -> dict:
+                label: str | None = None, interval: float = 1.0, steps: dict[str, int] | None = None) -> dict:
     """Every prompt through every preset's text-to-image workflow at one size, with the same seeds.
-    With ref: presets that can edit also run each prompt as an edit of the ref (column "<preset>+ref")."""
+    With ref: presets that can edit also run each prompt as an edit of the ref (column "<preset>+ref").
+    steps: {preset: steps} overrides a preset's own steps (its text and +ref columns), e.g. {"klein": 16}."""
     presets = list(presets)
     prompts = _clean(prompts, "prompt")
     conf = imagegen.load_config()
@@ -302,6 +302,11 @@ def t2i_bakeoff(prompts: list[str], presets: list[str] | tuple[str, ...] = T2I_P
                    conf["presets"], t2i=True)
     if len(set(presets)) != len(presets):
         raise ValueError("a preset is listed twice")
+    steps = dict(steps or {})
+    if bad := [p for p in steps if p not in presets]:
+        raise ValueError(f"--steps names a preset that isn't in the bake-off: {', '.join(bad)}")
+    if bad := [p for p, v in steps.items() if not 1 <= int(v) <= 150]:
+        raise ValueError(f"steps must be 1-150 ({', '.join(bad)})")
     w, h = (int(v) for v in size)
     if w < 256 or h < 256 or w % 16 or h % 16:
         raise ValueError(f"size {w}x{h}: each side needs to be 256 or more and a multiple of 16")
@@ -313,11 +318,12 @@ def t2i_bakeoff(prompts: list[str], presets: list[str] | tuple[str, ...] = T2I_P
 
     def text_call(preset):
         return lambda n, text: imagegen.generate(text, preset, count, base_seed, width=w, height=h,
+                                                 steps=steps.get(preset),
                                                  label=f"bakeoff-{preset}-{n}-{imagegen.slug(text, 20)}")
 
     def ref_call(preset):
         return lambda n, text: imagegen.generate(text + REF_SUFFIX, preset, count, base_seed, source_image=str(src),
-                                                 edit=True, label=f"bakeoff-{preset}-ref-{n}-{imagegen.slug(text, 20)}")
+                                                 edit=True, steps=steps.get(preset), label=f"bakeoff-{preset}-ref-{n}-{imagegen.slug(text, 20)}")
     columns = []
     for p in presets:
         cols = [(p, text_call(p) if "workflow" in conf["presets"][p] else NO_TEXT)]
@@ -333,6 +339,7 @@ def t2i_bakeoff(prompts: list[str], presets: list[str] | tuple[str, ...] = T2I_P
            "edit": False,  # only the +ref columns are edits; the sheet names the ref from bakeoff.ref
            "bakeoff": {"mode": "t2i", "instructions": prompts, "count": count, "size": f"{w}x{h}",
                        "ref": str(src) if src else None, "ref_suffix": REF_SUFFIX if src else None,
+                       "steps": {p: int(v) for p, v in steps.items()},
                        "presets": results}}
     return _finish(out, run)
 
@@ -341,11 +348,12 @@ def table(run: dict) -> str:
     """The numbers as a plain-text table (also what gen bakeoff prints)."""
     def f(v, unit=""):
         return "-" if v is None else f"{v:.1f}{unit}"
-    rows = [("preset", "images", "size", "first (s)", "median (s)", "VRAM GiB", "sys RAM", "comfy RSS",
+    rows = [("preset", "images", "size", "steps", "first (s)", "median (s)", "VRAM GiB", "sys RAM", "comfy RSS",
              "comfy swap", "sys swap", "error / note")]
     for r in run["bakeoff"]["presets"]:
         pk = r.get("peak", {})
-        rows.append((r["preset"], str(r.get("images", 0)), r.get("size") or "-", f(r.get("first_seconds")),
+        rows.append((r["preset"], str(r.get("images", 0)), r.get("size") or "-",
+                     str(r["steps"]) if r.get("steps") is not None else "-", f(r.get("first_seconds")),
                      f(r.get("median_seconds")), f(pk.get("vram_gib")), f(pk.get("ram_gib")),
                      f(pk.get("comfy_rss_gib")), f(pk.get("comfy_swap_gib")), f(pk.get("swap_gib")),
                      (r.get("error") or r.get("note") or "")[:80]))
@@ -358,6 +366,16 @@ def _parse_size(v: str) -> tuple[int, int]:
     if not m:
         raise argparse.ArgumentTypeError(f"size must look like 1344x768, not {v!r}")
     return int(m.group(1)), int(m.group(2))
+
+
+def _parse_steps(v: str) -> dict[str, int]:
+    out = {}
+    for part in filter(None, (x.strip() for x in v.split(","))):
+        m = re.fullmatch(r"([\w-]+)\s*=\s*(\d+)", part)
+        if not m:
+            raise argparse.ArgumentTypeError(f"--steps takes PRESET=N[,PRESET=N...], not {part!r}")
+        out[m.group(1)] = int(m.group(2))
+    return out
 
 
 def main(argv: list[str]) -> int:
@@ -373,6 +391,8 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--ref", help="with --t2i: also run each prompt with this ref image, on presets that can edit")
     ap.add_argument("--size", type=_parse_size,
                     help=f"with --t2i: WxH for every text-only image (default {T2I_SIZE[0]}x{T2I_SIZE[1]})")
+    ap.add_argument("--steps", type=_parse_steps, metavar="PRESET=N[,...]",
+                    help="with --t2i: sampling steps for some presets instead of their own (e.g. klein=16)")
     ap.add_argument("-p", "--presets", help=f"comma-separated presets, in order (default {','.join(DEFAULT_PRESETS)}; "
                                             f"with --t2i {','.join(T2I_PRESETS)})")
     ap.add_argument("-n", "--count", type=int, default=2, help="images per prompt and preset (default 2)")
@@ -381,14 +401,15 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--label", help="folder name instead of bakeoff-<image or prompt>")
     ap.add_argument("--open", action="store_true", help="open the contact sheet in the Windows browser")
     a = ap.parse_args(argv)
-    if not a.t2i and (a.ref or a.size):
-        ap.error("--ref and --size go with --t2i")
+    if not a.t2i and (a.ref or a.size or a.steps):
+        ap.error("--ref, --size and --steps go with --t2i")
     if not a.t2i and len(a.args) < 2:
         ap.error("edit mode needs an image and at least one instruction (text-to-image: --t2i)")
     default = T2I_PRESETS if a.t2i else DEFAULT_PRESETS
     presets = [p.strip() for p in re.split(r"[,\s]+", a.presets or ",".join(default)) if p.strip()]
     if a.t2i:
-        run = t2i_bakeoff(a.args, presets, a.ref, a.count, a.seed, a.size or T2I_SIZE, not a.no_free, a.label)
+        run = t2i_bakeoff(a.args, presets, a.ref, a.count, a.seed, a.size or T2I_SIZE, not a.no_free, a.label,
+                          steps=a.steps)
     else:
         run = bakeoff(a.args[0], a.args[1:], presets, a.count, a.seed, not a.no_free, a.label)
     print(table(run))

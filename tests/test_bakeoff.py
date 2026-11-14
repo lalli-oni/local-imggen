@@ -134,7 +134,7 @@ def test_cli(comfy, make_image, fake_proc, capsys):
                           "--seed", "3"])
     out = capsys.readouterr().out
     assert code == 0
-    assert out.splitlines()[0].split()[:4] == ["preset", "images", "size", "first"]
+    assert out.splitlines()[0].split()[:5] == ["preset", "images", "size", "steps", "first"]
     assert "kontext" in out and "klein" in out and "contact sheet:" in out and "bakeoff.json" in out
     comfy.fail_preset = "kontext"
     assert imagegen.main(["bakeoff", str(make_image()), "x", "-p", "kontext", "-n", "1"]) == 1
@@ -143,7 +143,7 @@ def test_cli(comfy, make_image, fake_proc, capsys):
 def test_table_handles_missing_numbers():
     run = {"bakeoff": {"presets": [{"preset": "qwen", "error": "boom", "peak": {}}]}}
     line = bakeoff.table(run).splitlines()[1]
-    assert line.split()[:4] == ["qwen", "0", "-", "-"] and line.endswith("boom")
+    assert line.split()[:5] == ["qwen", "0", "-", "-", "-"] and line.endswith("boom")
 
 
 # ---------------------------------------------------------------- text-to-image (#51)
@@ -272,3 +272,30 @@ def test_t2i_ref_size_of_a_preset_with_its_own_output_size(comfy, make_image, fa
                               interval=0.01)
     r = {r["preset"]: r for r in run["bakeoff"]["presets"]}["wallpaper_ref+ref"]
     assert r["images"] == 1 and r["size"] == "1536x864"
+
+
+def test_t2i_steps_per_preset(comfy, make_image, fake_proc):
+    """klein's preset says 4 steps; on tulu 16 gave far fewer quirks (#3), so a fair bake-off sets it."""
+    run = bakeoff.t2i_bakeoff(["x"], ["draft", "klein"], ref=str(make_image()), count=1, seed=1,
+                              steps={"klein": 16}, interval=0.01)
+    wfs = comfy.workflows()
+    assert _node(wfs[0], "KSampler")["steps"] == 25  # draft keeps its own
+    assert [_node(wf, "Flux2Scheduler")["steps"] for wf in wfs[1:]] == [16, 16]  # klein and klein+ref
+    assert run["bakeoff"]["steps"] == {"klein": 16}
+    res = {r["preset"]: r for r in run["bakeoff"]["presets"]}
+    assert res["klein"]["steps"] == 16 and res["klein+ref"]["steps"] == 16 and res["draft"]["steps"] == 25
+    assert "klein+ref" in bakeoff.table(run) and " 16 " in bakeoff.table(run)
+    with pytest.raises(ValueError, match="isn't in the bake-off: qwen"):
+        bakeoff.t2i_bakeoff(["x"], ["klein"], steps={"qwen": 30})
+    with pytest.raises(ValueError, match="1-150"):
+        bakeoff.t2i_bakeoff(["x"], ["klein"], steps={"klein": 0})
+
+
+def test_t2i_steps_cli(comfy, fake_proc, capsys):
+    assert imagegen.main(["bakeoff", "--t2i", "x", "--presets", "klein,qwen", "--count", "1",
+                          "--steps", "klein=16, qwen=30"]) == 0
+    wfs = comfy.workflows()
+    assert _node(wfs[0], "Flux2Scheduler")["steps"] == 16 and _node(wfs[1], "KSampler")["steps"] == 30
+    for bad in (["bakeoff", "--t2i", "x", "--steps", "klein"], ["bakeoff", "img.png", "x", "--steps", "klein=8"]):
+        with pytest.raises(SystemExit):
+            imagegen.main(bad)

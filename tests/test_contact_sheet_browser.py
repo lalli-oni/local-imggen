@@ -78,11 +78,11 @@ def test_t2i_bakeoff_sheet_shows_size_notes_and_letterboxes_mixed_sizes(make_run
     run["images"][2]["tag"] = "klein · 1"
     run["source_image"] = str(Path(run["images"][0]["path"]))  # stands in for the ref
     run["bakeoff"] = {"mode": "t2i", "instructions": ["a tide pool"], "ref": run["source_image"], "presets": [
-        {"preset": "klein", "images": 2, "size": "1344x768", "error": None, "peak": {}},
+        {"preset": "klein", "images": 2, "size": "1344x768", "steps": 16, "error": None, "peak": {}},
         {"preset": "draft+ref", "images": 0, "error": None, "note": "no ref input for this model", "peak": {}}]}
     page, errors = open_sheet(run)
     rows = page.locator("#bake tr")
-    assert rows.nth(1).locator("td").all_inner_texts()[:3] == ["klein", "2", "1344x768"]
+    assert rows.nth(1).locator("td").all_inner_texts()[:4] == ["klein", "2", "1344x768", "16"]
     assert rows.nth(2).locator("td.note").inner_text() == "no ref input for this model"
     assert rows.nth(2).locator("td.err").count() == 0
     meta = page.locator("#meta").inner_text()
@@ -166,7 +166,7 @@ def test_bakeoff_sheet_shows_tags_and_numbers(make_run, open_sheet):
     assert page.locator("#bake li").all_inner_texts() == ["make it wave"]
     rows = page.locator("#bake tr")
     assert rows.count() == 3
-    assert rows.nth(1).locator("td").all_inner_texts()[:8] == ["kontext", "1", "-", "180.2", "-", "14.3", "20.0",
+    assert rows.nth(1).locator("td").all_inner_texts()[:9] == ["kontext", "1", "-", "-", "180.2", "-", "14.3", "20.0",
                                                                 "15.5"]
     assert rows.nth(2).locator("td.err").inner_text() == "RuntimeError: <b>crashed</b>"  # text, not HTML
     caps = page.locator("#grid figcaption").all_inner_texts()

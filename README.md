@@ -26,7 +26,7 @@ gen "misty fjord at sunrise" -p wallpaper --open
 | `gen cutout PATH [--clean]` | Remove the background (transparent PNG); `--clean` also drops stray shapes and centres it on a square |
 | `gen edit PATH "instruction" [-p klein\|kontext\|qwen]` | Edit with a plain-language instruction; FLUX.2 klein by default, opt-in models (`models/*.sh`) |
 | `gen bakeoff PATH "instr" ["instr"...] [-p kontext,klein,qwen] [-n 2]` | The same edits through several edit models (same seeds), time/VRAM/RAM per model, one contact sheet |
-| `gen bakeoff --t2i "prompt" ["prompt"...] [--ref IMG] [-p draft,dreamshaper,klein,qwen] [--size 1344x768]` | The same prompts through several text-to-image models; with `--ref`, models that can edit also run each prompt with the ref as the character |
+| `gen bakeoff --t2i "prompt" ["prompt"...] [--ref IMG] [-p draft,dreamshaper,klein,qwen] [--size 1344x768] [--steps klein=16]` | The same prompts through several text-to-image models; with `--ref`, models that can edit also run each prompt with the ref as the character |
 | `gen project new\|list\|status\|set\|gen\|promote\|keep\|import\|doc` | Creative projects: versioned prompt/palette/refs, named assets, docs, import an existing folder |
 | `gen project rate\|note\|board` | The project's board: pick/maybe/reject and notes on pass images (`P:N`), and its `index.html` page |
 | `gen char new\|list\|status\|set` | Shared characters (lil tulu) that projects cast; a change flags the assets that show them |
@@ -169,7 +169,10 @@ Which model should make wallpapers instead of SDXL base? The same prompts and se
 (`draft`), an SDXL finetune (`dreamshaper`), klein and Qwen, all at 1344x768 (`--size`). With `--ref`, klein
 and Qwen also run each prompt as an edit of the ref (columns `klein+ref`, `qwen+ref`), with a line added that
 the ref's character appears once in a new pose and the scene fills the frame. Their size follows the ref
-(square for lil tulu). SDXL has no ref input until IP-Adapter, so its `+ref` row says so. Edit-only presets
+(square for lil tulu). SDXL has no ref input until IP-Adapter, so its `+ref` row says so.
+Each preset samples with its own steps (draft 25, dreamshaper 6, klein 4, wallpaper_ref 16, qwen 25);
+`--steps klein=16` overrides one (klein's 4 gave many small quirks on lil tulu). `--count` is images per
+prompt and model (new seed each), not steps. Edit-only presets
 work with `--ref` too: add `wallpaper_ref` to `-p` to compare today's daily wallpaper flow (klein + ref, 16:9, 4K).
 
 ```sh
@@ -178,5 +181,5 @@ gen doctor
 gen bakeoff --t2i --ref 'C:\Users\lalli\Pictures\lil-tulu.png' \
   "lil tulu, a chibi cute baby cthulhu with a huge round green head, four plump curled face tentacles, big amber eyes, small red bat wings with a green frame, a pale yellow belly and a short smooth rounded tail, reading a book in a cosy window nook on a rainy evening, warm lamp light, cosy whimsical storybook illustration" \
   "a misty Icelandic fjord at sunrise with a small red fishing boat, wide landscape, painterly storybook illustration, soft light" \
-  -p draft,dreamshaper,klein,qwen,wallpaper_ref -n 2 --seed 1 --open
+  --presets draft,dreamshaper,klein,qwen,wallpaper_ref --steps klein=16 --count 2 --seed 1 --open
 ```
