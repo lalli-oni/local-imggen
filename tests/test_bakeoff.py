@@ -313,8 +313,24 @@ def test_t2i_cli(comfy, make_image, fake_proc, capsys):
 
 
 def test_t2i_ref_size_of_a_preset_with_its_own_output_size(comfy, make_image, fake_proc):
-    """wallpaper_ref (#3) is edit-only and renders at out_width x out_height, not the ref's size."""
+    """wallpaper_ref (#3) is edit-only; its size is the saved one (target_*, after the upscale), not the ref's."""
     run = bakeoff.t2i_bakeoff(None, ["wallpaper_ref"], ref=str(make_image(size=(512, 512))), ref_prompts=["x"],
                               count=1, interval=0.01)
     r = run["bakeoff"]["presets"][0]
-    assert r["images"] == 1 and r["size"] == "1536x864" and r["label"] == f"{KLEIN} · 16 steps · ref"
+    assert r["images"] == 1 and r["size"] == "3840x2160" and r["label"] == f"{KLEIN} · 16 steps · ref"
+
+
+def test_t2i_labels_stay_unique_and_bad_ref_preset(comfy, make_image, fake_proc, tmp_path, monkeypatch):
+    run = bakeoff.t2i_bakeoff(["x"], ["wallpaper", "wallpaper_ultrawide"], count=1, steps={"wallpaper": "30"},
+                              interval=0.01)
+    labels = [r["label"] for r in run["bakeoff"]["presets"]]
+    assert labels == ["SDXL base 1.0 · 30 steps (wallpaper)", "SDXL base 1.0 · 30 steps (wallpaper_ultrawide)"]
+    assert run["bakeoff"]["steps"] == {"wallpaper": 30}
+    assert _steps(comfy.workflows()[0]) == 30  # "30" from an API caller became a number
+    assert run["bakeoff"]["presets"][0]["size"] == "3840x2160"  # after the upscale, as saved
+
+    conf = imagegen.load_config()
+    conf["presets"]["draft"]["ref_preset"] = "sdxl_reff"
+    monkeypatch.setattr(imagegen, "load_config", lambda: conf)
+    with pytest.raises(ValueError, match="ref_preset 'sdxl_reff' is not an edit preset"):
+        bakeoff.t2i_bakeoff(["x"], ["draft"], ref=str(make_image()), ref_prompts=["y"])

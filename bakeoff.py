@@ -164,8 +164,9 @@ def _size_steps(run: dict) -> tuple[str | None, int | None]:
     """WxH and sampling steps of a run's images, from the first image's sidecar."""
     side = imagegen.find_sidecar(Path(run["images"][0]["path"])) if run.get("images") else None
     prm = (side or {}).get("params", {})
-    size = next((f"{prm[w]}x{prm[h]}" for w, h in (("out_width", "out_height"), ("width", "height"))
-                 if w in prm and h in prm), None)  # out_*: wallpaper_ref sets its own size
+    size = next((f"{prm[w]}x{prm[h]}" for w, h in (("target_width", "target_height"), ("out_width", "out_height"),
+                                                   ("width", "height"))
+                 if w in prm and h in prm), None)  # target_*: after an upscale; out_*: wallpaper_ref's own size
     return size, prm.get("steps")
 
 
@@ -293,7 +294,11 @@ def _ref_preset(pconf: dict, name: str) -> str | None:
     if "edit_workflow" in p:
         return name
     r = p.get("ref_preset")
-    return r if r in pconf and "edit_workflow" in pconf[r] else None
+    if r is None:
+        return None
+    if "edit_workflow" not in pconf.get(r, {}):
+        raise ValueError(f"preset '{name}': ref_preset '{r}' is not an edit preset in config.toml")
+    return r
 
 
 def _label(p: dict, name: str, steps: int | None = None, ref: bool = False) -> str:
@@ -337,8 +342,11 @@ def t2i_bakeoff(prompts: list[str] | None = None, presets: list[str] | tuple[str
     steps = dict(steps or {})
     if bad := [p for p in steps if p not in presets]:
         raise ValueError(f"--steps names a preset that isn't in the bake-off: {', '.join(bad)}")
-    if bad := [p for p, v in steps.items() if not 1 <= int(v) <= 150]:
+    steps = {p: int(v) for p, v in steps.items()}
+    if bad := [p for p, v in steps.items() if not 1 <= v <= 150]:
         raise ValueError(f"steps must be 1-150 ({', '.join(bad)})")
+    for p in presets:
+        _ref_preset(pconf, p)  # a broken ref_preset is a config error, not a quiet "no ref input"
     w, h = (int(v) for v in size)
     if w < 256 or h < 256 or w % 16 or h % 16:
         raise ValueError(f"size {w}x{h}: each side needs to be 256 or more and a multiple of 16")
@@ -369,9 +377,16 @@ def t2i_bakeoff(prompts: list[str] | None = None, presets: list[str] | tuple[str
             cols.append((p + "+ref", _label(pconf[rp or p], rp or p, steps.get(p), ref=True),
                          ref_call(p, rp) if rp else NO_REF, ref_items))
         columns.append((p, cols))
+    # two presets on the same model and steps (wallpaper, icon) would share a label: name the preset too
+    seen: dict[str, int] = {}
+    for _, cols in columns:
+        for c in cols:
+            seen[c[1]] = seen.get(c[1], 0) + 1
+    columns = [(p, [(c[0], f"{c[1]} ({c[0]})" if seen[c[1]] > 1 else c[1], *c[2:]) for c in cols])
+               for p, cols in columns]
     results, images = _bake(comfy, out, columns, free, interval)
     labels = [r["label"] for r in results if "note" not in r]
-    listed = [t for t in prompts] + [f"with the ref: {t}" for t in ref_prompts]
+    listed = prompts + [f"with the ref: {t}" for t in ref_prompts]
     run = {"preset": "bakeoff: " + " vs ".join(labels),
            "prompt": " | ".join(f"{n}. {p}" for n, p in enumerate(listed, 1)),
            "base_seed": base_seed, "count": len(images), "run_dir": str(out), "images": images,
@@ -379,7 +394,7 @@ def t2i_bakeoff(prompts: list[str] | None = None, presets: list[str] | tuple[str
            "edit": False,  # only the ref test is edits; the sheet names the ref from bakeoff.ref
            "bakeoff": {"mode": "t2i", "instructions": listed, "count": count, "size": f"{w}x{h}",
                        "ref": str(src) if src else None, "ref_suffix": REF_SUFFIX if src else None,
-                       "steps": {p: int(v) for p, v in steps.items()},
+                       "steps": steps,
                        "presets": results}}
     return _finish(out, run)
 

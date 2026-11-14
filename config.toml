@@ -8,7 +8,7 @@ checkpoint       = "sd_xl_base_1.0.safetensors"
 default_negative = "blurry, low quality, watermark, text, signature, jpeg artifacts"
 
 # Each preset = a workflow template in workflows/ + the values poured into it. `model` names the model for
-# people (gen presets, the bake-off sheet).
+# people (the gen bakeoff labels).
 # Keys a workflow uses as "{{key}}" must exist here (or come from CLI/MCP args).
 
 [presets.draft]
