@@ -262,13 +262,31 @@ def page_data(proj: dict, b: dict) -> dict:
     }
 
 
+_LAST: dict[str, dict] = {}  # slug -> the page data write_page last wrote (gen board serve reuses it)
+
+
+def last_data(slug: str) -> dict | None:
+    return _LAST.get(slug)
+
+
+def render_page(slug: str, proj: dict | None = None, b: dict | None = None, live: bool = False,
+                extra: dict | None = None, data: dict | None = None) -> str:
+    """The board page as HTML. live: served by boardserve.py, so its buttons call the API."""
+    proj = proj or projects.load(slug)
+    data = dict(data or page_data(proj, b if b is not None else load(slug)))
+    if live:
+        data.update(live=True, **(extra or {}))
+    fills = {"TITLE": html.escape(f"{proj['title']} · board"),
+             "BOARD_JSON": json.dumps(data, ensure_ascii=False).replace("<", "\\u003c")}
+    return re.sub(r"\{\{(TITLE|BOARD_JSON)\}\}", lambda m: fills[m.group(1)], TEMPLATE.read_text(encoding="utf-8"))
+
+
 def write_page(slug: str, proj: dict | None = None, b: dict | None = None) -> Path:
     """(Re)write <project>/index.html from project.json and board.json."""
     proj = proj or projects.load(slug)
     data = page_data(proj, b if b is not None else load(slug))
-    fills = {"TITLE": html.escape(f"{proj['title']} · board"),
-             "BOARD_JSON": json.dumps(data, ensure_ascii=False).replace("<", "\\u003c")}
-    page = re.sub(r"\{\{(TITLE|BOARD_JSON)\}\}", lambda m: fills[m.group(1)], TEMPLATE.read_text(encoding="utf-8"))
+    page = render_page(slug, proj, data=data)
+    _LAST[slug] = data
     out = page_file(slug)
     # tmp + replace, like project.json: a browser reload or a second writer never sees half a page
     tmp = out.with_name(f".{out.name}.{os.getpid()}.{threading.get_ident()}.tmp")

@@ -28,6 +28,7 @@ gen "misty fjord at sunrise" -p wallpaper --open
 | `gen bakeoff PATH "instr" ["instr"...] [-p kontext,klein,qwen] [-n 2]` | The same edits through several edit models (same seeds), time/VRAM/RAM per model, one contact sheet |
 | `gen project new\|list\|status\|set\|gen\|promote\|keep\|import\|doc` | Creative projects: versioned prompt/palette/refs, named assets, docs, import an existing folder |
 | `gen project rate\|note\|board` | The project's board: pick/maybe/reject and notes on pass images (`P:N`), and its `index.html` page |
+| `gen board serve [SLUG] [--open]` | The board on http://127.0.0.1:8190, clickable: rate with clicks or keys (1/2/3, 0 clears, n notes, j/k move), "Generate 4 more", refreshes itself on any change |
 | `gen char new\|list\|status\|set` | Shared characters (lil tulu) that projects cast; a change flags the assets that show them |
 | `gen recent`, `gen sheet [RUN_DIR\|DATE]` | Recent runs; rebuild contact sheets |
 | `gen set-wallpaper PATH` | Set a Windows wallpaper |
