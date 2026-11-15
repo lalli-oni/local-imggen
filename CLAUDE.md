@@ -85,6 +85,7 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   (prompt, seed, params, timing), `run.json` and `index.html` contact sheet.
 - Waiting (#51): a /history poll that times out means ComfyUI is busy (swapping), not gone: `wait_entry` waits up to `JOB_TIMEOUT`; only refused/reset connections give up after `DOWN_LIMIT` (90s).
   When a `generate` stops (error, timeout, Ctrl-C), `Comfy.cancel` deletes its queued jobs and interrupts the running one; `gen bakeoff` refuses to start while ComfyUI is busy (`Comfy.busy`).
+  No websocket frame at all for `HANG_AFTER` (20 min, `Events.idle`) while a job is unfinished = ComfyUI's worker is dead (an HSA alloc failure did that): stop with the restart command.
 - Timing (#2): `Events` in imagegen.py listens on ComfyUI's `/ws` (stdlib websocket client) and `job_timing`
   turns the `executing` events into `<stage>_s` seconds (stages from the node class, `STAGES`). Without the
   socket it falls back to `/history` timestamps (queue_s and comfy_s only). `run.json` `timing.summary` is the

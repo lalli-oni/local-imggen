@@ -121,6 +121,8 @@ def fill(node, params: dict):
 JOB_TIMEOUT = 3600  # s per job; quality first (#51): a swapping Qwen at 40 steps can take many minutes
 POLL_TIMEOUT = 60  # s for one /history answer; a timeout means "slow", not "down"
 DOWN_LIMIT = 90  # s of refused/dropped connections before a job counts as lost (ComfyUI crashed)
+HANG_AFTER = 1200  # s without a single websocket frame while a job of ours is unfinished: ComfyUI's worker is
+# dead (#51: an HSA alloc failure left the server answering and queueing, but nothing ran for hours)
 SLOW_TIMEOUT = 300  # s for requests a busy ComfyUI may sit on: queueing, /free, upload, /view
 
 
@@ -210,10 +212,15 @@ class Comfy:
         """The job's outputs, once it is done."""
         return self.wait_entry(prompt_id, timeout).get("outputs", {})
 
-    def wait_entry(self, prompt_id: str, timeout: float = JOB_TIMEOUT) -> dict:
+    HANG_HINT = ("ComfyUI looks hung: nothing from it for {mins} min. Look for the cause, then restart it:\n"
+                 "  journalctl --unit comfyui --lines 40 --no-pager | grep --ignore-case --extended-regexp "
+                 "'hsa|error|out of memory'\n  sudo systemctl restart comfyui")
+
+    def wait_entry(self, prompt_id: str, timeout: float = JOB_TIMEOUT, idle=None) -> dict:
         """The job's whole /history entry (outputs, status messages with timestamps), once it is done.
         A ComfyUI that is up but slow to answer (a big model swapping, #51: Qwen) is waited for until `timeout`;
-        only refused or dropped connections (a crash) give up after DOWN_LIMIT seconds."""
+        only refused or dropped connections (a crash) give up after DOWN_LIMIT seconds.
+        idle() -> seconds since ComfyUI last showed life (Events.idle), or None: over HANG_AFTER it is hung."""
         t0 = time.time()
         down_since = None  # set while ComfyUI is unreachable (crashed, systemd restarting it)
         was_down = False  # it was unreachable at some point: on its return, check it still has the job
@@ -242,6 +249,8 @@ class Comfy:
                 if status.get("status_str") == "error":
                     raise RuntimeError(f"ComfyUI failed: {json.dumps(status.get('messages'))[:2000]}")
                 return entry
+            if idle is not None and (quiet := idle()) is not None and quiet > HANG_AFTER:
+                raise RuntimeError(self.HANG_HINT.format(mins=round(quiet / 60)))
             time.sleep(1)
         raise TimeoutError(f"prompt {prompt_id} did not finish in {timeout:.0f}s")
 
@@ -279,6 +288,7 @@ class Events:
 
     def __init__(self, url: str, client_id: str, timeout: float = 5):
         self.by_prompt: dict[str, list[tuple[float, str, dict]]] = {}
+        self.last_frame = time.time()  # any frame (events, sampler previews): ComfyUI's worker is alive
         self.listeners: list = []  # called as f(prompt_id, type, data, time) for every job event (live progress)
         self.ok = False
         self._sock = None
@@ -325,6 +335,7 @@ class Events:
         try:
             while True:
                 fin, op, data = self._frame()
+                self.last_frame = time.time()
                 if op == 8:  # close
                     return
                 if op == 9:  # ping
@@ -343,6 +354,10 @@ class Events:
             with self._changed:
                 self._alive = False
                 self._changed.notify_all()
+
+    def idle(self) -> float | None:
+        """Seconds since ComfyUI last sent anything, or None without a working socket (then nobody knows)."""
+        return time.time() - self.last_frame if self.ok and self._alive else None
 
     def wait_done(self, prompt_id: str, timeout: float = 2.0) -> list | None:
         """The job's events, once the socket has its end too. /history can show a job as done a moment
@@ -895,7 +910,7 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
             images, job_timings = [], []
             t_wait = time.time()
             for i, (s, pid, queued_at, wf) in enumerate(jobs, 1):
-                entry = comfy.wait_entry(pid)
+                entry = comfy.wait_entry(pid, idle=events.idle)
                 secs = round(time.time() - t_wait, 1)  # wall time; the first one includes loading the model
                 if _LIVE is not None:  # in case the socket dropped the job's end
                     _LIVE.on_event(pid, "execution_success", {}, time.time())

@@ -203,7 +203,10 @@ keeps it: the running column is marked "interrupted" and the rest "not run". A s
 swap no longer counts as lost: the client waits up to an hour per image, and gives up after 90s only when
 ComfyUI refuses the connection (a crash). Ctrl-C or a timeout also cancels the jobs that run had queued in
 ComfyUI, and a bake-off won't start while ComfyUI is busy with other jobs (it prints the commands to clear the
-queue), since those would land in its timings. A bake-off folder stopped before this had no sheet;
+queue), since those would land in its timings. If ComfyUI sends nothing at all for 20 minutes, its worker is
+dead (on tulu a ROCm `HSA exception: MemoryRegion::BlockAllocator::alloc failed` did that: the server kept
+accepting jobs and never ran them), so the run stops and prints the `journalctl` and `sudo systemctl restart
+comfyui` commands. A bake-off folder stopped before this had no sheet;
 `gen bakeoff --rebuild FOLDER` makes one from its images (times from the sidecars, no memory numbers).
 
 ```sh

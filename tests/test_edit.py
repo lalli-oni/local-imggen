@@ -183,7 +183,7 @@ def test_a_stopped_run_cancels_its_jobs_in_comfyui(comfy, monkeypatch, exc):
     def wait_entry(pid, timeout=None):
         comfy.running_ids = [pid]  # the first job is on the GPU, the second one waits
         raise exc
-    monkeypatch.setattr(imagegen.Comfy, "wait_entry", lambda self, pid, timeout=None: wait_entry(pid))
+    monkeypatch.setattr(imagegen.Comfy, "wait_entry", lambda self, pid, timeout=None, idle=None: wait_entry(pid))
     with pytest.raises(type(exc)):
         imagegen.generate("a fox", "draft", count=2, seed=1)
     assert comfy.deleted == comfy.order and len(comfy.order) == 2
@@ -193,3 +193,19 @@ def test_a_stopped_run_cancels_its_jobs_in_comfyui(comfy, monkeypatch, exc):
 def test_cancel_never_raises(capsys):
     imagegen.Comfy(os.environ["IMAGEGEN_COMFY_URL"]).cancel(["p1"])  # nothing listens there
     assert "could not cancel" in capsys.readouterr().err
+
+
+def test_a_hung_comfyui_is_reported_not_waited_on_for_an_hour(comfy, monkeypatch):
+    """#51: an HSA alloc failure killed ComfyUI's worker; the server kept answering, nothing ran for hours."""
+    monkeypatch.setattr(imagegen, "HANG_AFTER", 0.5)
+    comfy.delay = 30  # the job never starts: no websocket frames at all
+    with pytest.raises(RuntimeError, match=r"looks hung(.|\n)*systemctl restart comfyui"):
+        imagegen.generate("a fox", "draft", count=1, seed=1)
+    assert comfy.deleted == comfy.order  # and its job is cancelled
+
+
+def test_no_websocket_means_no_hang_check(comfy, monkeypatch):
+    """Without the socket there is no sign of life to go by: wait as before."""
+    monkeypatch.setattr(imagegen, "HANG_AFTER", 0.2)
+    comfy.ws, comfy.delay = False, 1.0
+    assert len(imagegen.generate("a fox", "draft", count=1, seed=1)["images"]) == 1
