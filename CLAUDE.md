@@ -42,6 +42,10 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   adds a line to `<output_dir>/daily.log`. `gen daily --show [--date D]` previews.
   `windows/daily-task.sh on [--at HH:MM]|off|status|run`: the Windows scheduled task (user-level, logged-on only,
   start-when-available) that runs it via `conhost --headless wsl.exe ... imagegen.py daily`.
+- `progress.py`: live progress for `generate()` (#61): `describe` (the preset header line: models, passes, steps,
+  sizes), and on a TTY (`IMAGEGEN_PROGRESS=0|1` overrides) `Progress`, a block redrawn in place from `Events.listeners`
+  (stages done/running/pending, sampler step, ETA from the preset's past run.json timings, VRAM/RAM bars from
+  /system_stats). `imagegen.log()` prints above it while `_LIVE` is set. Imports nothing from imagegen.
 - `doctor.py`: read-only health checks behind `gen doctor` and the MCP `doctor` tool
 - `comfy/`: opt-in resource limits for the comfyui service, **off by default**. `comfy/limits.sh on|off|status`
   installs/removes `/etc/systemd/system/comfyui.service.d/zz-imagegen-limits.conf` built from `comfyui-args`

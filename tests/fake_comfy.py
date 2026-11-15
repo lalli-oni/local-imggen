@@ -8,6 +8,7 @@ Like ComfyUI, it "runs" each job's nodes in dependency order and reports them on
 (/ws?clientId=...) as execution_start, execution_cached, executing {node} ... executing None,
 execution_success; /history carries the timestamps of start/cached/success. `node_s` sets seconds per
 class_type (e.g. {"KSampler": 0.2}), `cached` the node ids reported as cached (they are skipped),
+`steps = True` also sends a sampler's `progress` {value, max} per step (spread over its node_s),
 and `ws = False` turns the websocket off (404), as on a ComfyUI without one.
 """
 from __future__ import annotations
@@ -73,6 +74,7 @@ class FakeComfy:
         self.ws = True
         self.node_s: dict[str, float] = {}  # class_type -> seconds each node of it takes
         self.cached: list[str] = []         # node ids reported as cached (not run)
+        self.steps = False                  # samplers report `progress` per step on the websocket
         self.ws_clients: dict[str, "_WS"] = {}  # client_id -> socket
         self.ws_sent: list[dict] = []       # every message sent on a websocket
         self.ws_received: list[tuple[int, bytes]] = []  # (opcode, data) of every client frame
@@ -123,7 +125,14 @@ class FakeComfy:
             if node in self.cached:
                 continue
             emit("executing", {"node": node, "display_node": node})
-            time.sleep(self.node_s.get(job["workflow"][node]["class_type"], 0))
+            secs = self.node_s.get(job["workflow"][node]["class_type"], 0)
+            n = _sampler_steps(job["workflow"], node) if self.steps else None
+            if n:
+                for v in range(1, n + 1):
+                    time.sleep(secs / n)
+                    emit("progress", {"value": v, "max": n, "node": node})
+            else:
+                time.sleep(secs)
         if self.ws_end_lag:
             msgs.append(["execution_success", {"prompt_id": pid, "timestamp": int(time.time() * 1000)}])
             job["done"] = True
@@ -244,6 +253,21 @@ def _parse_upload(ctype: str, body: bytes) -> tuple[str, bytes]:
             name = head.split(b'filename="', 1)[1].split(b'"', 1)[0].decode()
             return name, data.removesuffix(b"\r\n")
     raise ValueError("no image part")
+
+
+def _sampler_steps(workflow: dict, node: str) -> int | None:
+    """Steps of a sampler node (KSampler's own, or the scheduler feeding SamplerCustomAdvanced), else None."""
+    n = workflow[node]
+    if "KSampler" not in n["class_type"] and "SamplerCustom" not in n["class_type"] or n["class_type"] == "KSamplerSelect":
+        return None
+    ins = n.get("inputs", {})
+    if isinstance(ins.get("steps"), int):
+        return ins["steps"]
+    sig = ins.get("sigmas")
+    if isinstance(sig, list) and str(sig[0]) in workflow:
+        st = workflow[str(sig[0])].get("inputs", {}).get("steps")
+        return st if isinstance(st, int) else None
+    return None
 
 
 def _topo_order(workflow: dict) -> list[str]:
