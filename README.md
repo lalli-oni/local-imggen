@@ -29,11 +29,26 @@ gen "misty fjord at sunrise" -p wallpaper --open
 | `gen bakeoff --t2i "fresh prompt"... [--ref IMG --ref-prompt "scene"...] [-p draft,dreamshaper,klein,qwen] [--steps klein=16]` | Compare text-to-image models: fresh prompts from text alone, and a character from a ref image (IP-Adapter for SDXL) |
 | `gen project new\|list\|status\|set\|gen\|promote\|keep\|import\|doc` | Creative projects: versioned prompt/palette/refs, named assets, docs, import an existing folder |
 | `gen project rate\|note\|board` | The project's board: pick/maybe/reject and notes on pass images (`P:N`), and its `index.html` page |
+| `gen board serve [SLUG] [--open]` | The board on http://127.0.0.1:8190, clickable: rate with clicks or keys (1/2/3, 0 clears, n notes, j/k move), "Generate 4 more", refreshes itself on any change |
 | `gen char new\|list\|status\|set` | Shared characters (lil tulu) that projects cast; a change flags the assets that show them |
 | `gen recent`, `gen sheet [RUN_DIR\|DATE]` | Recent runs; rebuild contact sheets |
 | `gen set-wallpaper PATH` | Set a Windows wallpaper |
 | `gen daily [--show] [--no-set]` | Today's wallpaper (theme and cast from `[daily]` in `config.toml`), then set it. Schedule: `windows/daily-task.sh on [--at 06:00]` |
 | `gen doctor` | Read-only health check |
+
+While a run works, `gen` shows what runs and how far it is (#61). First a line with the preset's models, passes,
+steps and sizes, then (in a terminal) a live block:
+
+```
+wallpaper: sd_xl_base_1.0 · 1 pass, 30 steps · 1344x768 -> 3840x2160 (RealESRGAN_x4plus) · 4 images
+image 2/4  ✓ load  ✓ encode  ▶ sample 18/30  ○ decode  ○ upscale  ○ save
+  ████████████░░░░░░░░  58%  1:52 elapsed · ~1:21 left
+  VRAM ▓▓▓▓▓▓▓░░░ 11.2/16.0 GiB · RAM ▓▓▓▓▓░░░░░ 12.0/24.0 GiB
+```
+
+The ETA learns from the preset's last runs and from the images already done; VRAM and RAM turn yellow at 75%
+and red at 90% of the ceiling (RAM's is the `.wslconfig` cap), and the run ends with the peak. Not drawn when
+stderr is not a terminal (MCP, `gen daily`); `IMAGEGEN_PROGRESS=0` turns it off, `=1` forces it on.
 
 Every run ends with a timing line, e.g. `timing: 4 images in 210.3s (first 80.1s, then ~43.4s each): load 3.0s,
 sample 160.2s, decode 8.1s, upscale 30.0s, fetch 1.2s`. The numbers are also in `run.json` and in each sidecar

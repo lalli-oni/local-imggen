@@ -34,6 +34,10 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   rebuilds `<project>/index.html` from `templates/board.html` (passes grouped by version, History popup; buttons copy the
   `gen project rate|note` command). `gen project rate|note|board`, MCP `project_rate`/`project_note`;
   `project_get` returns `board` and the ratings/notes in `new_since_last_look`.
+- `boardserve.py`: `gen board serve [SLUG] [--port 8190] [--open]` (#55): the same board.html served on 127.0.0.1
+  (stdlib http.server) with `"live": true`, so buttons and keys (1/2/3/0, n, j/k) rate and note via `/api/projects/<slug>/...`,
+  "Generate 4 more" runs `projects.run_pass` (one job at a time), and the page polls `stamp` (project.json + board.json
+  mtimes) to re-render on any change. Serves only images/.html under output_dir; POSTs must be same-origin JSON.
 - `daily.py`: `gen daily` (#3): picks the day's theme from `[daily]` in config.toml (a date-seeded pick among themes
   not used by past daily runs in `no_repeat_days`; `[daily.dates]` ("MM-DD" or "YYYY-MM-DD"), `[daily.months]`, `[daily.weekdays]` replace them, most specific first), puts the `cast` characters' descriptions
   first, runs the preset, sets the first image as wallpaper. Default preset `wallpaper_ref` (edit-only: klein draws
@@ -41,6 +45,10 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   adds a line to `<output_dir>/daily.log`. `gen daily --show [--date D]` previews.
   `windows/daily-task.sh on [--at HH:MM]|off|status|run`: the Windows scheduled task (user-level, logged-on only,
   start-when-available) that runs it via `conhost --headless wsl.exe ... imagegen.py daily`.
+- `progress.py`: live progress for `generate()` (#61): `describe` (the preset header line: models, passes, steps,
+  sizes), and on a TTY (`IMAGEGEN_PROGRESS=0|1` overrides) `Progress`, a block redrawn in place from `Events.listeners`
+  (stages done/running/pending, sampler step, ETA from the preset's past run.json timings, VRAM/RAM bars from
+  /system_stats). `imagegen.log()` prints above it while `_LIVE` is set. Imports nothing from imagegen.
 - `doctor.py`: read-only health checks behind `gen doctor` and the MCP `doctor` tool
 - `comfy/`: opt-in resource limits for the comfyui service, **off by default**. `comfy/limits.sh on|off|status`
   installs/removes `/etc/systemd/system/comfyui.service.d/zz-imagegen-limits.conf` built from `comfyui-args`
