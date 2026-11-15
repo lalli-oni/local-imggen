@@ -180,20 +180,22 @@ class Comfy:
         only refused or dropped connections (a crash) give up after DOWN_LIMIT seconds."""
         t0 = time.time()
         down_since = None  # set while ComfyUI is unreachable (crashed, systemd restarting it)
+        was_down = False  # it was unreachable at some point: on its return, check it still has the job
         slow_logged = False
         while time.time() - t0 < timeout:
             try:
                 hist = json.loads(self._get(f"/history/{prompt_id}", timeout=POLL_TIMEOUT))
-                if down_since is not None and prompt_id not in hist and not self._queued(prompt_id):
+                if was_down and prompt_id not in hist and not self._queued(prompt_id):
                     raise RuntimeError(f"ComfyUI restarted and lost the job. {self.CRASH_HINT}")
-                down_since = None
+                down_since, was_down = None, False
             except (urllib.error.URLError, ConnectionError, http.client.HTTPException, TimeoutError) as e:
                 if _is_timeout(e):  # it's there, just busy: not a crash
+                    down_since = None
                     if not slow_logged:
                         log(f"  ComfyUI is slow to answer (swapping?); still waiting, up to {timeout:.0f}s per job")
                         slow_logged = True
                     continue
-                down_since = down_since or time.time()
+                down_since, was_down = down_since or time.time(), True
                 if time.time() - down_since > DOWN_LIMIT:
                     raise RuntimeError(f"lost the connection to ComfyUI for {DOWN_LIMIT}s. {self.CRASH_HINT}")
                 time.sleep(2)

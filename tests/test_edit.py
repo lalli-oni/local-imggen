@@ -145,6 +145,27 @@ def test_wait_gives_up_when_comfyui_is_gone(monkeypatch):
         c.wait_entry("p1")
 
 
+def test_a_busy_spell_resets_the_down_clock(monkeypatch):
+    """Refused for a while (restart), then busy loading: one more reset must not count the old outage."""
+    import urllib.error
+    c = imagegen.Comfy("http://x")
+    clock = iter(range(0, 10_000, 10))  # every call to time.time() is 10s later
+    monkeypatch.setattr(imagegen, "DOWN_LIMIT", 45)  # the outage alone (30s) and the last reset stay under it
+    refused = urllib.error.URLError(ConnectionRefusedError(111, "refused"))
+    done = b'{"p1": {"status": {"status_str": "success"}, "outputs": {}}}'
+    answers = [refused, refused, TimeoutError("t"), TimeoutError("t"), refused, done]
+
+    def get(path, timeout=30):
+        a = answers.pop(0)
+        if isinstance(a, Exception):
+            raise a
+        return a
+    monkeypatch.setattr(c, "_get", get)
+    monkeypatch.setattr(imagegen.time, "time", lambda: next(clock))
+    monkeypatch.setattr(imagegen.time, "sleep", lambda s: None)
+    assert c.wait_entry("p1")["status"]["status_str"] == "success"
+
+
 def test_default_edit_preset_is_klein(comfy, make_image, capsys):
     """#40 bake-off: klein is the default for gen edit (and MCP edit, which passes EDIT_PRESET)."""
     assert imagegen.EDIT_PRESET == "klein"
