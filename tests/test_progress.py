@@ -50,13 +50,25 @@ def _timed_run(make_run, out_dir, preset, timings, time="120000", **extra):
 
 
 def test_history_estimate_medians_same_preset_and_mode(make_run, out_dir):
-    _timed_run(make_run, out_dir, "wallpaper", [{"load_s": 9.0, "sample_s": 40.0}, {"sample_s": 30.0}], "100000")
+    # a cold first image loads; the rest have no load_s (cached), which counts as 0, not as missing
+    _timed_run(make_run, out_dir, "wallpaper", [{"load_s": 9.0, "sample_s": 40.0}, {"sample_s": 30.0},
+                                                {"sample_s": 30.0}], "100000")
     _timed_run(make_run, out_dir, "wallpaper", [{"sample_s": 20.0, "upscale_s": 8.0}], "110000")
     _timed_run(make_run, out_dir, "draft", [{"sample_s": 999.0}], "120000")          # other preset
     _timed_run(make_run, out_dir, "wallpaper", [{"sample_s": 999.0}], "130000", edit=True)  # other mode
     est = progress.history_estimate(out_dir, "wallpaper", "", imagegen.COMFY_STAGES)
-    assert est == {"load": 9.0, "sample": 30.0, "upscale": 8.0}
+    assert est == {"load": 0.0, "sample": 30.0, "upscale": 0.0}
     assert progress.history_estimate(out_dir, "icon", "", imagegen.COMFY_STAGES) == {}
+
+
+def test_history_estimate_counts_each_job_once_and_skips_junk(make_run, out_dir):
+    run = _timed_run(make_run, out_dir, "draft", [{"sample_s": 10.0}, {"sample_s": 10.0}, {"sample_s": 40.0}])
+    run["images"][1]["seconds"] = None  # a job's second output repeats its times
+    run["images"].append({"timing": []})  # junk from a hand edit
+    (out_dir / "2026-10-31" / run["run_dir"].rsplit("/", 1)[1] / "run.json").write_text(json.dumps(run))
+    (out_dir / "not-a-date").mkdir()
+    assert progress.history_estimate(out_dir, "draft", "", imagegen.COMFY_STAGES) == {"sample": 25.0}
+    assert progress.history_estimate(out_dir / "missing", "draft", "", imagegen.COMFY_STAGES) == {}
 
 
 WF = {"1": {"class_type": "CheckpointLoaderSimple", "inputs": {}},
@@ -117,6 +129,21 @@ def test_eta_from_step_rate_plus_history_for_the_rest():
     assert "~0:52 left" in text(pr, t + 10)
 
 
+def test_eta_step_rate_uses_the_last_report_not_now():
+    pr = make_progress(count=1, est={"sample": 30.0})
+    t = play(pr, "a", 0.0, "3")
+    pr.on_event("a", "progress", {"value": 1, "max": 11}, t)
+    pr.on_event("a", "progress", {"value": 6, "max": 11}, t + 10)  # 2 s/step, 5 steps left = 10 s
+    assert pr.eta(t + 10) == pytest.approx(10.0)
+    assert pr.eta(t + 11.5) == pytest.approx(8.5)  # counts down between reports, doesn't grow
+
+
+def test_display_node_maps_expanded_nodes():
+    pr = make_progress()
+    pr.on_event("a", "executing", {"node": "3.0.1", "display_node": "3"}, 0.0)
+    assert "▶ sample" in text(pr, 1.0)
+
+
 def test_eta_learns_from_this_runs_finished_image():
     pr = make_progress(count=3, est={"sample": 100.0})
     t = play(pr, "a", 0.0, "1", "2", "3", "4", "5")
@@ -157,6 +184,14 @@ def test_memory_snapshot_and_colours(comfy, tmp_path, monkeypatch):
     assert "\x1b[31;1m 15.0/16.0 GiB" in third  # red: 94% of VRAM
     assert "4.0/24.0 GiB" in ANSI.sub("", third) and "swap 1.0 GiB" in third
     assert progress.peak_summary(snap) == "peak memory: VRAM 15.0/16.0 GiB (94%), RAM 4.0/24.0 GiB (17%), swap 1.0 GiB"
+
+
+def test_memory_snapshot_keeps_ram_when_vram_is_odd(comfy, tmp_path, monkeypatch, ):
+    monkeypatch.setattr(progress, "PROC", tmp_path)
+    monkeypatch.setattr(progress.urllib.request, "urlopen", lambda *a, **k: __import__("io").BytesIO(json.dumps(
+        {"system": {"ram_total": 24 * 1024 ** 3, "ram_free": 12 * 1024 ** 3},
+         "devices": [{"name": "gpu", "vram_total": 16 * 1024 ** 3}]}).encode()))
+    assert progress.memory_snapshot("http://x") == {"ram": 12.0, "ram_total": 24.0}
 
 
 def test_memory_snapshot_without_comfy_is_empty(tmp_path, monkeypatch):
@@ -206,6 +241,22 @@ def test_generate_without_a_terminal_prints_only_the_header(comfy, capsys, monke
     assert "draft: sd_xl_base_1.0 · 1 pass, 25 steps · 1024x1024 · 1 image" in err
     assert ("GET", "/system_stats") in comfy.requests  # wait_ready only
     assert comfy.requests.count(("GET", "/system_stats")) == 1
+
+
+def test_no_block_without_the_websocket(comfy, capsys, monkeypatch):
+    monkeypatch.setenv("IMAGEGEN_PROGRESS", "1")
+    comfy.ws = False
+    imagegen.generate("x", "draft", seed=1)
+    err = capsys.readouterr().err
+    assert "\x1b[" not in err and "draft: sd_xl_base_1.0" in err
+
+
+def test_a_broken_history_does_not_stop_the_run(comfy, capsys, monkeypatch):
+    monkeypatch.setenv("IMAGEGEN_PROGRESS", "1")
+    monkeypatch.setattr(progress, "history_estimate", lambda *a: 1 / 0)
+    run = imagegen.generate("x", "draft", seed=1)
+    assert len(run["images"]) == 1
+    assert "note: no live progress (ZeroDivisionError" in capsys.readouterr().err
 
 
 def test_generate_stops_the_block_when_comfy_rejects(comfy, capsys, monkeypatch):

@@ -35,6 +35,7 @@ PROC = Path("/proc")      # tests point this at a fake /proc
 MEM_EVERY = 2.0           # seconds between memory polls
 TICK = 0.5                # seconds between redraws
 HISTORY_RUNS = 5          # recent runs of the same preset the ETA learns from
+HISTORY_DAYS = 60         # date folders it looks through at most (output_dir is on the Windows drive: slow)
 BAR = 20                  # cells in the progress bar
 MEM_BAR = 10              # cells in each memory bar
 WARN, DANGER = 0.75, 0.90
@@ -111,29 +112,44 @@ def describe(workflow: dict, preset: str, count: int, stage_of, mode: str = "") 
 # ---------------------------------------------------------------- ETA from past runs
 
 def history_estimate(output_dir: Path, preset: str, mode: str, stage_keys: tuple[str, ...]) -> dict[str, float]:
-    """Median seconds per stage per image over the preset's last HISTORY_RUNS runs in the same mode."""
-    runs = []
+    """Median seconds per stage per job over the preset's last HISTORY_RUNS runs in the same mode.
+
+    One entry per ComfyUI job (a job that saves several images repeats its times on each). A stage a job
+    has no time for counts as 0 (its loaders were cached), so a cold first image doesn't make every
+    image look like it loads the model."""
+    jobs: list[dict] = []
+    found = 0
     try:
-        dirs = sorted((d for d in Path(output_dir).glob(f"*/*-{preset}-*") if d.is_dir()),
-                      key=lambda d: (d.parent.name, d.name), reverse=True)
+        days = sorted((d for d in Path(output_dir).iterdir() if d.is_dir() and d.name[:4].isdigit()),
+                      key=lambda d: d.name, reverse=True)[:HISTORY_DAYS]
     except OSError:
         return {}
-    for d in dirs:
+    for day in days:
         try:
-            run = json.loads((d / "run.json").read_text())
-        except (OSError, ValueError):
+            runs = sorted((d for d in day.glob(f"*-{preset}-*") if d.is_dir()), key=lambda d: d.name, reverse=True)
+        except OSError:
             continue
-        if not isinstance(run, dict) or run.get("preset") != preset or run_mode(run) != mode:
-            continue
-        ims = [im.get("timing") or {} for im in run.get("images") or [] if isinstance(im, dict)]
-        if any(any(k in t for k in stage_keys) for t in ims):
-            runs.append(ims)
-        if len(runs) >= HISTORY_RUNS:
+        for d in runs:
+            try:
+                run = json.loads((d / "run.json").read_text())
+            except (OSError, ValueError):
+                continue
+            if not isinstance(run, dict) or run.get("preset") != preset or run_mode(run) != mode:
+                continue
+            ts = [im["timing"] for im in run.get("images") or [] if isinstance(im, dict)
+                  and isinstance(im.get("timing"), dict) and im.get("seconds", 0) is not None]
+            ts = [t for t in ts if any(isinstance(t.get(k), (int, float)) for k in stage_keys)]
+            if ts:
+                jobs += ts
+                found += 1
+            if found >= HISTORY_RUNS:
+                break
+        if found >= HISTORY_RUNS:
             break
     out = {}
     for k in stage_keys:
-        vals = [t[k] for ims in runs for t in ims if isinstance(t.get(k), (int, float))]
-        if vals:
+        vals = [t[k] if isinstance(t.get(k), (int, float)) else 0.0 for t in jobs]
+        if any(vals):
             out[k.removesuffix("_s")] = statistics.median(vals)
     return out
 
@@ -175,16 +191,23 @@ def memory_snapshot(comfy_url: str) -> dict[str, float]:
     try:
         with urllib.request.urlopen(comfy_url.rstrip("/") + "/system_stats", timeout=2) as r:
             st = json.loads(r.read())
-        dev = next((d for d in st.get("devices", []) if "vram_total" in d), None)
-        if dev and dev["vram_total"]:
-            out["vram"] = (dev["vram_total"] - dev["vram_free"]) / GIB
-            out["vram_total"] = dev["vram_total"] / GIB
-        sysm = st.get("system", {})
-        if sysm.get("ram_total") and "ram_free" in sysm:
-            out["ram"] = (sysm["ram_total"] - sysm["ram_free"]) / GIB
-            out["ram_total"] = sysm["ram_total"] / GIB
     except Exception:
-        pass  # ComfyUI busy or restarting: keep the last numbers
+        st = {}  # ComfyUI busy or restarting: the view keeps the last numbers
+    if not isinstance(st, dict):
+        st = {}
+
+    def pair(d, total: str, free: str) -> tuple[float, float] | None:
+        if isinstance(d, dict) and isinstance(d.get(total), (int, float)) and d[total] > 0 \
+                and isinstance(d.get(free), (int, float)):
+            return (d[total] - d[free]) / GIB, d[total] / GIB
+        return None
+
+    devs = st.get("devices") if isinstance(st.get("devices"), list) else []
+    for key, src, total, free in (("vram", next((d for d in devs if pair(d, "vram_total", "vram_free")), None),
+                                   "vram_total", "vram_free"),
+                                  ("ram", st.get("system"), "ram_total", "ram_free")):
+        if (p := pair(src, total, free)) is not None:
+            out[key], out[key + "_total"] = p
     if (swap := _meminfo_swap()) is not None:
         out["swap"] = swap
     return out
@@ -205,6 +228,7 @@ class _Job:
         self.node_t = 0.0
         self.step: tuple[int, int] | None = None   # (value, max) of the running sampler
         self.step_t: tuple[float, int] | None = None  # (time, value) of the sampler's first step report
+        self.step_last = 0.0                           # time of its latest step report
         self.stage_s: dict[str, float] = {}
 
 
@@ -249,11 +273,10 @@ class Progress:
             elif kind == "executing":
                 job.started = t if job.started is None else job.started
                 self._leave_node(job, t)
-                node = data.get("node")
-                if node is None:
-                    job.ended = t
-                else:
-                    job.node, job.node_t = str(node), t
+                if data.get("node") is None:
+                    job.ended = t if job.ended is None else job.ended
+                else:  # display_node: the workflow's id for a node ComfyUI expanded (as job_timing does)
+                    job.node, job.node_t = str(data.get("display_node") or data["node"]), t
             elif kind == "execution_success":
                 self._leave_node(job, t)
                 job.ended = t if job.ended is None else job.ended
@@ -262,7 +285,7 @@ class Progress:
                 if isinstance(v, int) and isinstance(m, int) and m > 0:
                     if job.step_t is None or v < job.step_t[1]:
                         job.step_t = (t, v)
-                    job.step = (v, m)
+                    job.step, job.step_last = (v, m), t
 
     def _leave_node(self, job: _Job, t: float) -> None:
         if job.node is not None:
@@ -316,8 +339,8 @@ class Progress:
                         spent += now - job.node_t
                         if st == "sample" and job.step and job.step_t and job.step[0] > job.step_t[1]:
                             v, m = job.step
-                            rate = (now - job.step_t[0]) / (v - job.step_t[1])
-                            left += (m - v) * rate
+                            rate = (job.step_last - job.step_t[0]) / (v - job.step_t[1])
+                            left += max(0.0, (m - v) * rate - (now - job.step_last))
                             known = True
                             continue
                     if state != "done" and st in per:

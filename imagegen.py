@@ -698,11 +698,16 @@ def _progress(template: dict, params: dict, preset: str, count: int, comfy: "Com
         log(progress.describe(fill(template, params), preset, count, stage_of, mode))
     except Exception as e:  # an odd workflow must not stop the run
         log(f"note: no preset summary ({type(e).__name__}: {e})")
-    if not progress.enabled() or _LIVE is not None:
+    live = None
+    if progress.enabled() and events.ok and _LIVE is None:  # without the websocket there is nothing to show
+        try:
+            est = progress.history_estimate(run_dir.parent.parent, preset, mode, COMFY_STAGES)
+            live = progress.Progress(template, count, stage_of, STAGE_ORDER, comfy.url, est)
+        except Exception as e:  # the view must never stop a run
+            log(f"note: no live progress ({type(e).__name__}: {e})")
+    if live is None:
         yield None
         return
-    est = progress.history_estimate(run_dir.parent.parent, preset, mode, COMFY_STAGES)
-    live = progress.Progress(template, count, stage_of, STAGE_ORDER, comfy.url, est)
     events.listeners.append(live.on_event)
     _LIVE = live.start()
     try:
@@ -802,8 +807,9 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
     mode = "edit" if edit else "inpaint" if mask_path else "img2img" if src_path else ""
     first = {**params, "seed": base_seed}
     if src_path is not None:  # what the uploads will fill in (the header only reads sizes and model names)
-        first.update(image=src_path.name, mask=mask_path.name if mask_path else "", denoise=denoise,
-                     width=src_size[0], height=src_size[1])
+        # (keep in step with the uploads below; a missing key only costs the header line)
+        first.update(image=src_path.name, mask=mask_path.name if mask_path else "",
+                     width=src_size[0], height=src_size[1], **({} if edit else {"denoise": denoise}))
     with Events(comfy.url, comfy.client_id) as events, \
             _progress(template, first, preset, count, comfy, events, run_dir, mode):
         # Events: per-node times, the live block: what runs and how far it is (#61); both closed even on errors
@@ -839,6 +845,8 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
         for i, (s, pid, queued_at, wf) in enumerate(jobs, 1):
             entry = comfy.wait_entry(pid)
             secs = round(time.time() - t_wait, 1)  # wall time; the first one includes loading the model
+            if _LIVE is not None:  # in case the socket dropped the job's end
+                _LIVE.on_event(pid, "execution_success", {}, time.time())
             outputs = entry.get("outputs", {})
             try:  # best effort: a surprise in the events must not lose the finished images
                 jt = job_timing(wf, queued_at, events.wait_done(pid), entry)
