@@ -194,5 +194,5 @@ gen bakeoff --t2i \
   --ref 'C:\Users\lalli\Pictures\lil-tulu.png' \
   --ref-prompt "lil tulu reading a book in a cosy window nook on a rainy evening, warm lamp light, cosy whimsical storybook illustration" \
   --open \
-  "a misty Icelandic fjord at sunrise with a small red fishing boat, wide landscape, painterly storybook illustration, soft light"
+  "a red fox in a yellow raincoat holding a blue umbrella at a bus stop on a rainy street at night, a lit sign above it reads BUS 14, three puddles reflecting neon lights, a cat watching from a window, detailed storybook illustration"
 ```

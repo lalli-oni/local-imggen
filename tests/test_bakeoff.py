@@ -221,7 +221,8 @@ def test_fresh_and_ref_tests_together(comfy, make_image, fake_proc):
                               (wfs[3], "DreamShaperXL_Lightning.safetensors", "dpmpp_sde")):
         assert _ckpt(wf) == ckpt and _node(wf, "KSampler")["sampler_name"] == sampler
         ipa = _node(wf, "IPAdapterAdvanced")
-        assert ipa["weight"] == 0.8 and ipa["model"] == ["4", 0]
+        assert ipa["weight"] == 0.55 and ipa["end_at"] == 0.7 and ipa["model"] == ["4", 0]
+        assert "white background" in json.dumps(wf["7"])  # the ref's sticker background, kept out
         assert _node(wf, "KSampler")["model"] == ["23", 0]
         assert _node(wf, "IPAdapterModelLoader")["ipadapter_file"] == "ip-adapter-plus_sdxl_vit-h.safetensors"
         assert _node(wf, "CLIPVisionLoader")["clip_name"] == "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors"

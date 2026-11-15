@@ -159,6 +159,8 @@ suffix = ""
 # (gen edit REF "scene" -p sdxl_ref); `ref_preset` on draft/dreamshaper points the bake-off's ref test here.
 # Opt-in: ~/imagegen/models/ipadapter-sdxl.sh (~3.4 GB) + the ComfyUI_IPAdapter_plus node (see that script).
 # ipadapter_weight: how strongly the ref steers (higher = closer to the ref, less to the prompt).
+# ipadapter_end: the share of the steps it steers; the rest follow the prompt alone, so the scene can take over.
+# First tulu run (0.8, whole run): SDXL copied the ref's white sticker background and drew no scene.
 [presets.sdxl_ref]
 description = "SDXL base + IP-Adapter: the character in a ref image in a new scene: gen edit REF \"scene\" -p sdxl_ref"
 model = "SDXL base 1.0 + IP-Adapter"
@@ -167,8 +169,9 @@ download = "ipadapter-sdxl.sh"
 checkpoint = "sd_xl_base_1.0.safetensors"
 ipadapter_model = "ip-adapter-plus_sdxl_vit-h.safetensors"
 clip_vision = "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors"
-ipadapter_weight = 0.8
-ref_negative = "blurry, low quality, watermark, text, multiple characters"
+ipadapter_weight = 0.55
+ipadapter_end = 0.7
+ref_negative = "white background, plain background, simple background, isolated, sticker, border, blurry, low quality, watermark, text, multiple characters"
 steps = 25
 cfg = 7.0
 
@@ -180,8 +183,9 @@ download = "ipadapter-sdxl.sh"
 checkpoint = "DreamShaperXL_Lightning.safetensors"
 ipadapter_model = "ip-adapter-plus_sdxl_vit-h.safetensors"
 clip_vision = "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors"
-ipadapter_weight = 0.8
-ref_negative = "blurry, low quality, watermark, text, multiple characters"
+ipadapter_weight = 0.55
+ipadapter_end = 0.7
+ref_negative = "white background, plain background, simple background, isolated, sticker, border, blurry, low quality, watermark, text, multiple characters"
 steps = 6
 cfg = 2.0
 
