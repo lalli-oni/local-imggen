@@ -2,6 +2,7 @@
 import io
 import json
 import os
+import threading
 from pathlib import Path
 
 import pytest
@@ -198,7 +199,8 @@ def test_cancel_never_raises(capsys):
 def test_a_hung_comfyui_is_reported_not_waited_on_for_an_hour(comfy, monkeypatch):
     """#51: an HSA alloc failure killed ComfyUI's worker; the server kept answering, nothing ran for hours."""
     monkeypatch.setattr(imagegen, "HANG_AFTER", 0.5)
-    comfy.delay = 30  # the job never starts: no websocket frames at all
+    comfy.delay = 30  # the job "runs" but nothing comes from it: no websocket frames at all
+    threading.Timer(0.3, lambda: setattr(comfy, "running_ids", list(comfy.order))).start()
     with pytest.raises(RuntimeError, match=r"looks hung(.|\n)*systemctl restart comfyui"):
         imagegen.generate("a fox", "draft", count=1, seed=1)
     assert comfy.deleted == comfy.order  # and its job is cancelled
@@ -208,4 +210,11 @@ def test_no_websocket_means_no_hang_check(comfy, monkeypatch):
     """Without the socket there is no sign of life to go by: wait as before."""
     monkeypatch.setattr(imagegen, "HANG_AFTER", 0.2)
     comfy.ws, comfy.delay = False, 1.0
+    assert len(imagegen.generate("a fox", "draft", count=1, seed=1)["images"]) == 1
+
+
+def test_a_long_job_of_someone_elses_is_not_a_hang(comfy, monkeypatch):
+    """ComfyUI only sends progress to the client whose job runs: waiting behind another one is quiet."""
+    monkeypatch.setattr(imagegen, "HANG_AFTER", 0.2)
+    comfy.queue_running, comfy.delay = 1, 1.0  # another client's job runs while ours waits
     assert len(imagegen.generate("a fox", "draft", count=1, seed=1)["images"]) == 1

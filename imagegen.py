@@ -121,7 +121,7 @@ def fill(node, params: dict):
 JOB_TIMEOUT = 3600  # s per job; quality first (#51): a swapping Qwen at 40 steps can take many minutes
 POLL_TIMEOUT = 60  # s for one /history answer; a timeout means "slow", not "down"
 DOWN_LIMIT = 90  # s of refused/dropped connections before a job counts as lost (ComfyUI crashed)
-HANG_AFTER = 1200  # s without a single websocket frame while a job of ours is unfinished: ComfyUI's worker is
+HANG_AFTER = 1200  # s without a single websocket frame while ComfyUI says our job is running: its worker is
 # dead (#51: an HSA alloc failure left the server answering and queueing, but nothing ran for hours)
 SLOW_TIMEOUT = 300  # s for requests a busy ComfyUI may sit on: queueing, /free, upload, /view
 
@@ -176,6 +176,14 @@ class Comfy:
     CRASH_HINT = ("ComfyUI probably crashed (often out of RAM/VRAM): "
                   "journalctl -u comfyui -n 50; sudo dmesg | grep -i oom")
 
+    def _running(self, prompt_id: str) -> bool:
+        """Is this job the one ComfyUI is running now? False when unsure."""
+        try:
+            q = json.loads(self._get("/queue", timeout=POLL_TIMEOUT))
+        except Exception:
+            return False
+        return any(len(item) > 1 and item[1] == prompt_id for item in q.get("queue_running", []))
+
     def _queued(self, prompt_id: str) -> bool:
         q = json.loads(self._get("/queue"))
         return any(item[1] == prompt_id for k in ("queue_running", "queue_pending") for item in q.get(k, []))
@@ -225,6 +233,7 @@ class Comfy:
         down_since = None  # set while ComfyUI is unreachable (crashed, systemd restarting it)
         was_down = False  # it was unreachable at some point: on its return, check it still has the job
         slow_logged = False
+        last_check = 0.0  # last /queue look for the hang check
         while time.time() - t0 < timeout:
             try:
                 hist = json.loads(self._get(f"/history/{prompt_id}", timeout=POLL_TIMEOUT))
@@ -249,8 +258,11 @@ class Comfy:
                 if status.get("status_str") == "error":
                     raise RuntimeError(f"ComfyUI failed: {json.dumps(status.get('messages'))[:2000]}")
                 return entry
-            if idle is not None and (quiet := idle()) is not None and quiet > HANG_AFTER:
-                raise RuntimeError(self.HANG_HINT.format(mins=round(quiet / 60)))
+            if idle is not None and (quiet := idle()) is not None and quiet > HANG_AFTER \
+                    and time.time() - last_check > 30:
+                last_check = time.time()
+                if self._running(prompt_id):  # ComfyUI only talks to the client whose job runs: one of
+                    raise RuntimeError(self.HANG_HINT.format(mins=round(quiet / 60)))  # someone else's may be long
             time.sleep(1)
         raise TimeoutError(f"prompt {prompt_id} did not finish in {timeout:.0f}s")
 
