@@ -35,6 +35,20 @@ gen "misty fjord at sunrise" -p wallpaper --open
 | `gen daily [--show] [--no-set]` | Today's wallpaper (theme and cast from `[daily]` in `config.toml`), then set it. Schedule: `windows/daily-task.sh on [--at 06:00]` |
 | `gen doctor` | Read-only health check |
 
+While a run works, `gen` shows what runs and how far it is (#61). First a line with the preset's models, passes,
+steps and sizes, then (in a terminal) a live block:
+
+```
+wallpaper: sd_xl_base_1.0 · 1 pass, 30 steps · 1344x768 -> 3840x2160 (RealESRGAN_x4plus) · 4 images
+image 2/4  ✓ load  ✓ encode  ▶ sample 18/30  ○ decode  ○ upscale  ○ save
+  ████████████░░░░░░░░  58%  1:52 elapsed · ~1:21 left
+  VRAM ▓▓▓▓▓▓▓░░░ 11.2/16.0 GiB · RAM ▓▓▓▓▓░░░░░ 12.0/24.0 GiB
+```
+
+The ETA learns from the preset's last runs and from the images already done; VRAM and RAM turn yellow at 75%
+and red at 90% of the ceiling (RAM's is the `.wslconfig` cap), and the run ends with the peak. Not drawn when
+stderr is not a terminal (MCP, `gen daily`); `IMAGEGEN_PROGRESS=0` turns it off, `=1` forces it on.
+
 Every run ends with a timing line, e.g. `timing: 4 images in 210.3s (first 80.1s, then ~43.4s each): load 3.0s,
 sample 160.2s, decode 8.1s, upscale 30.0s, fetch 1.2s`. The numbers are also in `run.json` and in each sidecar
 under `"timing"` (seconds per stage; the sidecar also lists every node). They come from ComfyUI's websocket

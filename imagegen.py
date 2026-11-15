@@ -25,6 +25,7 @@ Usage:
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import html
 import http.client
@@ -52,9 +53,15 @@ ROOT = Path(__file__).resolve().parent
 MAX_SEED = 2**32
 
 
+_LIVE = None  # the live progress block (progress.Progress) while a gen run draws one; log() prints above it
+
+
 def log(msg: str) -> None:
     # stderr only: stdout is the MCP protocol channel when used by mcp_server.py
-    print(msg, file=sys.stderr, flush=True)
+    if _LIVE is not None:
+        _LIVE.write_above(msg)
+    else:
+        print(msg, file=sys.stderr, flush=True)
 
 
 # ---------------------------------------------------------------- config
@@ -222,6 +229,7 @@ class Events:
 
     def __init__(self, url: str, client_id: str, timeout: float = 5):
         self.by_prompt: dict[str, list[tuple[float, str, dict]]] = {}
+        self.listeners: list = []  # called as f(prompt_id, type, data, time) for every job event (live progress)
         self.ok = False
         self._sock = None
         self._alive = False
@@ -326,6 +334,11 @@ class Events:
                 with self._changed:
                     self.by_prompt.setdefault(pid, []).append((t, msg.get("type", ""), data))
                     self._changed.notify_all()
+                for f in list(self.listeners):
+                    try:
+                        f(pid, msg.get("type", ""), data, t)
+                    except Exception:
+                        pass  # the progress view must never stop the recording
         except (ValueError, AttributeError):
             pass
 
@@ -674,6 +687,40 @@ def to_linux_path(p: str) -> Path:
 
 # ---------------------------------------------------------------- main API
 
+@contextlib.contextmanager
+def _progress(template: dict, params: dict, preset: str, count: int, comfy: "Comfy", events: "Events",
+              run_dir: Path, mode: str):
+    """Print what is about to run (#61); on a terminal, also draw the live block until the run ends.
+    params: what the first job is filled with (the header reads models, steps and sizes from it)."""
+    global _LIVE
+    import progress  # lazy: only generate needs it
+    try:
+        log(progress.describe(fill(template, params), preset, count, stage_of, mode))
+    except Exception as e:  # an odd workflow must not stop the run
+        log(f"note: no preset summary ({type(e).__name__}: {e})")
+    live = None
+    if progress.enabled() and events.ok and _LIVE is None:  # without the websocket there is nothing to show
+        try:
+            est = progress.history_estimate(run_dir.parent.parent, preset, mode, COMFY_STAGES)
+            live = progress.Progress(template, count, stage_of, STAGE_ORDER, comfy.url, est)
+        except Exception as e:  # the view must never stop a run
+            log(f"note: no live progress ({type(e).__name__}: {e})")
+    if live is None:
+        yield None
+        return
+    events.listeners.append(live.on_event)
+    _LIVE = live.start()
+    try:
+        yield live
+    finally:
+        try:
+            peak = live.stop()
+        finally:
+            _LIVE = None
+        if peak:
+            log(peak)
+
+
 def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | None = None,
              negative: str | None = None, width: int | None = None, height: int | None = None,
              steps: int | None = None, cfg: float | None = None, label: str | None = None,
@@ -757,7 +804,15 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
 
     comfy = Comfy(conf["comfy_url"])
     comfy.wait_ready()
-    with Events(comfy.url, comfy.client_id) as events:  # per-node times; closed even on errors
+    mode = "edit" if edit else "inpaint" if mask_path else "img2img" if src_path else ""
+    first = {**params, "seed": base_seed}
+    if src_path is not None:  # what the uploads will fill in (the header only reads sizes and model names)
+        # (keep in step with the uploads below; a missing key only costs the header line)
+        first.update(image=src_path.name, mask=mask_path.name if mask_path else "",
+                     width=src_size[0], height=src_size[1], **({} if edit else {"denoise": denoise}))
+    with Events(comfy.url, comfy.client_id) as events, \
+            _progress(template, first, preset, count, comfy, events, run_dir, mode):
+        # Events: per-node times, the live block: what runs and how far it is (#61); both closed even on errors
         source = None
         if src_path is not None:
             # content-addressed names: re-running on the same source/mask overwrites instead of piling up
@@ -790,6 +845,8 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
         for i, (s, pid, queued_at, wf) in enumerate(jobs, 1):
             entry = comfy.wait_entry(pid)
             secs = round(time.time() - t_wait, 1)  # wall time; the first one includes loading the model
+            if _LIVE is not None:  # in case the socket dropped the job's end
+                _LIVE.on_event(pid, "execution_success", {}, time.time())
             outputs = entry.get("outputs", {})
             try:  # best effort: a surprise in the events must not lose the finished images
                 jt = job_timing(wf, queued_at, events.wait_done(pid), entry)
