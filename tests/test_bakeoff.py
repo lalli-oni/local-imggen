@@ -326,7 +326,7 @@ def test_t2i_labels_stay_unique_and_bad_ref_preset(comfy, make_image, fake_proc,
                               interval=0.01)
     labels = [r["label"] for r in run["bakeoff"]["presets"]]
     assert labels == ["SDXL base 1.0 · 30 steps (wallpaper)", "SDXL base 1.0 · 30 steps (wallpaper_ultrawide)"]
-    assert run["bakeoff"]["steps"] == {"wallpaper": 30}
+    assert run["bakeoff"]["steps"] == {"wallpaper": [30]}
     assert _steps(comfy.workflows()[0]) == 30  # "30" from an API caller became a number
     assert run["bakeoff"]["presets"][0]["size"] == "3840x2160"  # after the upscale, as saved
 
@@ -348,3 +348,26 @@ def test_t2i_missing_custom_node_is_a_note_not_a_comfy_error(comfy, make_image, 
     assert res["draft"]["images"] == 1 and res["klein+ref"]["images"] == 1
     assert not any(_node(wf, "IPAdapterAdvanced") for wf in comfy.workflows())  # never sent
     assert "custom node not installed" in bakeoff.table(run)
+
+
+def test_t2i_step_sweep(comfy, make_image, fake_proc):
+    """Find each model's sweet spot: a column per step count, text and ref, the model loaded once."""
+    run = bakeoff.t2i_bakeoff(["fox"], ["draft", "klein"], ref=str(make_image()), ref_prompts=["tulu"], count=1,
+                              seed=1, steps={"klein": [8, 16, 32]}, interval=0.01)
+    res = [r["preset"] for r in run["bakeoff"]["presets"]]
+    assert res == ["draft", "draft+ref", "klein@8", "klein@16", "klein@32", "klein@8+ref", "klein@16+ref",
+                   "klein@32+ref"]
+    assert comfy.frees == 2
+    wfs = comfy.workflows()
+    assert [_steps(wf) for wf in wfs[2:]] == [8, 16, 32, 8, 16, 32]
+    labels = {r["preset"]: r["label"] for r in run["bakeoff"]["presets"]}
+    assert labels["klein@32+ref"] == f"{KLEIN} · 32 steps · ref" and labels["klein@8"] == f"{KLEIN} · 8 steps"
+    assert run["bakeoff"]["steps"] == {"klein": [8, 16, 32]}
+    with pytest.raises(ValueError, match="each value once"):
+        bakeoff.t2i_bakeoff(["x"], ["klein"], steps={"klein": [8, 8]})
+
+
+def test_t2i_step_sweep_cli(comfy, fake_proc):
+    assert imagegen.main(["bakeoff", "--t2i", "x", "--presets", "klein,qwen", "--count", "1",
+                          "--steps", "klein=8/16, qwen=20"]) == 0
+    assert [_steps(wf) for wf in comfy.workflows()] == [8, 16, 20]

@@ -320,12 +320,14 @@ def _missing_nodes(comfy: imagegen.Comfy, workflow: str) -> list[str]:
 def t2i_bakeoff(prompts: list[str] | None = None, presets: list[str] | tuple[str, ...] = T2I_PRESETS,
                 ref: str | None = None, ref_prompts: list[str] | None = None, count: int = 2,
                 seed: int | None = None, size: tuple[int, int] = T2I_SIZE, free: bool = True,
-                label: str | None = None, interval: float = 1.0, steps: dict[str, int] | None = None) -> dict:
+                label: str | None = None, interval: float = 1.0,
+                steps: dict[str, int | list[int]] | None = None) -> dict:
     """Two tests on one sheet, with the same seeds for every model:
     - prompts (fresh scenes, no ref): every preset's text-to-image workflow at `size`;
     - ref_prompts with ref (a character to keep on-model): presets that can take a ref (edit_workflow) draw the
       ref's character into each scene. Their size follows the ref (a square ref: 1024x1024 for all).
-    steps: {preset: steps} overrides a preset's own steps in both tests, e.g. {"klein": 16}."""
+    steps: {preset: steps} overrides a preset's own steps in both tests, e.g. {"klein": 16}; a list sweeps them
+    ({"klein": [8, 16, 32]}: a column per step count, named klein@8, klein@8+ref, ...)."""
     presets = list(presets)
     prompts = _clean(prompts, "prompt") if prompts else []
     ref_prompts = _clean(ref_prompts, "ref prompt") if ref_prompts else []
@@ -352,9 +354,9 @@ def t2i_bakeoff(prompts: list[str] | None = None, presets: list[str] | tuple[str
     steps = dict(steps or {})
     if bad := [p for p in steps if p not in presets]:
         raise ValueError(f"--steps names a preset that isn't in the bake-off: {', '.join(bad)}")
-    steps = {p: int(v) for p, v in steps.items()}
-    if bad := [p for p, v in steps.items() if not 1 <= v <= 150]:
-        raise ValueError(f"steps must be 1-150 ({', '.join(bad)})")
+    steps = {p: [int(x) for x in (v if isinstance(v, (list, tuple)) else [v])] for p, v in steps.items()}
+    if bad := [p for p, v in steps.items() if not v or not all(1 <= x <= 150 for x in v) or len(set(v)) != len(v)]:
+        raise ValueError(f"steps must be 1-150, each value once ({', '.join(bad)})")
     for p in presets:
         _ref_preset(pconf, p)  # a broken ref_preset is a config error, not a quiet "no ref input"
     w, h = (int(v) for v in size)
@@ -366,14 +368,13 @@ def t2i_bakeoff(prompts: list[str] | None = None, presets: list[str] | tuple[str
     comfy.wait_ready()
     out = _out_dir(conf, label or "t2i-" + (prompts or ref_prompts)[0])
 
-    def text_call(preset):
-        return lambda n, text: imagegen.generate(text, preset, count, base_seed, width=w, height=h,
-                                                 steps=steps.get(preset),
+    def text_call(preset, st):
+        return lambda n, text: imagegen.generate(text, preset, count, base_seed, width=w, height=h, steps=st,
                                                  label=f"bakeoff-{preset}-{n}-{imagegen.slug(text, 20)}")
 
-    def ref_call(preset, rp):  # rp: the preset that draws preset's model with the ref
+    def ref_call(preset, rp, st):  # rp: the preset that draws preset's model with the ref
         return lambda n, text: imagegen.generate(text + REF_SUFFIX, rp, count, base_seed, source_image=str(src),
-                                                 edit=True, steps=steps.get(preset),
+                                                 edit=True, steps=st,
                                                  label=f"bakeoff-{preset}-ref-{n}-{imagegen.slug(text, 20)}")
     text_items = list(enumerate(prompts, 1))
     ref_items = list(enumerate(ref_prompts, len(prompts) + 1))  # numbered after the fresh prompts
@@ -384,13 +385,20 @@ def t2i_bakeoff(prompts: list[str] | None = None, presets: list[str] | tuple[str
     columns = []
     for p in presets:
         cols = []
+        sweep = steps.get(p, [None])  # None: the preset's own steps
+        names = {st: p if len(sweep) == 1 else f"{p}@{st}" for st in sweep}
         if text_items and "workflow" in pconf[p]:
-            cols.append((p, _label(pconf[p], p, steps.get(p)), runnable(text_call(p), pconf[p]["workflow"]),
-                         text_items))
+            for st in sweep:
+                cols.append((names[st], _label(pconf[p], p, st), runnable(text_call(p, st), pconf[p]["workflow"]),
+                             text_items))
         if ref_items:
             rp = _ref_preset(pconf, p)
-            cols.append((p + "+ref", _label(pconf[rp or p], rp or p, steps.get(p), ref=True),
-                         runnable(ref_call(p, rp), pconf[rp]["edit_workflow"]) if rp else NO_REF, ref_items))
+            for st in sweep:
+                cols.append((names[st] + "+ref", _label(pconf[rp or p], rp or p, st, ref=True),
+                             runnable(ref_call(p, rp, st), pconf[rp]["edit_workflow"]) if rp else NO_REF,
+                             ref_items))
+                if not rp:
+                    break  # one "no ref input" row per model is enough
         columns.append((p, cols))
     # two presets on the same model and steps (wallpaper, icon) would share a label: name the preset too
     seen: dict[str, int] = {}
@@ -438,13 +446,13 @@ def _parse_size(v: str) -> tuple[int, int]:
     return int(m.group(1)), int(m.group(2))
 
 
-def _parse_steps(v: str) -> dict[str, int]:
+def _parse_steps(v: str) -> dict[str, list[int]]:
     out = {}
     for part in filter(None, (x.strip() for x in v.split(","))):
-        m = re.fullmatch(r"([\w-]+)\s*=\s*(\d+)", part)
+        m = re.fullmatch(r"([\w-]+)\s*=\s*(\d+(?:\s*/\s*\d+)*)", part)
         if not m:
-            raise argparse.ArgumentTypeError(f"--steps takes PRESET=N[,PRESET=N...], not {part!r}")
-        out[m.group(1)] = int(m.group(2))
+            raise argparse.ArgumentTypeError(f"--steps takes PRESET=N or PRESET=A/B/C (comma-separated), not {part!r}")
+        out[m.group(1)] = [int(x) for x in m.group(2).split("/")]
     return out
 
 
@@ -464,7 +472,8 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--size", type=_parse_size,
                     help=f"with --t2i: WxH for every text-only image (default {T2I_SIZE[0]}x{T2I_SIZE[1]})")
     ap.add_argument("--steps", type=_parse_steps, metavar="PRESET=N[,...]",
-                    help="with --t2i: sampling steps for some presets instead of their own (e.g. klein=16)")
+                    help="with --t2i: sampling steps for some presets instead of their own (klein=16), or a sweep "
+                         "with a column per value (klein=8/16/32,qwen=15/25/40)")
     ap.add_argument("-p", "--presets", help=f"comma-separated presets, in order (default {','.join(DEFAULT_PRESETS)}; "
                                             f"with --t2i {','.join(T2I_PRESETS)})")
     ap.add_argument("-n", "--count", type=int, default=2, help="images per prompt and preset (default 2)")

@@ -179,7 +179,8 @@ every model:
 
 Each image is labelled with the model and its steps, for example "FLUX.2 klein 4B · 16 steps · ref · 2", where
 2 is the prompt number. Each model uses its preset's steps: SDXL 25, DreamShaper 6, klein 4, Qwen 25.
-`--steps klein=16` overrides one; klein's 4 steps gave many small quirks on lil tulu. `--count` is the number of
+`--steps klein=16` overrides one; klein's 4 steps gave many small quirks on lil tulu. `--steps klein=8/16/32`
+sweeps them: a column per step count, to find where more steps stop paying off. `--count` is the number of
 images per prompt and model, each with a new seed. It is not steps.
 
 ```sh
