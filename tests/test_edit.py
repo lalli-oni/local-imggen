@@ -1,6 +1,7 @@
 """gen edit (FLUX.1 Kontext): edit-only preset, workflow filling, doctor's opt-in handling, crash handling."""
 import io
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -174,3 +175,21 @@ def test_default_edit_preset_is_klein(comfy, make_image, capsys):
     assert _node(comfy.workflows()[0], "UNETLoader")["unet_name"] == "flux-2-klein-4b-fp8.safetensors"
     assert imagegen.main(["edit", str(make_image()), "make it wave"]) == 0
     assert "-klein-edit-" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("exc", [TimeoutError("did not finish"), KeyboardInterrupt()])
+def test_a_stopped_run_cancels_its_jobs_in_comfyui(comfy, monkeypatch, exc):
+    """#51: Ctrl-C or a timeout stopped only the client; the queued Qwen jobs held ComfyUI for an hour."""
+    def wait_entry(pid, timeout=None):
+        comfy.running_ids = [pid]  # the first job is on the GPU, the second one waits
+        raise exc
+    monkeypatch.setattr(imagegen.Comfy, "wait_entry", lambda self, pid, timeout=None: wait_entry(pid))
+    with pytest.raises(type(exc)):
+        imagegen.generate("a fox", "draft", count=2, seed=1)
+    assert comfy.deleted == comfy.order and len(comfy.order) == 2
+    assert comfy.interrupts == [{"prompt_id": comfy.order[0]}]
+
+
+def test_cancel_never_raises(capsys):
+    imagegen.Comfy(os.environ["IMAGEGEN_COMFY_URL"]).cancel(["p1"])  # nothing listens there
+    assert "could not cancel" in capsys.readouterr().err

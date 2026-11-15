@@ -186,7 +186,9 @@ images per prompt and model, each with a new seed. It is not steps.
 The sheet is rewritten after every column, so you can watch a long bake-off fill in (refresh the page). Ctrl-C
 keeps it: the running column is marked "interrupted" and the rest "not run". A slow model that makes ComfyUI
 swap no longer counts as lost: the client waits up to an hour per image, and gives up after 90s only when
-ComfyUI refuses the connection (a crash). A bake-off folder stopped before this had no sheet;
+ComfyUI refuses the connection (a crash). Ctrl-C or a timeout also cancels the jobs that run had queued in
+ComfyUI, and a bake-off won't start while ComfyUI is busy with other jobs (it prints the commands to clear the
+queue), since those would land in its timings. A bake-off folder stopped before this had no sheet;
 `gen bakeoff --rebuild FOLDER` makes one from its images (times from the sidecars, no memory numbers).
 
 ```sh

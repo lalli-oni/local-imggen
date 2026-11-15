@@ -424,3 +424,13 @@ def test_rebuild_an_old_stopped_bakeoff_from_its_images(comfy, make_image, fake_
     assert len(rebuilt["images"]) == 6 and (d / "index.html").is_file()
     with pytest.raises(FileNotFoundError):
         bakeoff.recover(str(d / "nope"))
+
+
+def test_a_busy_comfyui_stops_the_bakeoff_before_it_starts(comfy, fake_proc):
+    """Jobs left from a stopped run would be timed as the first model's, or hold the bake-off up."""
+    comfy.queue_pending = 3
+    with pytest.raises(RuntimeError, match=r"busy \(0 running, 3 waiting\).*clear"):
+        bakeoff.t2i_bakeoff(["fox"], ["klein"], count=1, seed=1, interval=0.01)
+    assert comfy.order == []
+    with pytest.raises(RuntimeError, match='"clear": true'):
+        imagegen.main(["bakeoff", "--t2i", "fox", "--presets", "klein"])  # __main__ prints it as "error: ..."

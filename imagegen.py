@@ -170,6 +170,34 @@ class Comfy:
         q = json.loads(self._get("/queue"))
         return any(item[1] == prompt_id for k in ("queue_running", "queue_pending") for item in q.get(k, []))
 
+    def busy(self) -> tuple[int, int]:
+        """(running, waiting) jobs in ComfyUI's queue, anyone's."""
+        q = json.loads(self._get("/queue", timeout=POLL_TIMEOUT))
+        return len(q.get("queue_running", [])), len(q.get("queue_pending", []))
+
+    def cancel(self, prompt_ids: list[str]) -> None:
+        """Take our jobs out of ComfyUI (Ctrl-C, timeout): delete the waiting ones, interrupt the running one.
+        Without this they keep ComfyUI busy for whoever comes next (#51: a stopped Qwen sweep held it for an
+        hour). Best effort: never raises."""
+        if not prompt_ids:
+            return
+        def post(path, body):
+            req = urllib.request.Request(self.url + path, data=json.dumps(body).encode(),
+                                         headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=15) as r:
+                r.read()
+        try:
+            post("/queue", {"delete": list(prompt_ids)})
+            q = json.loads(self._get("/queue", timeout=15))
+            running = [item[1] for item in q.get("queue_running", []) if len(item) > 1]
+            for pid in (p for p in prompt_ids if p in running):
+                post("/interrupt", {"prompt_id": pid})  # older ComfyUI ignores the id: stops the running job
+            log(f"  cancelled {len(prompt_ids)} job(s) in ComfyUI")
+        except Exception as e:
+            log(f"  could not cancel the queued jobs ({type(e).__name__}: {e}); clear them with: "
+                f"curl --request POST --data '{{\"clear\": true}}' {self.url}/queue && "
+                f"curl --request POST {self.url}/interrupt")
+
     def wait(self, prompt_id: str, timeout: float = JOB_TIMEOUT) -> dict:
         """The job's outputs, once it is done."""
         return self.wait_entry(prompt_id, timeout).get("outputs", {})
@@ -799,55 +827,61 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
 
         # queue everything up front; ComfyUI works through it while we wait
         jobs = []
-        t_queue = time.time()
-        for i in range(count):
-            s = (base_seed + i) % MAX_SEED
-            wf = fill(template, {**params, "seed": s})
-            jobs.append((s, comfy.queue(wf), time.time(), wf))
-        log(f"queued {count} x {preset} (seeds {base_seed}..) -> {run_dir}")
+        done = 0  # jobs finished: on an error/Ctrl-C the rest are cancelled in ComfyUI
+        try:
+            t_queue = time.time()
+            for i in range(count):
+                s = (base_seed + i) % MAX_SEED
+                wf = fill(template, {**params, "seed": s})
+                jobs.append((s, comfy.queue(wf), time.time(), wf))
+            log(f"queued {count} x {preset} (seeds {base_seed}..) -> {run_dir}")
 
-        images, job_timings = [], []
-        t_wait = time.time()
-        for i, (s, pid, queued_at, wf) in enumerate(jobs, 1):
-            entry = comfy.wait_entry(pid)
-            secs = round(time.time() - t_wait, 1)  # wall time; the first one includes loading the model
-            outputs = entry.get("outputs", {})
-            try:  # best effort: a surprise in the events must not lose the finished images
-                jt = job_timing(wf, queued_at, events.wait_done(pid), entry)
-            except Exception as e:
-                log(f"note: no timing for seed {s} ({type(e).__name__}: {e})")
-                jt = {}
-            job_timings.append(jt)
-            outs = [im for o in outputs.values() for im in o.get("images", []) if im.get("type") == "output"]
-            for j, im in enumerate(outs):
-                name = f"{i:02d}-seed{s}" + (f"-{j}" if len(outs) > 1 else "") + ".png"
-                path = run_dir / name
-                t0 = time.time()
-                path.write_bytes(comfy.fetch(im))
-                timing = {**_flat(jt), "fetch_s": round(time.time() - t0, 2)}
-                final = path
-                for step in p.get("post", []):
-                    t0 = time.time()
-                    final = POST[step](final)
-                    timing[f"{step}_s"] = round(time.time() - t0, 2)
-                # this image's own time: ComfyUI's work (counted on a job's first image only) + fetch + post
-                own = [v for k, v in timing.items() if k not in ("queue_s", "comfy_s") + COMFY_STAGES]
-                timing["total_s"] = round(sum(own) + (jt.get("comfy_s", 0) if j == 0 else 0), 2)
-                meta = {"prompt": prompt, "full_prompt": full_prompt, "negative": full_negative,
-                        "user_negative": negative,
-                        "preset": preset, "seed": s, "params": {k: v for k, v in params.items()
-                                                                if k not in ("prompt", "negative")},
-                        "file": final.name, "raw_file": path.name, "created": now.isoformat(timespec="seconds"),
-                        "timing": {**timing, **{k: jt[k] for k in ("nodes", "cached") if k in jt}},
-                        **(source or {})}
-                path.with_suffix(".json").write_text(json.dumps(meta, indent=2))
-                images.append({"path": str(final), "windows_path": to_windows_path(final), "seed": s,
-                               "seconds": secs if j == 0 else None,  # per job, not per output (gen bakeoff)
-                               "timing": timing})
-            parts = _stage_parts(images[-1]["timing"] if outs else jt)
-            log(f"  [{i}/{count}] seed {s} done in {secs:.1f}s"
-                + (f" ({', '.join(parts)})" if parts else ""))
+            images, job_timings = [], []
             t_wait = time.time()
+            for i, (s, pid, queued_at, wf) in enumerate(jobs, 1):
+                entry = comfy.wait_entry(pid)
+                secs = round(time.time() - t_wait, 1)  # wall time; the first one includes loading the model
+                outputs = entry.get("outputs", {})
+                try:  # best effort: a surprise in the events must not lose the finished images
+                    jt = job_timing(wf, queued_at, events.wait_done(pid), entry)
+                except Exception as e:
+                    log(f"note: no timing for seed {s} ({type(e).__name__}: {e})")
+                    jt = {}
+                job_timings.append(jt)
+                outs = [im for o in outputs.values() for im in o.get("images", []) if im.get("type") == "output"]
+                for j, im in enumerate(outs):
+                    name = f"{i:02d}-seed{s}" + (f"-{j}" if len(outs) > 1 else "") + ".png"
+                    path = run_dir / name
+                    t0 = time.time()
+                    path.write_bytes(comfy.fetch(im))
+                    timing = {**_flat(jt), "fetch_s": round(time.time() - t0, 2)}
+                    final = path
+                    for step in p.get("post", []):
+                        t0 = time.time()
+                        final = POST[step](final)
+                        timing[f"{step}_s"] = round(time.time() - t0, 2)
+                    # this image's own time: ComfyUI's work (counted on a job's first image only) + fetch + post
+                    own = [v for k, v in timing.items() if k not in ("queue_s", "comfy_s") + COMFY_STAGES]
+                    timing["total_s"] = round(sum(own) + (jt.get("comfy_s", 0) if j == 0 else 0), 2)
+                    meta = {"prompt": prompt, "full_prompt": full_prompt, "negative": full_negative,
+                            "user_negative": negative,
+                            "preset": preset, "seed": s, "params": {k: v for k, v in params.items()
+                                                                    if k not in ("prompt", "negative")},
+                            "file": final.name, "raw_file": path.name, "created": now.isoformat(timespec="seconds"),
+                            "timing": {**timing, **{k: jt[k] for k in ("nodes", "cached") if k in jt}},
+                            **(source or {})}
+                    path.with_suffix(".json").write_text(json.dumps(meta, indent=2))
+                    images.append({"path": str(final), "windows_path": to_windows_path(final), "seed": s,
+                                   "seconds": secs if j == 0 else None,  # per job, not per output (gen bakeoff)
+                                   "timing": timing})
+                parts = _stage_parts(images[-1]["timing"] if outs else jt)
+                log(f"  [{i}/{count}] seed {s} done in {secs:.1f}s"
+                    + (f" ({', '.join(parts)})" if parts else ""))
+                t_wait = time.time()
+                done = i
+        except BaseException:
+            comfy.cancel([j[1] for j in jobs[done:]])
+            raise
 
         run_timing = {"total_s": round(time.time() - t_start, 2), "setup_s": round(t_queue - t_start, 2)}
         if job_timings and "queue_s" in job_timings[0]:

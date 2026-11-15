@@ -76,6 +76,7 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
 - Outputs: `<output_dir>/<YYYY-MM-DD>/<HHMMSS>-<preset>-<slug>/` with PNGs, per-image JSON sidecars
   (prompt, seed, params, timing), `run.json` and `index.html` contact sheet.
 - Waiting (#51): a /history poll that times out means ComfyUI is busy (swapping), not gone: `wait_entry` waits up to `JOB_TIMEOUT`; only refused/reset connections give up after `DOWN_LIMIT` (90s).
+  When a `generate` stops (error, timeout, Ctrl-C), `Comfy.cancel` deletes its queued jobs and interrupts the running one; `gen bakeoff` refuses to start while ComfyUI is busy (`Comfy.busy`).
 - Timing (#2): `Events` in imagegen.py listens on ComfyUI's `/ws` (stdlib websocket client) and `job_timing`
   turns the `executing` events into `<stage>_s` seconds (stages from the node class, `STAGES`). Without the
   socket it falls back to `/history` timestamps (queue_s and comfy_s only). `run.json` `timing.summary` is the
@@ -90,7 +91,8 @@ Cloud sessions also run the contact sheet in Chromium (`/opt/pw-browsers`); else
 
 What's there to reuse, instead of building a one-off setup:
 - `comfy` fixture (`tests/fake_comfy.py`): a fake ComfyUI HTTP server with canned PNGs. Inspect `comfy.workflows()`,
-  `comfy.uploads`; switch on `reject`, `fail_jobs`, `no_gpu`, `delay` (slow jobs), `queue_running/pending`.
+  `comfy.uploads`; switch on `reject`, `fail_jobs`, `no_gpu`, `delay` (slow jobs), `queue_running/pending`, `running_ids`;
+  cancels land in `deleted`, `cleared`, `interrupts`.
   It also plays the websocket events per node: `node_s` (seconds per class_type), `cached`, `ws = False`.
 - `make_run` (a finished run folder: PNGs, sidecars, run.json), `make_image`, `out_dir`, `fake_rembg`, `stub_calls()`
   (what the fake wslpath/powershell.exe/explorer.exe/systemctl/sudo were called with).

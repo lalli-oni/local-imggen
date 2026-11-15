@@ -70,8 +70,12 @@ class FakeComfy:
         # node types /object_info lists: every class_type the repo's workflows use (tests may remove some)
         self.nodes = {n["class_type"] for wf in WORKFLOWS_DIR.glob("*.json")
                       for n in json.loads(wf.read_text()).values()}
-        self.queue_running = 0
+        self.queue_running = 0    # other jobs /queue lists (counts; a test may also list our own ids)
         self.queue_pending = 0
+        self.running_ids: list[str] = []  # prompt ids /queue shows as running (for cancel)
+        self.deleted: list[str] = []      # ids POST /queue {"delete": [...]} took out
+        self.cleared = 0                  # POST /queue {"clear": true} calls
+        self.interrupts: list[dict] = []  # POST /interrupt bodies
         self.ws = True
         self.node_s: dict[str, float] = {}  # class_type -> seconds each node of it takes
         self.cached: list[str] = []         # node ids reported as cached (not run)
@@ -184,8 +188,10 @@ class FakeComfy:
                 if u.path == "/view":
                     return self._send(200, fake._view(q.get("filename", "")), "image/png")
                 if u.path == "/queue":
-                    return self._send(200, {"queue_running": [[0]] * fake.queue_running,
-                                            "queue_pending": [[0]] * fake.queue_pending})
+                    return self._send(200, {
+                        "queue_running": [[i, f"other-{i}"] for i in range(fake.queue_running)]
+                        + [[0, pid] for pid in fake.running_ids],
+                        "queue_pending": [[i, f"waiting-{i}"] for i in range(fake.queue_pending)]})
                 if u.path == "/object_info":
                     return self._send(200, {c: {} for c in fake.nodes})
                 if u.path == "/ws" and fake.ws:
@@ -226,6 +232,14 @@ class FakeComfy:
                     fake.order.append(pid)
                     threading.Thread(target=fake._execute, args=(pid, req.get("client_id")), daemon=True).start()
                     return self._send(200, {"prompt_id": pid, "number": len(fake.order)})
+                if u.path == "/queue":
+                    req = json.loads(body or b"{}")
+                    fake.deleted += req.get("delete", [])
+                    fake.cleared += bool(req.get("clear"))
+                    return self._send(200, {})
+                if u.path == "/interrupt":
+                    fake.interrupts.append(json.loads(body or b"{}"))
+                    return self._send(200, {})
                 if u.path == "/free":
                     fake.frees += 1
                     return self._send(200, {})

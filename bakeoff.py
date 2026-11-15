@@ -142,6 +142,21 @@ def _unload(comfy: imagegen.Comfy) -> None:
         last = now
 
 
+def _require_idle(comfy: imagegen.Comfy) -> None:
+    """A bake-off times every model: jobs already in ComfyUI's queue (a stopped run, gen daily) would be
+    counted in the first model's time, or hold the whole bake-off up (#51). Stop with the commands to clear it."""
+    try:
+        running, waiting = comfy.busy()
+    except Exception:
+        return  # can't tell: go ahead
+    if running or waiting:
+        raise RuntimeError(
+            f"ComfyUI is busy ({running} running, {waiting} waiting), so the timings would be off. Wait for it, "
+            f"or clear the queue and stop the running job:\n"
+            f"  curl --silent --request POST --header 'Content-Type: application/json' --data '{{\"clear\": true}}' "
+            f"{comfy.url}/queue\n  curl --silent --request POST {comfy.url}/interrupt")
+
+
 def _check_presets(presets: list[str], conf: dict, t2i: bool = False) -> None:
     key, what = ("workflow", "text-to-image") if t2i else ("edit_workflow", "edit")
     bad = [p for p in presets if key not in conf.get(p, {})]
@@ -297,6 +312,7 @@ def bakeoff(path: str, instructions: list[str], presets: list[str] | tuple[str, 
     base_seed = seed if seed is not None else random.randrange(imagegen.MAX_SEED)
     comfy = imagegen.Comfy(conf["comfy_url"])
     comfy.wait_ready()
+    _require_idle(comfy)
     out = _out_dir(conf, label or src.stem)
 
     def call(preset):
@@ -405,6 +421,7 @@ def t2i_bakeoff(prompts: list[str] | None = None, presets: list[str] | tuple[str
     base_seed = seed if seed is not None else random.randrange(imagegen.MAX_SEED)
     comfy = imagegen.Comfy(conf["comfy_url"])
     comfy.wait_ready()
+    _require_idle(comfy)
     out = _out_dir(conf, label or "t2i-" + (prompts or ref_prompts)[0])
 
     def text_call(preset, st):
