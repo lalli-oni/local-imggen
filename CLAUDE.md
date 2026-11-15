@@ -11,7 +11,8 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   (FLUX.2 klein by default since the #40 bake-off, `EDIT_PRESET`; `-p kontext` / `-p qwen`), `gen cutout PATH [--clean]` for background removal,
   `gen bakeoff PATH "instr"...` (bakeoff.py: same edits through several edit presets, time/VRAM/RAM, one sheet;
   `--t2i "fresh prompt"... [--ref IMG --ref-prompt "scene"...]` compares text-to-image models, #51: fresh prompts from text,
-  and the ref test through each preset's edit_workflow or its `ref_preset` (SDXL -> sdxl_ref, IP-Adapter); labels from `model`),
+  and the ref test through each preset's edit_workflow or its `ref_preset` (SDXL -> sdxl_ref, IP-Adapter); labels from `model`;
+  the sheet is rewritten after every column and on Ctrl-C, `--rebuild FOLDER` for older stopped folders),
   `gen sheet [RUN_DIR|DATE]` to rebuild contact sheets (default: latest run), `gen doctor` for a health check)
 - `templates/contact_sheet.html`: the per-run `index.html` viewer (fit-all / size slider, A/B compare).
   Static, no build, opened via file://; `write_contact_sheet` inlines the run data as JSON.
@@ -74,6 +75,7 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   (`gen vary` on a klein/qwen image falls back to draft unless -p is given).
 - Outputs: `<output_dir>/<YYYY-MM-DD>/<HHMMSS>-<preset>-<slug>/` with PNGs, per-image JSON sidecars
   (prompt, seed, params, timing), `run.json` and `index.html` contact sheet.
+- Waiting (#51): a /history poll that times out means ComfyUI is busy (swapping), not gone: `wait_entry` waits up to `JOB_TIMEOUT`; only refused/reset connections give up after `DOWN_LIMIT` (90s).
 - Timing (#2): `Events` in imagegen.py listens on ComfyUI's `/ws` (stdlib websocket client) and `job_timing`
   turns the `executing` events into `<stage>_s` seconds (stages from the node class, `STAGES`). Without the
   socket it falls back to `/history` timestamps (queue_s and comfy_s only). `run.json` `timing.summary` is the

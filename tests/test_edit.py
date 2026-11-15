@@ -113,6 +113,38 @@ def test_wait_reports_a_crash_that_lost_the_job(monkeypatch):
         c.wait("p1")
 
 
+def test_wait_keeps_waiting_on_a_slow_comfyui(monkeypatch, capsys):
+    """#51: Qwen swapping made /history answers time out for minutes; that is "busy", not "crashed"."""
+    import urllib.error
+    c = imagegen.Comfy("http://x")
+    done = b'{"p1": {"status": {"status_str": "success"}, "outputs": {}}}'
+    answers = [TimeoutError("timed out"), urllib.error.URLError(TimeoutError("timed out"))] * 5 + [done]
+
+    def get(path, timeout=30):
+        a = answers.pop(0)
+        if isinstance(a, Exception):
+            raise a
+        return a
+    monkeypatch.setattr(c, "_get", get)
+    monkeypatch.setattr(imagegen, "DOWN_LIMIT", -1)  # a refused connection would fail at once
+    monkeypatch.setattr(imagegen.time, "sleep", lambda s: None)
+    assert c.wait_entry("p1")["status"]["status_str"] == "success"
+    assert capsys.readouterr().err.count("slow to answer") == 1
+
+
+def test_wait_gives_up_when_comfyui_is_gone(monkeypatch):
+    import urllib.error
+    c = imagegen.Comfy("http://x")
+
+    def get(path, timeout=30):
+        raise urllib.error.URLError(ConnectionRefusedError(111, "refused"))
+    monkeypatch.setattr(c, "_get", get)
+    monkeypatch.setattr(imagegen, "DOWN_LIMIT", -1)
+    monkeypatch.setattr(imagegen.time, "sleep", lambda s: None)
+    with pytest.raises(RuntimeError, match="lost the connection"):
+        c.wait_entry("p1")
+
+
 def test_default_edit_preset_is_klein(comfy, make_image, capsys):
     """#40 bake-off: klein is the default for gen edit (and MCP edit, which passes EDIT_PRESET)."""
     assert imagegen.EDIT_PRESET == "klein"

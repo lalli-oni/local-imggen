@@ -371,3 +371,56 @@ def test_t2i_step_sweep_cli(comfy, fake_proc):
     assert imagegen.main(["bakeoff", "--t2i", "x", "--presets", "klein,qwen", "--count", "1",
                           "--steps", "klein=8/16, qwen=20"]) == 0
     assert [_steps(wf) for wf in comfy.workflows()] == [8, 16, 20]
+
+
+def test_t2i_ctrl_c_keeps_a_sheet_of_what_ran(comfy, make_image, fake_proc, monkeypatch):
+    """#51: Þór stopped a long Qwen sweep with Ctrl-C and had no sheet. Now one is written after every column,
+    and a stop marks the running column and lists the ones that didn't run."""
+    real = imagegen.generate
+
+    def gen(*a, **k):
+        if k.get("steps") == 25:
+            out = Path(imagegen.load_config()["output_dir"]).expanduser()
+            sheets = list(out.glob("*/*-bakeoff-stop/index.html"))  # klein@15 is on the sheet already
+            assert sheets and "klein@15" in (sheets[0].parent / "run.json").read_text()
+            raise KeyboardInterrupt
+        return real(*a, **k)
+    monkeypatch.setattr(imagegen, "generate", gen)
+    with pytest.raises(KeyboardInterrupt):
+        bakeoff.t2i_bakeoff(["fox"], ["klein"], count=1, seed=1, steps={"klein": [15, 25, 40]}, interval=0.01,
+                            label="stop")
+    out = Path(imagegen.load_config()["output_dir"]).expanduser()
+    run = json.loads(next(out.glob("*/*-bakeoff-stop/run.json")).read_text())
+    res = {r["preset"]: r for r in run["bakeoff"]["presets"]}
+    assert res["klein@15"]["images"] == 1 and res["klein@15"]["error"] is None
+    assert res["klein@25"]["error"] == "interrupted (Ctrl-C)"
+    assert res["klein@40"]["note"] == "not run (bake-off stopped)"
+    assert run["bakeoff"]["complete"] is False and run["preset"].endswith(bakeoff.STOPPED)
+    assert len(run["images"]) == 1 and (Path(run["run_dir"]) / "index.html").is_file()
+
+
+def test_a_finished_bakeoff_is_marked_complete(comfy, fake_proc):
+    run = bakeoff.t2i_bakeoff(["fox"], ["klein"], count=1, seed=1, interval=0.01)
+    on_disk = json.loads((Path(run["run_dir"]) / "run.json").read_text())
+    assert on_disk["bakeoff"]["complete"] is True and "so far" not in on_disk["preset"]
+
+
+def test_rebuild_an_old_stopped_bakeoff_from_its_images(comfy, make_image, fake_proc, capsys):
+    """A folder stopped before run.json was written per column: the copies and sidecars are enough."""
+    run = bakeoff.t2i_bakeoff(["fox"], ["draft", "klein"], ref=str(make_image()), ref_prompts=["tulu"], count=1,
+                              seed=1, steps={"klein": [8, 16]}, interval=0.01, label="old")
+    d = Path(run["run_dir"])
+    for f in ("run.json", "bakeoff.json", "index.html"):
+        (d / f).unlink()
+    assert imagegen.main(["bakeoff", "--rebuild", str(d)]) == 0
+    assert "rebuilt from the files" in capsys.readouterr().out
+    rebuilt = json.loads((d / "run.json").read_text())
+    cols = [r["preset"] for r in rebuilt["bakeoff"]["presets"]]
+    assert set(cols) == {"draft", "draft+ref", "klein@8", "klein@16", "klein@8+ref", "klein@16+ref"}
+    labels = {r["preset"]: r["label"] for r in rebuilt["bakeoff"]["presets"]}
+    assert labels["klein@16+ref"] == f"{KLEIN} · 16 steps · ref"
+    assert rebuilt["bakeoff"]["instructions"] == ["fox", "with the ref: tulu"]
+    assert rebuilt["bakeoff"]["mode"] == "t2i" and rebuilt["source_image"]
+    assert len(rebuilt["images"]) == 6 and (d / "index.html").is_file()
+    with pytest.raises(FileNotFoundError):
+        bakeoff.recover(str(d / "nope"))

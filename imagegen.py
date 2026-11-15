@@ -110,6 +110,17 @@ def fill(node, params: dict):
 
 # ---------------------------------------------------------------- ComfyUI client
 
+JOB_TIMEOUT = 3600  # s per job; quality first (#51): a swapping Qwen at 40 steps can take many minutes
+POLL_TIMEOUT = 60  # s for one /history answer; a timeout means "slow", not "down"
+DOWN_LIMIT = 90  # s of refused/dropped connections before a job counts as lost (ComfyUI crashed)
+SLOW_TIMEOUT = 300  # s for requests a busy ComfyUI may sit on: queueing, /free, upload, /view
+
+
+def _is_timeout(e: BaseException) -> bool:
+    """A read/connect timeout (ComfyUI busy) rather than a refused or reset connection (ComfyUI gone)."""
+    return isinstance(e, TimeoutError) or isinstance(getattr(e, "reason", None), TimeoutError)
+
+
 class Comfy:
     def __init__(self, url: str):
         self.url = url.rstrip("/")
@@ -137,7 +148,7 @@ class Comfy:
         req = urllib.request.Request(self.url + "/prompt", data=body,
                                      headers={"Content-Type": "application/json"})
         try:
-            with urllib.request.urlopen(req, timeout=30) as r:
+            with urllib.request.urlopen(req, timeout=SLOW_TIMEOUT) as r:
                 return json.loads(r.read())["prompt_id"]
         except urllib.error.HTTPError as e:
             raise RuntimeError(f"ComfyUI rejected the workflow: {e.read().decode(errors='replace')[:2000]}")
@@ -146,7 +157,7 @@ class Comfy:
         """Unload all models and free their memory (ComfyUI's /free), so the next job loads from scratch."""
         req = urllib.request.Request(self.url + "/free", data=json.dumps(
             {"unload_models": True, "free_memory": True}).encode(), headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=SLOW_TIMEOUT) as r:
             r.read()
 
     def system_stats(self) -> dict:
@@ -159,24 +170,32 @@ class Comfy:
         q = json.loads(self._get("/queue"))
         return any(item[1] == prompt_id for k in ("queue_running", "queue_pending") for item in q.get(k, []))
 
-    def wait(self, prompt_id: str, timeout: float = 1800) -> dict:
+    def wait(self, prompt_id: str, timeout: float = JOB_TIMEOUT) -> dict:
         """The job's outputs, once it is done."""
         return self.wait_entry(prompt_id, timeout).get("outputs", {})
 
-    def wait_entry(self, prompt_id: str, timeout: float = 1800) -> dict:
-        """The job's whole /history entry (outputs, status messages with timestamps), once it is done."""
+    def wait_entry(self, prompt_id: str, timeout: float = JOB_TIMEOUT) -> dict:
+        """The job's whole /history entry (outputs, status messages with timestamps), once it is done.
+        A ComfyUI that is up but slow to answer (a big model swapping, #51: Qwen) is waited for until `timeout`;
+        only refused or dropped connections (a crash) give up after DOWN_LIMIT seconds."""
         t0 = time.time()
         down_since = None  # set while ComfyUI is unreachable (crashed, systemd restarting it)
+        slow_logged = False
         while time.time() - t0 < timeout:
             try:
-                hist = json.loads(self._get(f"/history/{prompt_id}"))
+                hist = json.loads(self._get(f"/history/{prompt_id}", timeout=POLL_TIMEOUT))
                 if down_since is not None and prompt_id not in hist and not self._queued(prompt_id):
                     raise RuntimeError(f"ComfyUI restarted and lost the job. {self.CRASH_HINT}")
                 down_since = None
-            except (urllib.error.URLError, ConnectionError, http.client.HTTPException, TimeoutError):
+            except (urllib.error.URLError, ConnectionError, http.client.HTTPException, TimeoutError) as e:
+                if _is_timeout(e):  # it's there, just busy: not a crash
+                    if not slow_logged:
+                        log(f"  ComfyUI is slow to answer (swapping?); still waiting, up to {timeout:.0f}s per job")
+                        slow_logged = True
+                    continue
                 down_since = down_since or time.time()
-                if time.time() - down_since > 90:
-                    raise RuntimeError(f"lost the connection to ComfyUI for 90s. {self.CRASH_HINT}")
+                if time.time() - down_since > DOWN_LIMIT:
+                    raise RuntimeError(f"lost the connection to ComfyUI for {DOWN_LIMIT}s. {self.CRASH_HINT}")
                 time.sleep(2)
                 continue
             if prompt_id in hist:
@@ -186,7 +205,7 @@ class Comfy:
                     raise RuntimeError(f"ComfyUI failed: {json.dumps(status.get('messages'))[:2000]}")
                 return entry
             time.sleep(1)
-        raise TimeoutError(f"prompt {prompt_id} did not finish in {timeout}s")
+        raise TimeoutError(f"prompt {prompt_id} did not finish in {timeout:.0f}s")
 
     def upload(self, data: bytes, name: str) -> str:
         """Upload a PNG to ComfyUI's input folder; returns the name LoadImage expects."""
@@ -198,7 +217,7 @@ class Comfy:
         req = urllib.request.Request(self.url + "/upload/image", data=body,
                                      headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
         try:
-            with urllib.request.urlopen(req, timeout=60) as r:
+            with urllib.request.urlopen(req, timeout=SLOW_TIMEOUT) as r:
                 res = json.loads(r.read())
         except urllib.error.HTTPError as e:
             raise RuntimeError(f"ComfyUI rejected the upload: {e.read().decode(errors='replace')[:500]}")
@@ -206,7 +225,7 @@ class Comfy:
 
     def fetch(self, image: dict) -> bytes:
         q = urllib.parse.urlencode({k: image.get(k, "") for k in ("filename", "subfolder", "type")})
-        return self._get(f"/view?{q}", timeout=120)
+        return self._get(f"/view?{q}", timeout=SLOW_TIMEOUT)
 
 
 # ---------------------------------------------------------------- timing (per stage, from ComfyUI events)

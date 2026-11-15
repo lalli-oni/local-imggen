@@ -183,6 +183,12 @@ Each image is labelled with the model and its steps, for example "FLUX.2 klein 4
 sweeps them: a column per step count, to find where more steps stop paying off. `--count` is the number of
 images per prompt and model, each with a new seed. It is not steps.
 
+The sheet is rewritten after every column, so you can watch a long bake-off fill in (refresh the page). Ctrl-C
+keeps it: the running column is marked "interrupted" and the rest "not run". A slow model that makes ComfyUI
+swap no longer counts as lost: the client waits up to an hour per image, and gives up after 90s only when
+ComfyUI refuses the connection (a crash). A bake-off folder stopped before this had no sheet;
+`gen bakeoff --rebuild FOLDER` makes one from its images (times from the sidecars, no memory numbers).
+
 ```sh
 ~/imagegen/models/dreamshaper-xl-lightning.sh   # ~6.9 GB, asks y/N
 ~/imagegen/models/ipadapter-sdxl.sh             # ~3.4 GB, asks y/N; its --help shows the one-time node install

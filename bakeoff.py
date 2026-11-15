@@ -160,9 +160,8 @@ def _clean(texts: list[str], what: str) -> list[str]:
     return texts
 
 
-def _size_steps(run: dict) -> tuple[str | None, int | None]:
-    """WxH and sampling steps of a run's images, from the first image's sidecar."""
-    side = imagegen.find_sidecar(Path(run["images"][0]["path"])) if run.get("images") else None
+def _size_steps_of(side: dict | None) -> tuple[str | None, int | None]:
+    """WxH and sampling steps from an image's sidecar."""
     prm = (side or {}).get("params", {})
     size = next((f"{prm[w]}x{prm[h]}" for w, h in (("target_width", "target_height"), ("out_width", "out_height"),
                                                    ("width", "height"))
@@ -170,63 +169,99 @@ def _size_steps(run: dict) -> tuple[str | None, int | None]:
     return size, prm.get("steps")
 
 
+def _size_steps(run: dict) -> tuple[str | None, int | None]:
+    """WxH and sampling steps of a run's images, from the first image's sidecar."""
+    return _size_steps_of(imagegen.find_sidecar(Path(run["images"][0]["path"])) if run.get("images") else None)
+
+
 def _bake(comfy: imagegen.Comfy, out: Path, columns: list[tuple[str, list[tuple]]], free: bool,
-          interval: float) -> tuple[list[dict], list[dict]]:
+          interval: float, save=None) -> tuple[list[dict], list[dict]]:
     """Run the columns. columns: [(preset, [(column name, label, call or skip note, items), ...]), ...], one
     /free per preset. items: [(prompt #, text), ...]; call(n, text) -> a generate() run dict; a str instead of
     a call = skipped, with that note. label names the model and steps on the sheet ("FLUX.2 klein 4B · 16 steps").
+    save(results, images, done) is called after every column, so a long bake-off has a sheet to look at while
+    it runs, and one that is stopped (Ctrl-C) or crashes keeps what it got (not-run columns are listed as such).
     Returns (per-column results, sheet images in prompt-major order)."""
     results = []
     copied: dict[tuple[int, str], list[dict]] = {}  # (prompt #, column) -> image entries
-    for preset, cols in columns:
-        imagegen.log(f"== {preset}")
-        if free and any(callable(c[2]) for c in cols):
-            try:
-                _unload(comfy)
-            except Exception as e:
-                imagegen.log(f"   could not unload models first ({e}); load times may be off")
-        for name, label, call, items in cols:
-            res = {"preset": name, "label": label, "model": preset, "runs": [], "seconds": [], "error": None}
-            results.append(res)
-            if not callable(call):
-                res.update(note=call, images=0, peak={}, first_seconds=None, median_seconds=None)
-                imagegen.log(f"   {name}: skipped ({call})")
-                continue
-            sampler = Sampler(comfy, interval).start()
-            t0 = time.time()
-            try:
-                for n, text in items:
-                    run = call(n, text)
-                    res["runs"].append(run["run_dir"])
-                    if not res.get("size"):
-                        res["size"], res["steps"] = _size_steps(run)
-                    entries = copied.setdefault((n, name), [])
-                    for im in run["images"]:
-                        if im.get("seconds") is not None:  # one per job (a job may save several images)
-                            res["seconds"].append(im["seconds"])
-                        src = Path(im["path"])
-                        dest = out / f"{n:02d}-{name}-{src.name}"  # "klein+ref": + is fine in file names
-                        shutil.copy2(src, dest)
-                        if (side := src.with_suffix(".json")).is_file():
-                            shutil.copy2(side, dest.with_suffix(".json"))
-                        entries.append({"path": str(dest), "seed": im["seed"], "seconds": im.get("seconds"),
-                                        "timing": im.get("timing"), "tag": f"{label} · {n}"})  # timing: per stage
-                    if not (out / imagegen.SHEET_SOURCE).is_file() and \
-                            (s := Path(run["run_dir"]) / imagegen.SHEET_SOURCE).is_file():
-                        shutil.copy2(s, out / imagegen.SHEET_SOURCE)
-            except Exception as e:  # missing models, rejected graph, OOM: note it and try the next one
-                res["error"] = f"{type(e).__name__}: {e}"
-                imagegen.log(f"   {name} failed: {res['error']}")
-            res["total_seconds"] = round(time.time() - t0, 1)
-            res["peak"] = sampler.stop()
-            secs = res["seconds"]
-            res["first_seconds"] = secs[0] if secs else None  # includes loading the model (unless warm)
-            res["median_seconds"] = statistics.median(secs[1:]) if len(secs) > 1 else None
-            res["images"] = sum(len(v) for (_, c), v in copied.items() if c == name)
-    names = [r["preset"] for r in results]
     numbers = sorted({n for _, cols in columns for c in cols for n, _ in c[3]})
-    images = [e for n in numbers for c in names for e in copied.get((n, c), [])]
-    return results, images
+
+    def collect(pending_note: str | None = None) -> tuple[list[dict], list[dict]]:
+        ran = {r["preset"] for r in results}
+        rest = [{"preset": c[0], "label": c[1], "model": p, "runs": [], "seconds": [], "error": None,
+                 "note": pending_note, "images": 0, "peak": {}, "first_seconds": None, "median_seconds": None}
+                for p, cols in columns for c in cols if c[0] not in ran] if pending_note else []
+        res = results + rest
+        names = [r["preset"] for r in res]
+        return res, [e for n in numbers for c in names for e in copied.get((n, c), [])]
+
+    def checkpoint(note: str | None, done: bool = False) -> None:
+        if save is None:
+            return
+        try:
+            save(*collect(note), done)
+        except Exception as e:  # a sheet problem must not lose the bake-off
+            imagegen.log(f"   could not write the sheet so far ({type(e).__name__}: {e})")
+
+    res = None
+    try:
+        for preset, cols in columns:
+            imagegen.log(f"== {preset}")
+            if free and any(callable(c[2]) for c in cols):
+                try:
+                    _unload(comfy)
+                except Exception as e:
+                    imagegen.log(f"   could not unload models first ({e}); load times may be off")
+            for name, label, call, items in cols:
+                res = {"preset": name, "label": label, "model": preset, "runs": [], "seconds": [], "error": None}
+                results.append(res)
+                if not callable(call):
+                    res.update(note=call, images=0, peak={}, first_seconds=None, median_seconds=None)
+                    imagegen.log(f"   {name}: skipped ({call})")
+                    continue
+                sampler = Sampler(comfy, interval).start()
+                t0 = time.time()
+                try:
+                    for n, text in items:
+                        run = call(n, text)
+                        res["runs"].append(run["run_dir"])
+                        if not res.get("size"):
+                            res["size"], res["steps"] = _size_steps(run)
+                        entries = copied.setdefault((n, name), [])
+                        for im in run["images"]:
+                            if im.get("seconds") is not None:  # one per job (a job may save several images)
+                                res["seconds"].append(im["seconds"])
+                            src = Path(im["path"])
+                            dest = out / f"{n:02d}-{name}-{src.name}"  # "klein+ref": + is fine in file names
+                            shutil.copy2(src, dest)
+                            if (side := src.with_suffix(".json")).is_file():
+                                shutil.copy2(side, dest.with_suffix(".json"))
+                            entries.append({"path": str(dest), "seed": im["seed"], "seconds": im.get("seconds"),
+                                            "timing": im.get("timing"), "tag": f"{label} · {n}"})  # per stage
+                        if not (out / imagegen.SHEET_SOURCE).is_file() and \
+                                (s := Path(run["run_dir"]) / imagegen.SHEET_SOURCE).is_file():
+                            shutil.copy2(s, out / imagegen.SHEET_SOURCE)
+                except Exception as e:  # missing models, rejected graph, OOM: note it and try the next one
+                    res["error"] = f"{type(e).__name__}: {e}"
+                    imagegen.log(f"   {name} failed: {res['error']}")
+                finally:  # also on Ctrl-C: the numbers so far go on the sheet
+                    res["total_seconds"] = round(time.time() - t0, 1)
+                    res["peak"] = sampler.stop()
+                    secs = res["seconds"]
+                    res["first_seconds"] = secs[0] if secs else None  # includes loading the model (unless warm)
+                    res["median_seconds"] = statistics.median(secs[1:]) if len(secs) > 1 else None
+                    res["images"] = sum(len(v) for (_, c), v in copied.items() if c == name)
+                checkpoint("not run yet")
+    except BaseException as e:  # Ctrl-C (or a crash outside a column): keep a sheet of what ran
+        if res is not None and res.get("error") is None and "note" not in res and \
+                len(res["runs"]) < len(next(c[3] for _, cols in columns for c in cols if c[0] == res["preset"])):
+            res["error"] = "interrupted (Ctrl-C)" if isinstance(e, KeyboardInterrupt) else f"{type(e).__name__}: {e}"
+        checkpoint("not run (bake-off stopped)")
+        raise
+    return collect()
+
+
+STOPPED = " (so far: still running, or stopped)"  # a sheet written before the last column finished
 
 
 def _out_dir(conf: dict, label: str) -> Path:
@@ -268,14 +303,18 @@ def bakeoff(path: str, instructions: list[str], presets: list[str] | tuple[str, 
         return lambda n, text: imagegen.edit(str(src), text, count, preset, seed=base_seed,
                                              label=f"bakeoff-{preset}-{n}-{imagegen.slug(text, 20)}")
     items = list(enumerate(instructions, 1))
+
+    def build(results, images, done=True):
+        return {"preset": "bakeoff: " + " vs ".join(presets) + ("" if done else STOPPED),
+                "prompt": " | ".join(f"{n}. {i}" for n, i in enumerate(instructions, 1)),
+                "base_seed": base_seed, "count": len(images), "run_dir": str(out), "images": images,
+                "transparent": False, "source_image": str(src), "mask": None, "denoise": None, "edit": True,
+                "bakeoff": {"mode": "edit", "instructions": instructions, "count": count, "complete": done,
+                            "presets": results}}
     results, images = _bake(comfy, out, [(p, [(p, _label(conf["presets"][p], p), call(p), items)])
-                                         for p in presets], free, interval)
-    run = {"preset": "bakeoff: " + " vs ".join(presets),
-           "prompt": " | ".join(f"{n}. {i}" for n, i in enumerate(instructions, 1)),
-           "base_seed": base_seed, "count": len(images), "run_dir": str(out), "images": images,
-           "transparent": False, "source_image": str(src), "mask": None, "denoise": None, "edit": True,
-           "bakeoff": {"mode": "edit", "instructions": instructions, "count": count, "presets": results}}
-    return _finish(out, run)
+                                         for p in presets], free, interval,
+                            save=lambda r, i, done: _finish(out, build(r, i, done)))
+    return _finish(out, build(results, images))
 
 
 T2I_PRESETS = ("draft", "dreamshaper", "klein", "qwen")
@@ -407,18 +446,80 @@ def t2i_bakeoff(prompts: list[str] | None = None, presets: list[str] | tuple[str
             seen[c[1]] = seen.get(c[1], 0) + 1
     columns = [(p, [(c[0], f"{c[1]} ({c[0]})" if seen[c[1]] > 1 else c[1], *c[2:]) for c in cols])
                for p, cols in columns]
-    results, images = _bake(comfy, out, columns, free, interval)
-    labels = [r["label"] for r in results if "note" not in r]
+    labels = [c[1] for _, cols in columns for c in cols if callable(c[2])]
     listed = prompts + [f"with the ref: {t}" for t in ref_prompts]
-    run = {"preset": "bakeoff: " + " vs ".join(labels),
-           "prompt": " | ".join(f"{n}. {p}" for n, p in enumerate(listed, 1)),
-           "base_seed": base_seed, "count": len(images), "run_dir": str(out), "images": images,
-           "transparent": False, "source_image": str(src) if src else None, "mask": None, "denoise": None,
-           "edit": False,  # only the ref test is edits; the sheet names the ref from bakeoff.ref
-           "bakeoff": {"mode": "t2i", "instructions": listed, "count": count, "size": f"{w}x{h}",
-                       "ref": str(src) if src else None, "ref_suffix": REF_SUFFIX if src else None,
-                       "steps": steps,
-                       "presets": results}}
+
+    def build(results, images, done=True):
+        return {"preset": "bakeoff: " + " vs ".join(labels) + ("" if done else STOPPED),
+                "prompt": " | ".join(f"{n}. {p}" for n, p in enumerate(listed, 1)),
+                "base_seed": base_seed, "count": len(images), "run_dir": str(out), "images": images,
+                "transparent": False, "source_image": str(src) if src else None, "mask": None, "denoise": None,
+                "edit": False,  # only the ref test is edits; the sheet names the ref from bakeoff.ref
+                "bakeoff": {"mode": "t2i", "instructions": listed, "count": count, "size": f"{w}x{h}",
+                            "ref": str(src) if src else None, "ref_suffix": REF_SUFFIX if src else None,
+                            "steps": steps, "complete": done,
+                            "presets": results}}
+    results, images = _bake(comfy, out, columns, free, interval,
+                            save=lambda r, i, done: _finish(out, build(r, i, done)))
+    return _finish(out, build(results, images))
+
+
+_COPIED = re.compile(r"(\d+)-(.+)-(\d+-seed\d+(?:-\d+)?(?:-transparent)?\.png)")  # _bake's copies
+
+
+def recover(path: str) -> dict:
+    """Rebuild the sheet of a bake-off folder that has no run.json (stopped before this version wrote one
+    per column) from the copied images and their sidecars. Times come from the sidecars; memory peaks are
+    lost. Returns the run dict."""
+    out = imagegen.to_linux_path(path)
+    if not out.is_dir():
+        out = Path(imagegen.load_config()["output_dir"]).expanduser() / path
+    if not out.is_dir():
+        raise FileNotFoundError(f"no such folder: {path}")
+    pconf = imagegen.load_config()["presets"]
+    files = sorted((f for f in out.glob("*.png") if _COPIED.fullmatch(f.name)), key=lambda f: f.stat().st_mtime)
+    if not files:
+        raise FileNotFoundError(f"no bake-off images in {out}")
+    cols: dict[str, dict] = {}  # column name -> result, in the order they ran
+    texts: dict[int, str] = {}
+    entries: dict[tuple[int, str], list[dict]] = {}
+    src = None
+    edits = True
+    for f in files:
+        n, name, _ = _COPIED.fullmatch(f.name).groups()
+        n = int(n)
+        side = imagegen.find_sidecar(f) or {}
+        preset = side.get("preset", name)
+        prompt = side.get("prompt", "")
+        edits &= bool(side.get("edit"))
+        if prompt.endswith(REF_SUFFIX):
+            prompt = "with the ref: " + prompt.removesuffix(REF_SUFFIX)
+            src = src or side.get("source_image")
+        texts.setdefault(n, prompt)
+        size, steps = _size_steps_of(side)
+        res = cols.setdefault(name, {
+            "preset": name, "model": name.split("@")[0].removesuffix("+ref"), "runs": [], "seconds": [],
+            "error": None, "size": size, "steps": steps, "peak": {},
+            "label": _label(pconf.get(preset, {}), preset, steps, ref=name.endswith("+ref")),
+            "note": "rebuilt from the files: no memory numbers"})
+        if (secs := (side.get("timing") or {}).get("total_s")) is not None:
+            res["seconds"].append(secs)
+        entries.setdefault((n, name), []).append({"path": str(f), "seed": side.get("seed"), "seconds": secs,
+                                                  "timing": side.get("timing"), "tag": f"{res['label']} · {n}"})
+    for name, res in cols.items():
+        secs = res["seconds"]
+        res["images"] = sum(len(v) for (_, c), v in entries.items() if c == name)
+        res["first_seconds"] = secs[0] if secs else None
+        res["median_seconds"] = statistics.median(secs[1:]) if len(secs) > 1 else None
+    numbers = sorted(texts)
+    images = [e for n in numbers for c in cols for e in entries.get((n, c), [])]
+    mode = "edit" if edits and not any(c.endswith("+ref") for c in cols) else "t2i"
+    run = {"preset": "bakeoff: " + " vs ".join(r["label"] for r in cols.values()) + " (rebuilt)",
+           "prompt": " | ".join(f"{n}. {texts[n]}" for n in numbers),
+           "base_seed": images[0]["seed"], "count": len(images), "run_dir": str(out), "images": images,
+           "transparent": False, "source_image": src, "mask": None, "denoise": None, "edit": mode == "edit",
+           "bakeoff": {"mode": mode, "instructions": [texts[n] for n in numbers], "ref": src, "complete": False,
+                       "rebuilt": True, "presets": list(cols.values())}}
     return _finish(out, run)
 
 
@@ -481,7 +582,16 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--no-free", action="store_true", help="don't unload models between presets")
     ap.add_argument("--label", help="folder name instead of bakeoff-<image or prompt>")
     ap.add_argument("--open", action="store_true", help="open the contact sheet in the Windows browser")
+    ap.add_argument("--rebuild", metavar="FOLDER",
+                    help="only rebuild the sheet of a stopped bake-off folder from its images (no new runs)")
     a = ap.parse_args(argv)
+    if a.rebuild:
+        run = recover(a.rebuild)
+        print(table(run))
+        print(f"\ncontact sheet: {run['contact_sheet_windows'] or run['contact_sheet']}")
+        if a.open:
+            imagegen.open_in_windows(run["contact_sheet"])
+        return 0
     if not a.t2i and (a.ref or a.ref_prompts or a.size or a.steps):
         ap.error("--ref, --ref-prompt, --size and --steps go with --t2i")
     if a.t2i and bool(a.ref) != bool(a.ref_prompts):
