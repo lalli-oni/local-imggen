@@ -5,7 +5,4 @@
 --reserve-vram 2
 # Unload models after each job so VRAM goes back to Windows when idle. Costs a few seconds per run.
 --disable-smart-memory
-# Keep text encoders in fp8 (half the RAM/VRAM). #51: Qwen's 16 GB Qwen3-VL-8B text encoder pushed WSL into
-# swap and locked up Windows while a video played. Also applies to klein's and SDXL's text encoders.
---fp8_e4m3fn-text-enc
 # Not used: --lowvram (much slower). Try it only if the above isn't enough.
