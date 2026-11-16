@@ -64,7 +64,8 @@ class FakeComfy:
                        "diffusion_models": ["flux1-dev-kontext_fp8_scaled.safetensors",
                                             "flux-2-klein-4b-fp8.safetensors", "qwen_image_2.1_bf16.safetensors"],
                        "text_encoders": ["clip_l.safetensors", "t5xxl_fp8_e4m3fn_scaled.safetensors",
-                                         "qwen_3_4b.safetensors", "qwen3vl_8b_bf16.safetensors"],
+                                         "qwen_3_4b.safetensors", "qwen3vl_8b_bf16.safetensors",
+                                         "qwen3vl_8b_fp8_scaled.safetensors"],
                        "vae": ["ae.safetensors", "flux2-vae.safetensors", "qwen_image_2.1_vae_bf16.safetensors"],
                        "ipadapter": ["ip-adapter-plus_sdxl_vit-h.safetensors"],
                        "clip_vision": ["CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors"]}

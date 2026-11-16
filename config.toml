@@ -255,3 +255,21 @@ height = 1024
 resolution = 1024
 steps = 25
 cfg = 1.0
+
+# #51: the same model with the fp8 Qwen3-VL text encoder (10.6 GB instead of 16 GB), so it fits in WSL's RAM
+# without swapping (the bf16 one locked up Windows during a video). Becomes `qwen` if the bake-off shows no loss.
+[presets.qwen_lite]
+description = "Qwen-Image-2.1 with the fp8 text encoder (less RAM): text-to-image and edits"
+model = "Qwen-Image 2.1 (fp8 encoder)"
+workflow = "qwen_image_21_t2i.json"
+edit_workflow = "qwen_image_21_edit.json"
+download = "qwen3vl-8b-fp8.sh"
+unet = "qwen_image_2.1_bf16.safetensors"
+weight_dtype = "fp8_e4m3fn"
+text_encoder = "qwen3vl_8b_fp8_scaled.safetensors"
+vae = "qwen_image_2.1_vae_bf16.safetensors"
+width = 1024
+height = 1024
+resolution = 1024
+steps = 25
+cfg = 1.0

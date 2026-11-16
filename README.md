@@ -116,6 +116,7 @@ No GPU, ComfyUI or tulu needed: it uses a fake ComfyUI server and stubs. CI runs
 | ↳ Qwen3-4B encoder (`qwen_3_4b.safetensors`) | klein text encoder | same | `text_encoders` | 7.49 GB | with the unet: 10.7 GB VRAM peak, ~19 GB RAM (bake-off) | Apache 2.0 | 2025 | same script |
 | ↳ FLUX.2 VAE (`flux2-vae.safetensors`) | klein latent decode | same | `vae` | 0.32 GB | small | Apache 2.0 | Nov 2025 | same script |
 | **Qwen-Image-2.1** bf16, loaded as fp8 (`qwen_image_2.1_bf16.safetensors`) | Text-to-image + editing | `qwen` preset, `gen bakeoff` | `diffusion_models` | 13.25 GB | to measure | Qwen Research (non-commercial) | Sep 2026 | `models/qwen-image-2.1.sh` (opt-in, asks y/N) |
+| **Qwen3-VL-8B text encoder** fp8 (`qwen3vl_8b_fp8_scaled.safetensors`) | Qwen-Image's text encoder at half the size | `qwen_lite` preset (#51) | `text_encoders` | 10.6 GB | ~6 GB less RAM than bf16 | Apache 2.0 | | `models/qwen3vl-8b-fp8.sh` (opt-in, asks y/N) |
 | ↳ Qwen3-VL-8B encoder bf16 (`qwen3vl_8b_bf16.safetensors`) | Qwen text/image encoder | same | `text_encoders` | 16.33 GB | the RAM risk, to measure | Apache 2.0 | 2025 | same script |
 | ↳ Qwen-Image-2.1 VAE (`qwen_image_2.1_vae_bf16.safetensors`) | Qwen latent decode | same | `vae` | 0.64 GB | small | Qwen Research | Sep 2026 | same script |
 
