@@ -137,7 +137,8 @@ def run_stage(slug: str, stage: str | None = None, count: int | None = None, sou
         raise ValueError(f"{stage} needs an instruction: the one thing to fix")
     char = cur["character"] if cur else None
     all_used = projects.cast_versions(st)
-    kwargs = dict(preset=s["preset"], count=count, seed=seed, label=f"{slug}-v{proj['version']}-{stage}")
+    kwargs = dict(preset=s["preset"], count=count, seed=seed, label=f"{slug}-v{proj['version']}-{stage}",
+                  styles=[])  # the look is the project's own (snippets), like a project pass
     record = {"stage": stage, "text": text}
 
     if s["mode"] == "text":

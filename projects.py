@@ -232,7 +232,13 @@ def _apply(proj: dict, prompt: str | None = None, negative: str | None = None,
         if v is None or not str(v).strip():
             st["snippets"].pop(k, None)
         else:
-            st["snippets"][k] = str(v).strip()
+            text = str(v).strip()
+            if m := re.fullmatch(r"@([A-Za-z0-9_-]+)", text):
+                # a copy of [styles.NAME]'s prompt text (not its negative), so the project versions its look (#10)
+                text = imagegen.style_text([m.group(1)])
+                if not text:
+                    raise ValueError(f"style '{m.group(1)}' has no prompt text (suffix)")
+            st["snippets"][k] = text
     for k in drop_snippets or []:
         if k not in st["snippets"]:
             raise ValueError(f"no snippet '{k}'")
@@ -387,7 +393,7 @@ def run_pass(slug: str, count: int = 4, extra: str | None = None, seed: int | No
     p = st["params"]
     kwargs = dict(prompt=prompt, preset=st["preset"], count=count, seed=seed, negative=st["negative"],
                   width=p.get("width"), height=p.get("height"), steps=p.get("steps"), cfg=p.get("cfg"),
-                  label=f"{slug}-v{v}")
+                  label=f"{slug}-v{v}", styles=[])  # the look is the project's own (snippets), not the preset's
     if ref is not None:
         kwargs.update(source_image=str(_ref_path(slug, st, ref)),
                       denoise=strength if strength is not None else p.get("strength"))
@@ -406,7 +412,7 @@ def record_pass(slug: str, run: dict, version: int, used: dict, author: str = "h
            **{k: info[k] for k in ("ref", "stage", "source") if k in info}}
     for im in run["images"]:
         img = Path(im["path"])
-        for f in (img.with_suffix(".json"), img.with_name(img.stem.removesuffix("-transparent") + ".json")):
+        for f in imagegen.sidecar_paths(img):
             if f.is_file():
                 _tag_json(f, tag)
                 break
@@ -721,7 +727,8 @@ def _state_args(ap) -> None:
     ap.add_argument("--param", action="append", metavar="K=V",
                     help=f"one of {', '.join(PARAM_KEYS)}; K= removes it (repeatable)")
     ap.add_argument("--snippet", action="append", metavar="NAME=TEXT",
-                    help="named prompt fragment, appended in order; NAME= removes it (repeatable)")
+                    help="named prompt fragment, appended in order; NAME= removes it; NAME=@STYLE copies a "
+                         "[styles.STYLE] look's prompt text, e.g. style=@synthwave (repeatable)")
     ap.add_argument("--palette", help="comma-separated hex colours, replaces the palette")
     ap.add_argument("--ref", action="append", metavar="NAME=PATH",
                     help="add or replace a reference image (repeatable)")

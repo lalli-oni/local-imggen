@@ -27,6 +27,7 @@ suffix = ""
 # The SDXL versions are wallpaper_sdxl / wallpaper_ultrawide_sdxl (fast, and they have gen vary graphs).
 [presets.wallpaper]
 description = "16:9 landscape, upscaled to 4K (3840x2160) (Qwen-Image 2.1)"
+styles = ["synthwave"]           # the house look ([styles] below); gen --style none for a plain one
 model = "Qwen-Image 2.1"
 workflow = "qwen_image_21_upscale.json"
 download = "qwen-image-2.1.sh"
@@ -46,6 +47,7 @@ suffix = ", wallpaper, wide landscape composition, highly detailed"
 
 [presets.wallpaper_ultrawide]
 description = "21:9 ultrawide, upscaled to 3440x1440 (Qwen-Image 2.1)"
+styles = ["synthwave"]           # the house look ([styles] below); gen --style none for a plain one
 model = "Qwen-Image 2.1"
 workflow = "qwen_image_21_upscale.json"
 download = "qwen-image-2.1.sh"
@@ -65,6 +67,7 @@ suffix = ", ultrawide panoramic wallpaper, highly detailed"
 
 [presets.wallpaper_sdxl]
 description = "16:9 landscape, upscaled to 4K (3840x2160) (SDXL: fast)"
+styles = ["synthwave"]           # the house look ([styles] below); gen --style none for a plain one
 model = "SDXL base 1.0"
 workflow = "sdxl_upscale.json"
 img2img_workflow = "sdxl_img2img_upscale.json"
@@ -80,6 +83,7 @@ suffix = ", wallpaper, wide landscape composition, highly detailed"
 
 [presets.wallpaper_ultrawide_sdxl]
 description = "21:9 ultrawide, upscaled to 3440x1440 (SDXL: fast)"
+styles = ["synthwave"]           # the house look ([styles] below); gen --style none for a plain one
 model = "SDXL base 1.0"
 workflow = "sdxl_upscale.json"
 img2img_workflow = "sdxl_img2img_upscale.json"
@@ -107,6 +111,39 @@ negative_extra = ", busy background, multiple objects, photo, text, letters, fra
 # quarter of its size). trim: crop to the subject, centre it on a square (the canvas's shorter side).
 post = ["remove_bg", "keep_largest", "trim"]
 
+# Styles (#10): a named look, added to the prompt after the preset's suffix. A preset's `styles` are its
+# default; `gen "..." --style NAME` (repeatable, or --style none) replaces them, `gen styles` lists them.
+# Projects copy one into a snippet (gen project set SLUG --snippet style=@synthwave), so a later change here
+# doesn't silently change a project. Qwen runs at cfg 1, so negative_extra only reaches the SDXL presets.
+[styles.synthwave]
+description = "The house look: synthwave/vaporwave magical realism, realistic yet outrageous and funny"
+suffix = "synthwave vaporwave magical realism, a detailed realistic digital painting of an outrageous, over-the-top and funny scene, like a still from an 80s action movie, set in the 1980s, indoor rooms with 80s interiors like shag pile carpet, wood-panelled walls, waterbeds and rattan furniture, glowing pink, magenta and cyan neon accents from signs and lamps, retro 80s sunset colours, chrome and wet reflective surfaces, several funny sight gags spread through the scene with room to breathe between them, cinematic lighting, rich saturated colours"
+negative_extra = "flat cartoon, childish storybook, washed out colours, dull grey lighting"
+
+# Þór's first direction to explore (2026-11-17): 80s/90s digital artefacts as a playful mood, a digital world
+# where anything is possible. The screen look itself (scanlines, softness, colour bleed, warmth) is the crt post
+# step below, not the prompt: Qwen drew thin, crisp lines and random RGB glitch blocks when asked for them.
+# Mix it in: gen "..." --style synthwave,retro_digital ([daily] uses both).
+[styles.retro_digital]
+description = "80s/90s digital world: pixel-art screens, chrome, and the crt post step (soft scanlines, VHS warmth)"
+suffix = "a playful 80s and 90s digital world where anything is possible, chunky pixel-art graphics on screens and signs, shiny chrome, a clean image"
+post = ["crt"]                # a style's post steps run after the preset's
+
+# The crt post step (gen crt IMAGE... tries other values on finished images, without generating again).
+# Sizes are for a 1080-line image and scale with it (a 4K wallpaper gets twice the px).
+[crt]
+lines = 360        # scanlines over the image height (fewer = thicker, further apart; old TVs had ~480)
+scanline = 0.22    # how dark the gaps between lines get, 0-1 (0 = no lines)
+blur = 0.6         # softness in px
+bleed = 1.0        # red/blue colour fringes sideways in px, like VHS
+glow = 0.2         # bright parts bloom into their surroundings, 0-1
+warmth = 0.04      # a bit more red, less blue, 0-0.2
+vignette = 0.18    # darker corners, 0-1
+
+[styles.storybook]
+description = "The old daily look: cosy, soft, whimsical"
+suffix = "cosy whimsical storybook scene, soft light"
+
 # gen daily (#3): one new wallpaper a day, set as the desktop background (old ones stay in output_dir).
 # Schedule it: windows/daily-task.sh on [--at 06:00]. Preview a day: gen daily --show [--date 2026-12-24].
 # Log: <output_dir>/daily.log. Themes are picked at random from the ones not used recently.
@@ -115,28 +152,61 @@ preset = "wallpaper_ref"      # Qwen + the cast's ref image (on-model); "wallpap
 ref = ""                      # CHARACTER:REF, or an image path (relative = under output_dir); "" = first cast character's first ref
 # With a ref, the prompt is this ({scene} = theme + style, {name} = the cast character); the cast descriptions
 # are left out (they ask for a plain white background, so the model copied the ref as-is).
-ref_prompt = "A wide, finished wallpaper image that fills the whole frame: {scene}. Any signs have short English text. Detailed background, scenery and lighting everywhere, no white or empty background, no border. The character from the reference image appears exactly once, as {name}, in a new pose that fits the scene, with the same design and colours and its short rounded tail. No other characters."
+# The character is part of the action (#52: blended into the scene, not posing in the middle). Other creatures
+# are fine (crab armies, flamingo guards), as long as they don't look like a second copy of the character.
+ref_prompt = "A wide, finished wallpaper image that fills the whole frame: {scene}. The only text in the image is the sign text named in the scene, spelled exactly as given; no other signs, labels or writing. Detailed background, scenery and lighting everywhere, no white or empty background, no border. The character from the reference image appears exactly once, as {name}: busy with the action as part of the scene, not posing in the centre, lit like the rest of the scene, in a new pose, with the same design and colours and its short rounded tail. Any other creatures look clearly different from {name}."
 count = 1                     # images per day; the first one becomes the wallpaper
 no_repeat_days = 7            # at least this many days between two uses of a theme (past daily runs)
 cast = ["tulu"]               # characters (gen char) in every daily; their descriptions lead the prompt
-style = "synthwave vaporwave magical realism, detailed and realistic yet outrageous, extravagant and funny, glowing neon pink and cyan, retro 80s sunset colours, cinematic lighting"
+style = "synthwave, retro_digital"  # [styles] names, or a phrase of literal text; "" = the preset's styles
+# Missions, absurd set pieces and a punny sign each. Give a sign's exact text in quotes (Qwen writes gibberish
+# on signs it makes up), and ref_prompt asks for no other text. The house style is outrageous and funny.
 themes = [
-  "relaxing in a tide pool at sunset, wide rocky coastline",
-  "reading a book in a cosy window nook on a rainy day",
-  "floating among glowing jellyfish in the deep blue sea",
-  "sipping tea on a mossy rock in a misty pine forest",
-  "stargazing on a grassy hill under the northern lights",
-  "surfing a small wave on a sunny tropical beach",
-  "napping on a lighthouse balcony at dawn",
-  "exploring a sunken ship full of treasure",
-  "building a sandcastle shaped like a sunken city",
-  "tending a tiny coral garden on the sea floor",
-  "watching puffins on a grassy sea cliff in Iceland",
-  "soaking in a steaming hot spring among Icelandic lava fields",
-  "cycling past the colourful old houses of Nyhavn in Copenhagen",
-  "riding a yellow Lisbon tram past blue azulejo-tiled houses",
-  "gazing at Angel Falls from a misty tepui in Venezuela",
+  "on a midnight heist in a neon casino vault, dodging pink laser beams while flamingo guards snooze, a neon sign reads 'SQUID PRO QUO'",
+  "racing a chrome speedboat through a flooded neon Miami at sunset, chased by a giant inflatable rubber duck, a billboard reads 'TIDE WAITS FOR NO ONE'",
+  "running a taco truck on the moon for a long queue of astronauts, Earth rising behind, a neon sign reads 'OUT OF THIS WORLD TACOS'",
+  "teaching a sold-out aerobics class to retired sea monsters in leg warmers and headbands, a neon sign reads 'TENTACLE TONE-UP'",
+  "defending a shopping mall food court from an army of wind-up toy crabs with a leaf blower, a sign reads 'NO REFUNDS, ONLY CRABS'",
+  "singing a power ballad at a karaoke bar inside a submarine, a disco ball and bubbles everywhere, a neon sign reads 'CALAMARI KARAOKE, NO CALAMARI SERVED'",
+  "cruising a palm-lined boulevard at sunset in a lowrider shaped like a giant sardine tin, a billboard reads 'CAN'T STOP, WON'T STOP'",
+  "washing a seaweed-covered stretch limo at a neon car wash, a sign reads 'ELDRITCH CAR WASH, WE CLEAN THE UNSPEAKABLE'",
+  "selling a haunted sunken mansion as an over-eager estate agent with a clipboard, a sign reads 'DEEP ONE REAL ESTATE, DEEP DISCOUNTS'",
+  "snowboarding down an Icelandic glacier chased by puffins on jet skis, neon northern lights in the sky, a hut sign reads 'NO PUFFIN ALLOWED'",
+  "floating on a neon pool flamingo in a steaming Icelandic hot spring while a volcano erupts fireworks behind, a sign reads 'HOT TUB, HOTTER LAVA'",
+  "driving a yellow Lisbon tram rebuilt as a hot rod down a steep street, glowing azulejo tiles, a tram sign reads 'NEXT STOP: VICTORY'",
+  "steering a Viking longship with neon sails through Nyhavn in Copenhagen, the colourful houses lit like an arcade, a banner reads 'HYGGE OR DIE TRYING'",
+  "paragliding past Angel Falls in Venezuela on a giant inflatable flamingo, misty tepuis glowing at sunset, a sign reads 'FALL IN LOVE'",
+  "arm-wrestling an octopus at an underwater championship, a crowd of fish waving neon foam fingers, a banner reads 'EIGHT ARMS, NO MERCY'",
+  "DJing a beach rave for dancing jellyfish from a booth built out of old arcade cabinets, a neon sign reads 'SEA YOU ON THE DANCE FLOOR'",
+  "escaping a laser-grid museum with the world's largest pearl while lobster security guards blow whistles, a sign reads 'PLEASE DO NOT TOUCH THE EXHIBITS'",
+  "walking away in slow motion with sunglasses on from a huge fireworks explosion at a sushi bar, a sign reads 'SUSHI? NEVER HEARD OF HER'",
+  "fixing a giant retro robot in a neon garage while it sips motor oil from a milkshake glass, a sign reads 'OIL BE BACK'",
+  "captaining a pirate submarine shaped like a rubber duck through a neon coral reef, a glowing treasure map on the dashboard, a sign reads 'DUCK AND COVER'",
+  "riding a mechanical bull in a cowboy hat at a neon rodeo for sea creatures, a sign reads 'HOLD YOUR SEAHORSES'",
+  "running a fancy hair salon for sea monsters, a kraken in curlers under a chrome hair dryer, a neon sign reads 'CURL UP AND DYE'",
+  "bowling with a giant pearl in a cosmic bowling alley on a space station, Earth glowing outside the window, a sign reads 'STRIKE FROM THE DEEP'",
+  "delivering pizza on roller skates through a rainy neon city, pizza boxes stacked to the sky, a sign reads 'HOT IN 30 TENTACLES OR LESS'",
 ]
+
+# 80s/90s items: each day props_per_day of them, from as many different categories, are added to the theme
+# (", with a boombox and a DeLorean in the scene"). The date picks them, like the theme. Add freely.
+props_per_day = 3
+[daily.props]
+tech = ["a big chrome boombox", "a yellow Walkman with orange foam headphones", "a stack of VHS tapes",
+        "a glowing CRT television", "an arcade cabinet", "a beige home computer with a floppy drive",
+        "a brick-sized early mobile phone", "a grey brick-shaped handheld game console", "a Rubik's cube",
+        "a wall of cassette tapes", "a pocket calculator watch", "a dot-matrix printer spitting paper"]
+wearables = ["a light-up visor", "LED-lit high-top sneakers", "a chrome power glove", "a shiny holographic jacket",
+             "a chunky wrist computer", "mirrored aviator sunglasses", "neon leg warmers", "a jetpack made of chrome tubes",
+             "a cyber headset with a tiny screen over one eye"]
+vehicles = ["a silver DeLorean with gull-wing doors open", "a white Lamborghini Countach", "a red Ferrari Testarossa",
+            "a black talking 80s sports car with a red scanner light", "a hoverboard", "a BMX bike with neon spokes",
+            "a wood-panelled station wagon"]
+scifi = ["a robot butler with a tray", "a flickering blue hologram", "a chrome laser pistol",
+         "a flying saucer-shaped lamp", "a giant computer with blinking lights and tape reels", "a teleporter booth"]
+setting = ["a glowing wireframe grid floor stretching to the horizon", "palm trees", "Memphis-pattern walls in pastel squiggles",
+           "a lava lamp", "a mall fountain with pennies", "a checkerboard floor", "a mirror ball", "a pink flamingo lawn ornament",
+           "a heart-shaped waterbed", "a shag pile carpet", "wood-panelled walls"]
 
 # Optional: replaces `themes` on a day. The most specific entry wins: "YYYY-MM-DD", "MM-DD", month, weekday.
 # Movable feasts (Easter-based, Þorri) change date every year: add them as "YYYY-MM-DD", one year at a time.
@@ -166,11 +236,13 @@ themes = [
 "2027-02-08" = ["handing out cream buns on Icelandic Bolludagur", "dancing in the Carnaval parade of El Callao, Venezuela"]
 
 [daily.months]
-oct = ["carving a jack-o'-lantern in a pumpkin patch at dusk", "trick-or-treating through a foggy harbour town",
-       "brewing a bubbling potion in a candlelit sea cave"]
-dec = ["sledding down a snowy hill under twinkling lights", "decorating a kelp tree with glowing ornaments",
-       "drinking hot cocoa by a fireplace on a snowy night",
-       "meeting the Icelandic Yule Lads on a snowy turf-roofed farm"]
+oct = ["trick-or-treating through a neon harbour town dressed as a tiny lighthouse, glowing jack-o'-lanterns everywhere, a sign reads 'TRICK OR EAT'",
+       "brewing a bubbling neon potion in a sea-cave laboratory full of chrome gadgets, a sign reads 'POTION COMMOTION'",
+       "carving a giant jack-o'-lantern with a laser in a pumpkin patch at sunset, a sign reads 'GOURD TIMES'"]
+dec = ["sledding down a snowy hill on a chrome surfboard under neon Christmas lights, a sign reads 'SLEIGH ALL DAY'",
+       "decorating a kelp tree at an underwater neon Christmas market, a sign reads 'MERRY FISHMAS'",
+       "drinking a towering hot cocoa in an 80s ski lodge with neon wood panelling and a roaring fireplace, a sign reads 'COCOA LOCO'",
+       "catching the Icelandic Yule Lads stealing sausages on a neon-lit turf-roofed farm in the snow, a sign reads 'YULE BE SORRY'"]
 
 [daily.weekdays]
 # fri = "partying in a neon-lit underwater disco"
@@ -265,6 +337,7 @@ steps = 4
 # By hand: gen edit REF.png "lil tulu reading in a rainy window nook, only one character" -p wallpaper_ref
 [presets.wallpaper_ref]
 description = "16:9 wallpaper (4K) of the character in a ref image (Qwen-Image 2.1): gen edit REF \"scene\" -p wallpaper_ref"
+styles = ["synthwave"]           # the house look ([styles] below); gen --style none for a plain one
 model = "Qwen-Image 2.1"
 edit_workflow = "qwen_image_21_ref_upscale.json"
 download = "qwen-image-2.1.sh"
@@ -285,6 +358,7 @@ target_height = 2160
 # The daily wallpaper before #51: klein draws the ref's character (~20 s, but less polished than Qwen).
 [presets.wallpaper_ref_klein]
 description = "16:9 wallpaper (4K) of the character in a ref image (FLUX.2 klein: fast): gen edit REF \"scene\" -p wallpaper_ref_klein"
+styles = ["synthwave"]           # the house look ([styles] below); gen --style none for a plain one
 model = "FLUX.2 klein 4B"
 edit_workflow = "flux2_klein_ref_upscale.json"
 download = "flux2-klein.sh"

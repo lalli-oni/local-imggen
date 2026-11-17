@@ -19,13 +19,13 @@ TULU = "chibi green cthulhu, amber eyes"
 
 @pytest.fixture
 def daily_conf(monkeypatch):
-    """Override [daily] keys for a test: daily_conf(themes=[...], cast=[]) etc. No dates unless given."""
+    """Override [daily] keys for a test: daily_conf(themes=[...], cast=[]) etc. No dates or props unless given."""
     real = imagegen.load_config
 
     def set_(**kw):
         def load():
             conf = real()
-            conf["daily"] = {**conf.get("daily", {}), "dates": {}, **kw}
+            conf["daily"] = {**conf.get("daily", {}), "dates": {}, "props_per_day": 0, **kw}
             return conf
         monkeypatch.setattr(imagegen, "load_config", load)
     return set_
@@ -250,7 +250,9 @@ def test_default_preset_draws_from_the_cast_ref(tulu, comfy, on_c_drive, stub_ca
     assert (_node(wf, "ImageScale")["width"], _node(wf, "ImageScale")["height"]) == (3840, 2160)
     text = _node(wf, "TextEncodeQwenImage21")["prompt"]
     assert text.startswith("A wide, finished wallpaper image that fills the whole frame: ")
-    assert "as lil tulu, in a new pose" in text and "no white or empty background" in text
+    assert "as lil tulu: busy with the action" in text and "no white or empty background" in text
+    synth = imagegen.style_text(["synthwave"])
+    assert text.count(synth) == 1  # [daily] style = synthwave, and generate() adds the preset's no second time
     assert TULU not in text  # the text description (plain background, standing...) would make it copy the ref
     [run] = imagegen.recent_runs(1)
     meta = json.loads((Path(run["run_dir"]) / "run.json").read_text())
@@ -261,8 +263,8 @@ def test_default_preset_draws_from_the_cast_ref(tulu, comfy, on_c_drive, stub_ca
 def test_ref_prompt_template(tulu, daily_conf):
     daily_conf(themes=["on a beach"], months={}, weekdays={}, style="soft light", ref_prompt="{name} is here")
     assert daily.plan(date(2026, 11, 12))["prompt"] == "on a beach, soft light. lil tulu is here"
-    daily_conf(themes=["on a beach"], months={}, weekdays={}, style="", ref_prompt="")
-    assert daily.plan(date(2026, 11, 12))["prompt"] == "on a beach"
+    daily_conf(themes=["on a beach"], months={}, weekdays={}, style="none-such text", ref_prompt="")
+    assert daily.plan(date(2026, 11, 12))["prompt"] == "on a beach, none-such text"
     daily_conf(ref_prompt="{oops}")
     with pytest.raises(ValueError, match="only {scene} and {name}"):
         daily.plan(date(2026, 11, 12))
