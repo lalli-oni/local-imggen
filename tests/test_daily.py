@@ -167,7 +167,7 @@ def test_show(tulu, capsys):
     assert imagegen.main(["daily", "--show", "--date", "2026-12-24"]) == 0
     out = capsys.readouterr().out
     assert out.startswith("2026-12-24: ") and "(from dates.12-24)" in out and "tulu v1" in out
-    assert "prompt:  A wide, finished wallpaper image" in out and "ref:     " in out
+    assert "scene:   A wide, finished wallpaper image" in out and "ref:     " in out
 
 
 # ---------------------------------------------------------------- runs
@@ -233,8 +233,96 @@ def _node(wf, cls):
     return next(n["inputs"] for n in wf.values() if n["class_type"] == cls)
 
 
-def test_default_preset_draws_from_the_cast_ref(tulu, comfy, on_c_drive, stub_calls, out_dir):
-    assert daily.settings()["preset"] == "wallpaper_ref"
+def test_default_preset_puts_the_cast_into_a_scene(tulu, comfy, on_c_drive, stub_calls, out_dir):
+    """#52: the scene from text with a stand-in, then a Qwen edit replaces it with tulu from her ref."""
+    assert daily.settings()["preset"] == "wallpaper_cast"
+    assert imagegen.main(["daily", "--wait", "5"]) == 0
+    [wf] = comfy.workflows()
+    scene_enc, cast_enc = (n["inputs"] for n in wf.values() if n["class_type"] == "TextEncodeQwenImage21")
+    scene = scene_enc["prompt"]
+    assert scene.startswith("A wide, finished wallpaper image that fills the whole frame: a small cute cartoon "
+                            "creature, ") and "no white or empty background" in scene
+    assert scene.count(imagegen.style_text(["synthwave"])) == 1  # named styles: from generate(), once
+    assert imagegen.style_text(["retro_digital"]) in scene
+    assert TULU not in scene and "tulu" not in scene  # the scene only has the stand-in
+    cast = cast_enc["prompt"]
+    assert cast.startswith("Replace the small cute cartoon creature in image 1 with lil tulu, the character from "
+                           "image 2.") and "Keep everything else in image 1" in cast
+    scene_img = wf[cast_enc["images.image_1"][0]]  # image 1 = the scene pass's decoded image
+    assert scene_img["class_type"] == "VAEDecode"
+    assert wf[wf[scene_img["inputs"]["samples"][0]]["inputs"]["latent_image"][0]]["class_type"] == "EmptyLatentImage"
+    loader = cast_enc["images.image_2"][0]
+    up = wf[loader]["inputs"]["image"]
+    assert up in comfy.uploads
+    from PIL import Image
+    assert Image.open(io.BytesIO(comfy.uploads[up])).size == imagegen.kontext_size(600, 800)  # the ref, as is
+    assert (_node(wf, "ImageScale")["width"], _node(wf, "ImageScale")["height"]) == (3840, 2160)
+    [run] = imagegen.recent_runs(1)
+    rd = Path(run["run_dir"])
+    meta = json.loads((rd / "run.json").read_text())
+    assert meta["daily"]["refs"][0].endswith("refs/v1-v1.png") and meta["daily"]["cast"] == {"tulu": 1}
+    assert meta["refs"][0]["file"] == "ref-1.png" and (rd / "ref-1.png").is_file()
+    [im] = meta["images"]
+    assert Path(im["scene"]).name.endswith("-scene.png") and Path(im["scene"]).is_file()
+    assert _wallpaper_calls(stub_calls)[0].count("-scene") == 0  # the wallpaper is the cast image, not the scene
+    assert len(_wallpaper_calls(stub_calls)) == 1
+
+
+def test_cast_with_two_characters(tulu, comfy, daily_conf, make_image, out_dir):
+    characters.new("mitts", "Mitts the cat", description="orange cat", refs={"a": str(make_image("cat.png"))})
+    daily_conf(cast=["tulu", "mitts"], themes=["on a beach"], months={}, weekdays={})
+    p = daily.plan(date(2026, 11, 12))
+    assert [Path(r).name for r in p["refs"]] == ["v1-v1.png", "a-v1.png"]
+    assert "a small cute cartoon creature on the left, another one on the right, on a beach" in p["prompt"]
+    assert ("Replace the small cute cartoon creature on the left in image 1 with lil tulu, the character from image 2. "
+            "Replace the small cute cartoon creature on the right in image 1 with Mitts the cat, the character from "
+            "image 3.") in p["cast_prompt"]
+    assert p["cast"] == {"tulu": 1, "mitts": 1}
+    run = imagegen.generate(p["prompt"], p["preset"], refs=p["refs"], cast_prompt=p["cast_prompt"])
+    [wf] = comfy.workflows()
+    cast_enc = [n["inputs"] for n in wf.values() if n["class_type"] == "TextEncodeQwenImage21"][1]
+    loaders = [cast_enc["images.image_2"][0], cast_enc["images.image_3"][0]]
+    assert len(set(loaders)) == 2 and "images.image_4" not in cast_enc
+    assert all(wf[ld]["inputs"]["image"] in comfy.uploads for ld in loaders)
+    assert len(comfy.uploads) == 2 and len(run["images"]) == 1
+
+
+def test_cast_prompt_templates(tulu, daily_conf):
+    daily_conf(themes=["on a beach"], months={}, weekdays={}, stand_in="", style="soft light")
+    p = daily.plan(date(2026, 11, 12))
+    assert "nobody in it yet, on a beach, soft light" in p["prompt"]
+    assert p["cast_prompt"].startswith("Add lil tulu, the character from image 2, into the scene from image 1")
+    daily_conf(themes=["on a beach"], months={}, weekdays={}, scene_prompt="{scene} with {stand_ins}",
+               cast_prompt="{replace} ({scene})", style="")
+    p = daily.plan(date(2026, 11, 12))
+    assert p["prompt"] == "on a beach with a small cute cartoon creature"
+    assert p["cast_prompt"].endswith("image 2. (on a beach)")
+    daily_conf(cast_prompt="{name}")
+    with pytest.raises(ValueError, match=r"cast_prompt: only \{replace\}, \{scene\}"):
+        daily.plan(date(2026, 11, 12))
+
+
+def test_cast_refs_from_config(tulu, daily_conf, make_image, out_dir):
+    other = make_image("other.png")
+    daily_conf(ref=["tulu:v1", str(other)])
+    p = daily.plan(date(2026, 11, 12))
+    assert p["refs"][1] == str(other) and "with the character, the character from image 3" in p["cast_prompt"]
+    daily_conf(ref=["tulu:v1", str(other)], preset="wallpaper_ref")
+    with pytest.raises(ValueError, match="takes one ref image, not 2"):
+        daily.plan(date(2026, 11, 12))
+    daily_conf(ref="", cast=[])
+    with pytest.raises(ValueError, match="needs the cast's ref images"):
+        daily.plan(date(2026, 11, 12))
+
+
+def test_show_prints_scene_and_cast(tulu, capsys):
+    assert imagegen.main(["daily", "--show", "--date", "2026-11-12"]) == 0
+    out = capsys.readouterr().out
+    assert "scene:   A wide, finished" in out and "then:    Replace the small" in out and "ref:     " in out
+
+
+def test_ref_preset_draws_from_the_cast_ref(tulu, comfy, on_c_drive, stub_calls, out_dir, daily_conf):
+    daily_conf(preset="wallpaper_ref")
     assert imagegen.main(["daily", "--wait", "5"]) == 0
     [wf] = comfy.workflows()
     assert _node(wf, "LoadImage")["image"] in comfy.uploads  # the ref went up as the reference
@@ -261,37 +349,37 @@ def test_default_preset_draws_from_the_cast_ref(tulu, comfy, on_c_drive, stub_ca
 
 
 def test_ref_prompt_template(tulu, daily_conf):
-    daily_conf(themes=["on a beach"], months={}, weekdays={}, style="soft light", ref_prompt="{name} is here")
+    daily_conf(preset="wallpaper_ref", themes=["on a beach"], months={}, weekdays={}, style="soft light", ref_prompt="{name} is here")
     assert daily.plan(date(2026, 11, 12))["prompt"] == "on a beach, soft light. lil tulu is here"
-    daily_conf(themes=["on a beach"], months={}, weekdays={}, style="none-such text", ref_prompt="")
+    daily_conf(preset="wallpaper_ref", themes=["on a beach"], months={}, weekdays={}, style="none-such text", ref_prompt="")
     assert daily.plan(date(2026, 11, 12))["prompt"] == "on a beach, none-such text"
-    daily_conf(ref_prompt="{oops}")
+    daily_conf(preset="wallpaper_ref", ref_prompt="{oops}")
     with pytest.raises(ValueError, match="only {scene} and {name}"):
         daily.plan(date(2026, 11, 12))
 
 
-def test_ref_choices(tulu, daily_conf, make_image):
-    daily_conf(ref="tulu:v1")
+def test_ref_choices(tulu, daily_conf, make_image):  # wallpaper_ref: one ref
+    daily_conf(preset="wallpaper_ref", ref="tulu:v1")
     assert daily.plan(date(2026, 11, 12))["ref"].endswith("refs/v1-v1.png")
     other = make_image("other.png")
-    daily_conf(ref=str(other))
+    daily_conf(preset="wallpaper_ref", ref=str(other))
     assert daily.plan(date(2026, 11, 12))["ref"] == str(other)
-    daily_conf(ref="tulu:nope")
+    daily_conf(preset="wallpaper_ref", ref="tulu:nope")
     with pytest.raises(ValueError, match="no ref 'nope'"):
         daily.plan(date(2026, 11, 12))
     (imagegen.Path(imagegen.load_config()["output_dir"]) / "r").mkdir(parents=True)
     (imagegen.Path(imagegen.load_config()["output_dir"]) / "r" / "a:b.png").write_bytes(other.read_bytes())
-    daily_conf(ref="r/a:b.png")  # a relative path with a colon is a file under output_dir, not CHAR:REF
+    daily_conf(preset="wallpaper_ref", ref="r/a:b.png")  # a relative path with a colon is a file under output_dir, not CHAR:REF
     assert daily.plan(date(2026, 11, 12))["ref"].endswith("/r/a:b.png")
     daily_conf(ref="tulu:v1", preset="wallpaper")
     with pytest.raises(ValueError, match="can't use a ref"):
         daily.plan(date(2026, 11, 12))
     daily_conf(ref="tulu:v1", preset="klein")  # does both: a ref makes it draw from the ref
     assert daily.plan(date(2026, 11, 12))["ref"].endswith("refs/v1-v1.png")
-    daily_conf(ref="/no/such.png")
+    daily_conf(preset="wallpaper_ref", ref="/no/such.png")
     with pytest.raises(FileNotFoundError):
         daily.plan(date(2026, 11, 12))
-    daily_conf(ref="", cast=[])
+    daily_conf(preset="wallpaper_ref", ref="", cast=[])
     with pytest.raises(ValueError, match="needs a reference image"):
         daily.plan(date(2026, 11, 12))
 

@@ -173,3 +173,17 @@ def test_bakeoff_sheet_shows_tags_and_numbers(make_run, open_sheet):
     assert caps[0].startswith("kontext · 1") and "81.5s" in caps[0] and caps[1].startswith("klein · 1")
     assert "steps" not in page.locator("#meta").inner_text()  # presets differ: no shared params
     assert not errors, errors
+
+
+def test_cast_run_shows_refs_and_scene_compare(comfy, make_image, open_sheet):
+    """#52: ref cards and each image's scene come first; "vs scene" compares an image with its own scene."""
+    run = imagegen.generate("a beach", "wallpaper_cast", count=2, refs=[str(make_image("tulu.png"))])
+    page, errors = open_sheet(run)
+    figs = page.locator("#grid figure")
+    assert figs.count() == 5 and figs.locator("figcaption b").all_inner_texts()[:3] == [
+        "ref 1 · tulu.png", f"scene · seed {run['base_seed']}", f"scene · seed {run['base_seed'] + 1}"]
+    assert "cast " in page.locator("#meta").inner_text()
+    figs.nth(4).get_by_role("button", name="vs scene").click()
+    assert page.locator("#view-title").inner_text().count("scene · seed") == 1
+    assert page.locator("#stage img").count() == 2
+    assert not errors, errors

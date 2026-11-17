@@ -1,7 +1,8 @@
 """gen daily (#3): make one new wallpaper and set it as the Windows desktop background.
 
 Settings live in config.toml under [daily]:
-  preset   the wallpaper preset (wallpaper_ref by default; wallpaper / wallpaper_ultrawide from text only)
+  preset   the wallpaper preset: wallpaper_cast by default (#52: the scene from text, then the cast put into
+           it from their ref images); wallpaper_ref (the first ref drawn into a scene); wallpaper from text only
   count    images to make; the first becomes the wallpaper (the rest stay in the run folder)
   cast     characters (gen char) in every daily. Text-only presets: their descriptions lead the prompt, like a
            project pass. With a ref (wallpaper_ref) the ref shows them and the descriptions are left out
@@ -9,7 +10,12 @@ Settings live in config.toml under [daily]:
            text; "" = the preset's own `styles`. With a ref the text goes into ref_prompt's {scene};
            text-only presets get the styles from generate() (with their negative_extra)
   ref, ref_prompt  for an edit-only preset (wallpaper_ref): the image that shows the cast (CHARACTER:REF or a
-           path; default the first cast character's first ref), and the prompt template ({scene}, {name})
+           path; default the first cast character's first ref), and the prompt template ({scene}, {name}).
+           For a cast preset, ref may be a list: one image per character (default each cast character's first ref)
+  scene_prompt, stand_in, cast_prompt  for a cast preset (wallpaper_cast): the scene pass draws {stand_ins}
+           (one stand_in per character, "on the left", ...) doing the theme, then the cast pass replaces each with
+           its character ({replace}: "Replace the ... in image 1 with tulu, the character from image 2."). With
+           stand_in = "" the scene has nobody in it and the cast pass adds the characters instead
   themes   the scene for the day, picked at random (by the date: a re-run that day gets the same theme,
            with a new seed) from the ones the past daily runs haven't used in the last no_repeat_days
   no_repeat_days  at least this many days between two uses of a theme (default 7)
@@ -45,8 +51,9 @@ DEFAULT_WAIT = 600  # seconds for ComfyUI to come up: a scheduled run may have j
 
 def settings(conf: dict | None = None) -> dict:
     conf = conf or imagegen.load_config()
-    d = {"preset": "wallpaper_ref", "count": 1, "cast": [], "style": "", "no_repeat_days": 7, "themes": [],
-         "dates": {}, "months": {}, "weekdays": {}, "ref": "", "ref_prompt": "", **conf.get("daily", {})}
+    d = {"preset": "wallpaper_cast", "count": 1, "cast": [], "style": "", "no_repeat_days": 7, "themes": [],
+         "dates": {}, "months": {}, "weekdays": {}, "ref": "", "ref_prompt": "", "scene_prompt": "",
+         "stand_in": STAND_IN, "cast_prompt": "", **conf.get("daily", {})}
     for key, names in (("months", MONTHS), ("weekdays", DAYS)):
         bad = [k for k in d[key] if k not in names]
         if bad:
@@ -59,8 +66,12 @@ def settings(conf: dict | None = None) -> dict:
     p = conf["presets"][d["preset"]]
     if "workflow" not in p and "edit_workflow" not in p:
         raise ValueError(f"[daily] preset '{d['preset']}' has no workflow")
-    if (d["ref"] or "").strip() and "edit_workflow" not in p:
+    d["refs"] = _pool(d["ref"])
+    d["casting"] = "workflow" in p and imagegen.takes_refs((imagegen.ROOT / "workflows" / p["workflow"]).read_text())
+    if d["refs"] and "edit_workflow" not in p and not d["casting"]:
         raise ValueError(f"[daily] ref is set, but preset '{d['preset']}' can't use a ref (no edit_workflow)")
+    if len(d["refs"]) > 1 and not d["casting"]:
+        raise ValueError(f"[daily] ref: preset '{d['preset']}' takes one ref image, not {len(d['refs'])}")
     raw = str(d["style"] or "").strip()
     names = imagegen.split_styles(raw) if raw else imagegen.check_styles(p.get("styles", []), conf)
     known = imagegen.list_styles(conf)
@@ -71,29 +82,48 @@ def settings(conf: dict | None = None) -> dict:
     else:  # literal text (the old way)
         d["styles"] = []
     # an edit-only preset always draws the cast from a ref image; one that does both does when ref is set
-    d["uses_ref"] = "workflow" not in p or bool((d["ref"] or "").strip())
+    d["uses_ref"] = not d["casting"] and ("workflow" not in p or bool(d["refs"]))
     return d
 
 
 def find_ref(d: dict) -> Path:
     """The reference image for an edit preset: [daily] ref (CHARACTER:REF or a path), else the first cast
     character's first ref."""
-    import characters
-    ref = (d["ref"] or "").strip()
+    if d["refs"]:
+        return _resolve_ref(d["refs"][0])[1]
+    cast = _pool(d["cast"])
+    if not cast:
+        raise ValueError(f"[daily] preset '{d['preset']}' needs a reference image: set cast or ref")
+    return _char_ref(cast[0])
+
+
+def find_refs(d: dict) -> list[tuple[str | None, Path]]:
+    """A cast preset's ref images as (character or None, path): [daily] ref's entries, else each cast
+    character's first ref."""
+    if d["refs"]:
+        return [_resolve_ref(r) for r in d["refs"]]
+    cast = _pool(d["cast"])
+    if not cast:
+        raise ValueError(f"[daily] preset '{d['preset']}' needs the cast's ref images: set cast or ref")
+    return [(name, _char_ref(name)) for name in cast]
+
+
+def _resolve_ref(ref: str) -> tuple[str | None, Path]:
+    """CHARACTER:REF -> (character, its ref file); a path (relative = under output_dir) -> (None, path)."""
     if re.fullmatch(r"[a-z0-9][a-z0-9_-]*:[A-Za-z0-9][A-Za-z0-9_-]*", ref):
         name, _, r = ref.partition(":")
-    elif ref:
-        path = imagegen.to_linux_path(ref)
-        if not path.is_absolute():  # the scheduled task runs from anywhere: relative = under output_dir
-            path = Path(imagegen.load_config()["output_dir"]).expanduser() / path
-        if not path.is_file():
-            raise FileNotFoundError(f"[daily] ref: no file {path}")
-        return path
-    else:
-        cast = _pool(d["cast"])
-        if not cast:
-            raise ValueError(f"[daily] preset '{d['preset']}' needs a reference image: set cast or ref")
-        name, r = cast[0], None
+        return name, _char_ref(name, r)
+    path = imagegen.to_linux_path(ref)
+    if not path.is_absolute():  # the scheduled task runs from anywhere: relative = under output_dir
+        path = Path(imagegen.load_config()["output_dir"]).expanduser() / path
+    if not path.is_file():
+        raise FileNotFoundError(f"[daily] ref: no file {path}")
+    return None, path
+
+
+def _char_ref(name: str, r: str | None = None) -> Path:
+    """A character's ref image file: r, or its first ref."""
+    import characters
     refs = characters.state_at(characters.load(name))["refs"]
     if not refs:
         raise ValueError(f"character '{name}' has no ref image: gen char set {name} --ref NAME=PATH")
@@ -193,19 +223,73 @@ def ref_prompt(d: dict, theme: str, used: dict) -> str:
         raise ValueError(f"[daily] ref_prompt: only {{scene}} and {{name}} can be filled in ({e})") from None
 
 
+STAND_IN = "a small cute cartoon creature"
+PLACES = ("on the left", "on the right", "in the middle", "in the foreground", "in the background")
+SCENE_PROMPT = ("A wide, finished wallpaper image that fills the whole frame: {stand_ins}, {scene}. The only text "
+                "in the image is the sign text named in the scene, spelled exactly as given; no other signs, labels "
+                "or writing. Detailed background, scenery and lighting everywhere, no white or empty background, "
+                "no border.")
+CAST_PROMPT = ("{replace} Each character takes over the place, pose, size and action of the one it replaces and is "
+               "lit like the rest of the scene, with exactly the same design, colours and proportions as in its "
+               "reference image. Keep everything else in image 1 exactly the same: layout, background, lighting, "
+               "colours and text.")
+
+
+def _name(name: str | None) -> str:
+    import characters
+    return (characters.load(name).get("title") or name) if name else "the character"
+
+
+def cast_prompts(d: dict, theme: str, names: list[str | None]) -> tuple[str, str]:
+    """(scene prompt, cast prompt) for a cast preset: the scene pass draws a stand-in per character (unless
+    stand_in is ""), the cast pass replaces each with its character from image 2, 3, ...; {scene} = theme plus
+    a literal style (named styles come from generate())."""
+    scene = ", ".join(t.strip().strip(",") for t in (theme, "" if d["styles"] else d["style"]) if t and t.strip())
+    stand_in = str(d["stand_in"] or "").strip()
+    n = len(names)
+    places = [""] if n == 1 else [f" {PLACES[k]}" if k < len(PLACES) else f" number {k + 1}" for k in range(n)]
+    if stand_in:
+        stand_ins = f"{stand_in}{places[0]}" + "".join(f", another one{pl}" for pl in places[1:])
+        replace = " ".join(f"Replace the {stand_in.removeprefix('a ').removeprefix('an ')}{places[k]} in image 1 "
+                           f"with {_name(nm)}, the character from image {k + 2}." for k, nm in enumerate(names))
+    else:
+        stand_ins = "nobody in it yet"
+        replace = " ".join(f"Add {_name(nm)}, the character from image {k + 2}, into the scene from image 1, "
+                           f"busy with what happens there." for k, nm in enumerate(names))
+    out = []
+    for key, default, fills in (("scene_prompt", SCENE_PROMPT, {"scene": scene, "stand_ins": stand_ins}),
+                                ("cast_prompt", CAST_PROMPT, {"replace": replace, "scene": scene})):
+        tmpl = str(d[key] or "").strip() or default
+        try:
+            out.append(tmpl.format(**fills))
+        except (KeyError, IndexError, ValueError) as e:
+            raise ValueError(f"[daily] {key}: only {', '.join('{' + k + '}' for k in fills)} can be filled in "
+                             f"({e})") from None
+    return out[0], out[1]
+
+
 def plan(day: date | None = None, conf: dict | None = None) -> dict:
     day = day or date.today()
     d = settings(conf)
     conf = conf or imagegen.load_config()
     theme, where = pick_theme(d, day, recent_themes(conf, day, max(1, int(d["no_repeat_days"])) - 1))
     prompt, used = compose(d, theme)
-    ref = None
+    ref, refs, cast_prompt = None, [], None
     if d["uses_ref"]:
         ref = str(find_ref(d))
         prompt = ref_prompt(d, theme, used)
+    elif d["casting"]:
+        found = find_refs(d)
+        for name, _ in found:  # a CHAR:REF entry for a character outside the cast still shows it
+            if name and name not in used:
+                import characters
+                used[name] = characters.load(name)["version"]
+        refs = [str(path) for _, path in found]
+        prompt, cast_prompt = cast_prompts(d, theme, [name for name, _ in found])
     return {"date": day.isoformat(), "theme": theme, "from": where, "prompt": prompt, "cast": used,
             "styles": d["styles"], "gen_styles": [] if ref else d["styles"],  # with a ref: in the prompt
-            "preset": d["preset"], "count": max(1, int(d["count"])), "ref": ref}
+            "preset": d["preset"], "count": max(1, int(d["count"])), "ref": ref,
+            "refs": refs, "cast_prompt": cast_prompt}
 
 
 def log_file(conf: dict | None = None) -> Path:
@@ -236,12 +320,12 @@ def run(day: date | None = None, wait: float = DEFAULT_WAIT, set_wallpaper: bool
         imagegen.Comfy(conf["comfy_url"]).wait_ready(timeout=wait)  # generate() then finds it up
         run = imagegen.generate(p["prompt"], p["preset"], p["count"], label=f"daily-{imagegen.slug(p['theme'], 30)}",
                                 source_image=p["ref"], edit=p["ref"] is not None,
-                                styles=p["gen_styles"])
+                                styles=p["gen_styles"], refs=p["refs"] or None, cast_prompt=p["cast_prompt"])
         if not run["images"]:
             raise RuntimeError(f"the run made no images ({run['run_dir']})")
         rf = Path(run["run_dir"]) / "run.json"
         meta = json.loads(rf.read_text())
-        meta["daily"] = run["daily"] = {k: p[k] for k in ("date", "theme", "from", "cast", "ref", "styles")}
+        meta["daily"] = run["daily"] = {k: p[k] for k in ("date", "theme", "from", "cast", "ref", "refs", "styles")}
         rf.write_text(json.dumps(meta, indent=2))
         good = [im for im in run["images"] if not im.get("blank")]
         if not good:  # a black wallpaper is worse than yesterday's
@@ -277,9 +361,15 @@ def main(argv: list[str]) -> int:
         print(f"preset:  {p['preset']} x{p['count']}" + (f", style {', '.join(p['styles'])}" if p["styles"] else ""))
         if p["ref"]:
             print(f"ref:     {p['ref']}")
+        for r in p["refs"]:
+            print(f"ref:     {r}")
         if p["cast"]:
             print("cast:    " + ", ".join(f"{c} v{v}" for c, v in p["cast"].items()))
-        print(f"prompt:  {p['prompt']}")
+        if p["cast_prompt"]:
+            print(f"scene:   {p['prompt']}")
+            print(f"then:    {p['cast_prompt']}")
+        else:
+            print(f"prompt:  {p['prompt']}")
         return 0
     try:
         r = run(a.date, a.wait, not a.no_set)

@@ -25,7 +25,7 @@ LIMITS_DROPIN = Path("/etc/systemd/system/comfyui.service.d/zz-imagegen-limits.c
 NOT_PARAMS = imagegen.NOT_PARAMS
 STANDARD_PARAMS = {"seed", "prompt", "negative", "checkpoint"}
 # Each mode a preset can run in: (preset key, extra params generate() adds).
-MODES = [("workflow", set()),
+MODES = [("workflow", {"ref"}),  # ref: a cast workflow's ref images (#52), one per --ref
          ("img2img_workflow", {"image", "denoise"}),
          ("inpaint_workflow", {"image", "denoise", "mask"})]
 # Presets with an edit_workflow also run in this mode (edit-only ones have no workflow).

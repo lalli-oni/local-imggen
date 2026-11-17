@@ -164,7 +164,7 @@ def daily_conf(monkeypatch):
         def load():
             conf = real()
             conf["daily"] = {**conf.get("daily", {}), "dates": {}, "months": {}, "weekdays": {},
-                             "themes": ["on a beach"], "ref_prompt": "", **kw}
+                             "themes": ["on a beach"], "ref_prompt": "", "preset": "wallpaper_ref", **kw}
             return conf
         monkeypatch.setattr(imagegen, "load_config", load)
     return set_
@@ -195,7 +195,7 @@ def test_daily_unknown_preset_style(tulu, daily_conf, monkeypatch):
     def load():
         conf = real()
         conf["presets"]["wallpaper_ref"]["styles"] = ["gone"]
-        conf["daily"] = {**conf["daily"], "style": ""}
+        conf["daily"] = {**conf["daily"], "style": "", "preset": "wallpaper_ref"}
         return conf
     monkeypatch.setattr(imagegen, "load_config", load)
     with pytest.raises(ValueError, match="unknown style gone"):
@@ -224,3 +224,17 @@ def test_mcp_styles(comfy):
     assert _prompt(comfy.workflows()[0]) == f"a fox, {STORY}"
     mcp_server.vary(out[0]["images"][0]["path"], count=1, styles=[], preview=False)
     assert STORY not in _prompt(comfy.workflows()[1])
+
+
+def test_daily_cast_preset_styles_go_to_the_scene(tulu, comfy, daily_conf):
+    """#52 wallpaper_cast: named styles come from generate() on the scene pass; the cast edit has none."""
+    daily_conf(style="synthwave", preset="wallpaper_cast")
+    p = daily.plan(date(2026, 11, 10))
+    assert SYNTH not in p["prompt"] and p["gen_styles"] == ["synthwave"]
+    daily.run(date(2026, 11, 10), wait=1, set_wallpaper=False)
+    scene, cast = (n["inputs"]["prompt"] for n in comfy.workflows()[0].values()
+                   if n["class_type"] == "TextEncodeQwenImage21")
+    assert scene.count(SYNTH) == 1 and SYNTH not in cast
+    daily_conf(style="soft light", preset="wallpaper_cast")  # literal text: in the scene prompt itself
+    p = daily.plan(date(2026, 11, 10))
+    assert "on a beach, soft light." in p["prompt"] and p["gen_styles"] == []

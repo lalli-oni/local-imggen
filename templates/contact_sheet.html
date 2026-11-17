@@ -163,16 +163,23 @@ const store = {  // per-viewer settings; file:// storage can be missing or throw
 };
 
 const images = RUN.images.map((im, i) => ({ ...im, n: i + 1, src: encodeURIComponent(im.file) }));
-// the input image of an img2img/inpaint run goes first, so it is easy to compare against
+// input cards go first, so they are easy to compare against: an img2img/inpaint run's input image, and a cast
+// run's (#52) ref images and the scenes before the cast went in
+const inputs = [...(RUN.source_file ? [{ file: RUN.source_file, caption: "input" }] : []), ...(RUN.inputs || [])];
+images.unshift(...inputs.map((x) => ({ file: x.file, caption: x.caption, source: true, n: 0, src: encodeURIComponent(x.file) })));
 const SRC = RUN.source_file ? 0 : -1;
-if (RUN.source_file) images.unshift({ file: RUN.source_file, source: true, n: 0, src: encodeURIComponent(RUN.source_file) });
+for (const im of images) {  // what "vs input" compares with: the image's own scene, else the run's input
+  if (im.source) continue;
+  const j = im.scene ? images.findIndex((x) => x.source && x.file === im.scene) : -1;
+  im.vs = j >= 0 ? j : SRC;
+}
 const shq = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'";  // POSIX shell single quotes
 function promoteCmd(im) {
   const p = RUN.project;
   return `gen project promote ${p.slug} ${shq(RUN.run_dir.replace(/\/+$/, "") + "/" + im.file)}` +
     ` --asset ${p.slug} --note ${shq(`v${p.version}${p.ref ? ` from ${p.ref}` : ""} #${im.n} seed ${im.seed}`)}`;
 }
-const label = (i) => images[i].source ? "input"
+const label = (i) => images[i].source ? images[i].caption
   : `${images[i].tag ? images[i].tag + " · " : ""}#${images[i].n} · seed ${images[i].seed}`;
 function copyPromote(im) {
   copy(promoteCmd(im), `promote command for #${im.n} copied (change --asset if needed)`);
@@ -199,7 +206,7 @@ const state = {
 $("prompt").textContent = RUN.prompt;
 {
   const parts = [["preset", RUN.preset], [null, `${RUN.count} image(s)`], ["base seed", RUN.base_seed]];
-  const p0 = RUN.bakeoff ? {} : images[SRC + 1] || {};  // a bake-off mixes presets: no shared params
+  const p0 = RUN.bakeoff ? {} : images.find((im) => !im.source) || {};  // a bake-off mixes presets: no shared params
   if (p0.width && p0.height) parts.push([null, `${p0.width}×${p0.height}`]);
   if (p0.steps != null) parts.push(["steps", p0.steps]);
   if (p0.cfg != null) parts.push(["cfg", p0.cfg]);
@@ -207,6 +214,7 @@ $("prompt").textContent = RUN.prompt;
   else if (RUN.source_image) parts.push(RUN.edit ? ["edit of", RUN.source_image]
     : [RUN.mask ? "inpaint from" : "img2img from", `${RUN.source_image} @ ${RUN.denoise}`]);
   if (p0.guidance != null) parts.push(["guidance", p0.guidance]);
+  if (RUN.cast_prompt) parts.push(["cast", RUN.cast_prompt]);
   if (RUN.project) parts.push(["project", `${RUN.project.slug} v${RUN.project.version}`]);
   if (RUN.timing) parts.push(["timing", RUN.timing]);
   $("meta").append(...parts.flatMap(([k, v], i) => [
@@ -255,8 +263,8 @@ const cards = images.map((im, i) => {
   pick.addEventListener("click", () => togglePick(i));
   let cap;
   if (im.source) {
-    cap = el("figcaption", {}, el("b", { textContent: "input" }),
-      RUN.denoise != null ? `strength ${RUN.denoise}` : "", pick);
+    cap = el("figcaption", {}, el("b", { textContent: im.caption }),
+      im.file === RUN.source_file && RUN.denoise != null ? `strength ${RUN.denoise}` : "", pick);
   } else {
     const seed = el("span", { className: "seed", textContent: `seed ${im.seed}`, title: "copy seed" });
     seed.addEventListener("click", () => copy(String(im.seed), `seed ${im.seed} copied`));
@@ -267,8 +275,9 @@ const cards = images.map((im, i) => {
     if (secs != null) cap.append(el("span", { className: "time", textContent: `${secs.toFixed(1)}s`,
       title: im.timing || "" }));
     cap.append(pick);
-    if (SRC >= 0) {
-      const vs = el("button", { textContent: "vs input", title: "compare with the input image" });
+    if (im.vs >= 0) {
+      const what = im.vs === SRC ? "input" : "scene";
+      const vs = el("button", { textContent: `vs ${what}`, title: `compare with the ${what} image` });
       vs.addEventListener("click", () => compareWithInput(i));
       cap.append(vs);
     }
@@ -353,9 +362,10 @@ function renderPicks() {
   $("clear").hidden = n === 0;
 }
 $("compare").onclick = openTwo;
-function compareWithInput(i) {  // input as A, this image as B
-  if (SRC < 0 || i === SRC) return;
-  state.picks = [SRC, i];
+function compareWithInput(i) {  // its input (or scene) as A, this image as B
+  const j = images[i].vs;
+  if (j == null || j < 0) return;
+  state.picks = [j, i];
   renderPicks();
   openTwo();
 }
@@ -378,11 +388,11 @@ function renderView() {
   if (!two) {
     const im = images[v.i];
     const k = state.picks.indexOf(v.i);
-    $("view-title").replaceChildren(el("b", { textContent: label(v.i) }), `  ${im.file}  (${im.source ? "input" : `${im.n}/${RUN.images.length}`}, ← →)`);
+    $("view-title").replaceChildren(el("b", { textContent: label(v.i) }), `  ${im.file}  (${im.source ? im.caption : `${im.n}/${RUN.images.length}`}, ← →)`);
     $("view-pick").textContent = k === 0 ? "Picked A" : k === 1 ? "Picked B" : "Pick";
     $("view-pick").setAttribute("aria-pressed", k >= 0);
     $("view-open").href = im.src;
-    $("view-vs").hidden = SRC < 0 || im.source;
+    $("view-vs").hidden = im.source || !(im.vs >= 0);
     $("view-promote").hidden = !RUN.project || im.source;
     stage.replaceChildren(pane(v.i));
     return;

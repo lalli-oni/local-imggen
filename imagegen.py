@@ -866,17 +866,27 @@ def is_blank(data: bytes) -> bool:
         return False  # not ours to judge; the post steps or the viewer will complain
 
 
-def _finish_job(comfy: "Comfy", events: "Events", pid: str):
-    """Wait for a job and fetch its output images: (history entry, outs, [{png, fetch_s}], [blank?])."""
+def _finish_job(comfy: "Comfy", events: "Events", pid: str, side_nodes: frozenset = frozenset()):
+    """Wait for a job and fetch its output images: (history entry, outs, [{png, fetch_s}], [blank?], side).
+    side_nodes: SaveImage nodes whose images are by-products (a cast run's scene): fetched into side as
+    [(out, png)], not in outs and not checked for black."""
     entry = comfy.wait_entry(pid, idle=events.idle)
     if _LIVE is not None:  # in case the socket dropped the job's end
         _LIVE.on_event(pid, "execution_success", {}, time.time())
-    outs = [im for o in entry.get("outputs", {}).values() for im in o.get("images", []) if im.get("type") == "output"]
-    datas = []
+    found = [(nid, im) for nid, o in entry.get("outputs", {}).items() for im in o.get("images", [])
+             if im.get("type") == "output"]
+    outs = [im for nid, im in found if nid not in side_nodes]
+    datas, side = [], []
     for im in outs:
         t0 = time.time()
         datas.append({"png": comfy.fetch(im), "fetch_s": round(time.time() - t0, 2)})
-    return entry, outs, datas, [is_blank(d["png"]) for d in datas]
+    for nid, im in found:
+        if nid in side_nodes:
+            try:  # a by-product: losing it must not lose the run
+                side.append((im, comfy.fetch(im)))
+            except Exception as e:
+                log(f"note: could not fetch {im.get('filename')} ({type(e).__name__}: {e})")
+    return entry, outs, datas, [is_blank(d["png"]) for d in datas], side
 
 
 def _uncached(wf: dict, n: int) -> dict:
@@ -889,16 +899,74 @@ def _uncached(wf: dict, n: int) -> dict:
     return wf
 
 
+# ---------------------------------------------------------------- scene + cast (#52)
+# A cast workflow draws the scene from text, then a Qwen edit puts the characters from the ref images into it
+# (images.image_1 = the scene, image_2.. = one ref each). Its LoadImage node with "{{ref}}" is cloned per ref.
+
+REF_PLACEHOLDER = "{{ref}}"
+SCENE_PREFIX = "imagegen-scene"  # SaveImage filename_prefix of a cast workflow's scene (kept as NN-seedS-scene.png)
+MAX_REFS = 15                    # TextEncodeQwenImage21 takes 16 images: the scene + 15 refs
+_IMAGE_SLOT = re.compile(r"images\.image_(\d+)")
+
+
+def takes_refs(workflow_text: str) -> bool:
+    return REF_PLACEHOLDER in workflow_text
+
+
+def scene_nodes(wf: dict) -> frozenset:
+    return frozenset(nid for nid, n in wf.items() if n.get("class_type") == "SaveImage"
+                     and n.get("inputs", {}).get("filename_prefix") == SCENE_PREFIX)
+
+
+def expand_refs(template: dict, n: int) -> dict:
+    """The template with its "{{ref}}" LoadImage node cloned n times ("{{ref_1}}".."{{ref_n}}"), and every
+    images.image_K input that links to it repeated as image_K, image_K+1, ... one per clone."""
+    wf = json.loads(json.dumps(template))
+    loaders = [nid for nid, nd in wf.items() if nd.get("inputs", {}).get("image") == REF_PLACEHOLDER]
+    if len(loaders) != 1 or n < 1:
+        raise ValueError(f"a cast workflow needs exactly one LoadImage with {REF_PLACEHOLDER} (found {len(loaders)})"
+                         if n >= 1 else "a cast workflow needs at least one ref image")
+    nid = loaders[0]
+    ids = [nid] + [f"{nid}{k:02d}" for k in range(2, n + 1)]
+    taken = set(wf) & set(ids[1:])
+    if taken:
+        raise ValueError(f"cast workflow: node id(s) {', '.join(sorted(taken))} clash with the ref clones")
+    base = wf[nid]
+    for k, cid in enumerate(ids, 1):
+        wf[cid] = {**json.loads(json.dumps(base)), "inputs": {**base["inputs"], "image": "{{ref_%d}}" % k}}
+    for node in wf.values():
+        inputs = node.get("inputs", {})
+        for key, v in list(inputs.items()):
+            m = _IMAGE_SLOT.fullmatch(key)
+            if m and isinstance(v, list) and v and v[0] == nid:
+                first = int(m.group(1))
+                for k, cid in enumerate(ids):
+                    slot = f"images.image_{first + k}"
+                    if k and slot in inputs:
+                        raise ValueError(f"cast workflow: {slot} is taken, the refs need image_{first}..")
+                    inputs[slot] = [cid, v[1]]
+    return wf
+
+
+def image_list(n: int, first: int = 2) -> str:
+    """"image 2", "images 2 and 3", "images 2, 3 and 4": how a cast prompt names the ref images."""
+    nums = [str(first + k) for k in range(n)]
+    return f"image {nums[0]}" if n == 1 else f"images {', '.join(nums[:-1])} and {nums[-1]}"
+
+
 def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | None = None,
              negative: str | None = None, width: int | None = None, height: int | None = None,
              steps: int | None = None, cfg: float | None = None, label: str | None = None,
              source_image: str | None = None, mask: str | None = None,
              denoise: float | None = None, edit: bool = False, guidance: float | None = None,
-             styles: list[str] | None = None) -> dict:
+             styles: list[str] | None = None, refs: list[str] | None = None,
+             cast_prompt: str | None = None) -> dict:
     """txt2img by default. With source_image: img2img (denoise = how much may change, 0-1).
     With source_image + mask: inpaint, only the white part of the mask is repainted.
     With source_image + edit=True: the prompt is an edit instruction for the preset's edit_workflow.
-    styles: [styles.NAME] looks added after the preset suffix (None = the preset's `styles`, [] = none)."""
+    styles: [styles.NAME] looks added after the preset suffix (None = the preset's `styles`, [] = none).
+    refs (#52): for a cast preset (its workflow has "{{ref}}", e.g. wallpaper_cast): the prompt draws the scene,
+    then cast_prompt (default: the preset's, "{images}" = "image 2"..) puts the ref images' characters into it."""
     t_start = time.time()
     conf = load_config()
     presets = conf["presets"]
@@ -944,14 +1012,34 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
             key = "img2img_workflow"
         workflow = mode_workflow(p, key)
         if workflow is None:
-            raise ValueError(f"preset '{preset}' has no {key.split('_')[0]} (gen vary); "
-                             f"for this model use gen edit IMAGE \"instruction\" -p {preset}")
+            raise ValueError(f"preset '{preset}' has no {key.split('_')[0]} (gen vary)"
+                             + (f"; for this model use gen edit IMAGE \"instruction\" -p {preset}"
+                                if "edit_workflow" in p else ""))
         denoise = float(denoise if denoise is not None else (0.85 if mask_path else 0.4))
         if not 0 < denoise <= 1:
             raise ValueError("strength/denoise must be in (0, 1]")
         src_png, mask_png, src_size = prepare_source(src_path, mask_path)
     template_text = (ROOT / "workflows" / workflow).read_text()
     template = json.loads(template_text)
+    refs = [r for r in (refs or []) if r]
+    ref_paths: list[Path] = []
+    if takes_refs(template_text):
+        if src_path is not None:
+            raise ValueError(f"preset '{preset}' draws a new scene: it takes refs, not a source image")
+        if not refs:
+            raise ValueError(f"preset '{preset}' puts characters into the scene: give it ref images (--ref)")
+        if len(refs) > MAX_REFS:
+            raise ValueError(f"at most {MAX_REFS} refs (got {len(refs)})")
+        for r in refs:
+            path = to_linux_path(r)
+            if not path.is_file():
+                raise FileNotFoundError(path)
+            ref_paths.append(path)
+        template = expand_refs(template, len(ref_paths))
+    elif refs or cast_prompt:
+        raise ValueError(f"preset '{preset}' takes no refs; cast presets: "
+                         + (", ".join(n for n, q in presets.items() if q.get("workflow") and
+                                       takes_refs((ROOT / "workflows" / q["workflow"]).read_text())) or "none"))
     unused = [k for k, v in (("steps", steps), ("cfg", cfg), ("guidance", guidance), ("negative", negative))
               if v is not None and "{{" + k + "}}" not in template_text]
     if unused:  # e.g. -g on klein, or a project's cfg after switching it to klein: say so, then go on
@@ -972,6 +1060,12 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
     for k, v in (("width", width), ("height", height), ("steps", steps), ("cfg", cfg), ("guidance", guidance)):
         if v is not None:
             params[k] = v
+    if ref_paths:
+        tmpl = cast_prompt if cast_prompt is not None else str(p.get("cast_prompt") or "")
+        if not tmpl.strip():
+            raise ValueError(f"preset '{preset}' has no cast_prompt: pass one")
+        params["cast_prompt"] = tmpl.replace("{images}", image_list(len(ref_paths)))
+        ref_pngs = [prepare_source(r, size_fn=kontext_size)[0] for r in ref_paths]
 
     now = datetime.now()
     run_dir = Path(conf["output_dir"]).expanduser() / now.strftime("%Y-%m-%d") / \
@@ -986,6 +1080,7 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
         # (keep in step with the uploads below; a missing key only costs the header line)
         first.update(image=src_path.name, mask=mask_path.name if mask_path else "",
                      width=src_size[0], height=src_size[1], **({} if edit else {"denoise": denoise}))
+    first.update({f"ref_{k}": r.name for k, r in enumerate(ref_paths, 1)})
     with Events(comfy.url, comfy.client_id) as events, \
             _progress(template, first, preset, count, comfy, events, run_dir, mode):
         # Events: per-node times, the live block: what runs and how far it is (#61); both closed even on errors
@@ -1006,6 +1101,18 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
                 (run_dir / SHEET_SOURCE).write_bytes(src_png)
             except OSError as e:
                 log(f"warning: could not save {SHEET_SOURCE}: {e}")
+        if ref_paths:
+            source = {"refs": [], "cast_prompt": params["cast_prompt"]}
+            for k, (path, data) in enumerate(zip(ref_paths, ref_pngs), 1):
+                params[f"ref_{k}"] = comfy.upload(data, f"imagegen-ref-{hashlib.sha1(data).hexdigest()[:16]}.png")
+                ref = {"path": str(path), "file": f"ref-{k}.png"}
+                try:  # the sheet's ref cards, as the model got them
+                    (run_dir / ref["file"]).write_bytes(data)
+                except OSError as e:
+                    log(f"warning: could not save {ref['file']}: {e}")
+                    ref["file"] = None
+                source["refs"].append(ref)
+        side_nodes = scene_nodes(template)
 
         # queue everything up front; ComfyUI works through it while we wait
         jobs = []
@@ -1021,7 +1128,7 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
             images, job_timings = [], []
             t_wait = time.time()
             for i, (s, pid, queued_at, wf) in enumerate(jobs, 1):
-                entry, outs, datas, blanks = _finish_job(comfy, events, pid)
+                entry, outs, datas, blanks, side = _finish_job(comfy, events, pid, side_nodes)
                 for attempt in range(1, BLANK_RETRIES + 1):
                     if not any(blanks):
                         break
@@ -1033,7 +1140,7 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
                         jobs[i - 1] = (s, retry, time.time(), wf)  # so a stop (Ctrl-C) cancels it
                         if _LIVE is not None:
                             _LIVE.forget(pid)  # the blank job no longer counts as a finished image
-                        result = _finish_job(comfy, events, retry)
+                        result = _finish_job(comfy, events, retry, side_nodes)
                     except Exception as e:
                         log(f"  the re-render failed ({type(e).__name__}: {e}); keeping the blank image")
                         jobs[i - 1] = (s, pid, queued_at, wf)
@@ -1041,7 +1148,7 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
                             comfy.cancel([retry])
                         break
                     pid, queued_at = jobs[i - 1][1], jobs[i - 1][2]
-                    entry, outs, datas, blanks = result
+                    entry, outs, datas, blanks, side = result
                 if any(blanks):
                     log(f"warning: seed {s} is still blank; kept and marked \"blank\" (gen daily won't use it)")
                 secs = round(time.time() - t_wait, 1)  # wall time; the first one includes loading the model
@@ -1051,6 +1158,14 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
                     log(f"note: no timing for seed {s} ({type(e).__name__}: {e})")
                     jt = {}
                 job_timings.append(jt)
+                scene = None
+                for j, (_, png) in enumerate(side):  # the scene before the cast went in (#52)
+                    scene = run_dir / (f"{i:02d}-seed{s}-scene" + (f"-{j}" if len(side) > 1 else "") + ".png")
+                    try:
+                        scene.write_bytes(png)
+                    except OSError as e:
+                        log(f"note: could not save {scene.name}: {e}")
+                        scene = None
                 for j, data in enumerate(datas):
                     name = f"{i:02d}-seed{s}" + (f"-{j}" if len(outs) > 1 else "") + ".png"
                     path = run_dir / name
@@ -1071,11 +1186,11 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
                                                                     if k not in ("prompt", "negative")},
                             "file": final.name, "raw_file": path.name, "created": now.isoformat(timespec="seconds"),
                             "timing": {**timing, **{k: jt[k] for k in ("nodes", "cached") if k in jt}},
-                            **flag, **(source or {})}
+                            **flag, **(source or {}), **({"scene": scene.name} if scene else {})}
                     path.with_suffix(".json").write_text(json.dumps(meta, indent=2))
                     images.append({"path": str(final), "windows_path": to_windows_path(final), "seed": s,
                                    "seconds": secs if j == 0 else None,  # per job, not per output (gen bakeoff)
-                                   "timing": timing, **flag})
+                                   "timing": timing, **flag, **({"scene": str(scene)} if scene else {})})
                 parts = _stage_parts(images[-1]["timing"] if outs else jt)
                 log(f"  [{i}/{count}] seed {s} done in {secs:.1f}s"
                     + (f" ({', '.join(parts)})" if parts else ""))
@@ -1177,7 +1292,7 @@ def write_contact_sheet(run_dir: Path, run: dict) -> Path:
     Checkerboard background when run["transparent"]; older run.json files lack it, so then
     it is guessed from the file names (rembg output ends in -transparent.png).
     """
-    images, first = [], None
+    images, first, scenes = [], None, []
     for im in run["images"]:
         path = Path(im["path"])
         meta = find_sidecar(run_dir / path.name) or {}
@@ -1188,6 +1303,9 @@ def write_contact_sheet(run_dir: Path, run: dict) -> Path:
             entry["time_s"] = timing["total_s"]
             entry["timing"] = ", ".join(_stage_parts(timing))
         entry.update({k: im[k] for k in ("tag", "seconds") if im.get(k) is not None})  # tag: gen bakeoff
+        if im.get("scene") and (run_dir / Path(im["scene"]).name).is_file():  # a cast run's scene (#52)
+            entry["scene"] = Path(im["scene"]).name
+            scenes.append({"file": entry["scene"], "caption": f"scene · seed {im['seed']}"})
         params = meta.get("params") or {}
         entry.update({k: params[k] for k in SHEET_PARAMS if k in params})
         images.append(entry)
@@ -1199,6 +1317,10 @@ def write_contact_sheet(run_dir: Path, run: dict) -> Path:
             "negative": None if run.get("bakeoff") else (first or {}).get("negative"),  # bake-off: differs per model
             "source_image": Path(run["source_image"]).name if run.get("source_image") else None,
             "source_file": _sheet_source(run_dir, run.get("source_image")),
+            "inputs": [{"file": r["file"], "caption": f"ref {k} · {Path(r['path']).name}"}
+                       for k, r in enumerate(run.get("refs") or [], 1)
+                       if r.get("file") and (run_dir / r["file"]).is_file()] + scenes,
+            "cast_prompt": run.get("cast_prompt"),
             "mask": bool(run.get("mask")), "denoise": run.get("denoise"), "edit": bool(run.get("edit")),
             "run_dir": str(run_dir), "project": run.get("project"), "bakeoff": run.get("bakeoff"),
             "timing": (run.get("timing") or {}).get("summary")}
@@ -1453,6 +1575,10 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--cfg", type=float)
     ap.add_argument("--label", help="folder name instead of prompt slug")
     _add_style_arg(ap)
+    ap.add_argument("--ref", action="append", dest="refs", metavar="IMAGE",
+                    help="cast presets (wallpaper_cast): a character's ref image to put into the scene (repeatable)")
+    ap.add_argument("--cast-prompt", help="cast presets: the edit that puts the refs in (\"image 1\" = the scene, "
+                    "\"image 2\".. = the refs); default: the preset's cast_prompt")
     ap.add_argument("--open", action="store_true", help="open contact sheet in Windows browser")
     ap.add_argument("--wallpaper", action="store_true", help="set the first result as wallpaper")
     a = ap.parse_args(argv)
@@ -1460,7 +1586,7 @@ def main(argv: list[str]) -> int:
     if a.size:
         w, h = (int(x) for x in a.size.lower().split("x"))
     run = generate(a.prompt, a.preset, a.count, a.seed, a.negative, w, h, a.steps, a.cfg, a.label,
-                   styles=_style_arg(a.styles))
+                   styles=_style_arg(a.styles), refs=a.refs, cast_prompt=a.cast_prompt)
     _print_run(run, a.open)
     if a.wallpaper and run["images"]:
         good = [im for im in run["images"] if not im.get("blank")]

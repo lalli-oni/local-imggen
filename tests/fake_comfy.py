@@ -31,6 +31,9 @@ PNG_SIZE = (64, 48)
 WORKFLOWS_DIR = Path(__file__).resolve().parent.parent / "workflows"
 
 
+SCENE_COLOR = (10, 200, 120)  # a cast workflow's scene image (SaveImage prefix imagegen-scene)
+
+
 def png_bytes(color=(200, 80, 40), size=PNG_SIZE, mode="RGB") -> bytes:
     buf = io.BytesIO()
     Image.new(mode, size, color).save(buf, "PNG")
@@ -161,13 +164,20 @@ class FakeComfy:
             return {pid: {"status": {"status_str": "error", "messages": [["execution_error", {"m": "boom"}]]},
                           "outputs": {}}}
         extra = [{"filename": f"imagegen_{pid}.png", "subfolder": "", "type": "output"}] * (self.outputs_per_job - 1)
-        return {pid: {"status": {"status_str": "success", "messages": job["messages"]}, "outputs": {"9": {"images": [
+        outputs = {"9": {"images": [
             *extra, {"filename": f"imagegen_{pid}.png", "subfolder": "", "type": "output"},
-            {"filename": f"preview_{pid}.png", "subfolder": "", "type": "temp"}]}}}}
+            {"filename": f"preview_{pid}.png", "subfolder": "", "type": "temp"}]}}
+        for nid, node in job["workflow"].items():  # other SaveImage nodes (a cast run's scene): prefix_<pid>.png
+            if nid != "9" and node.get("class_type") == "SaveImage":
+                outputs[nid] = {"images": [{"filename": f"{node['inputs'].get('filename_prefix', 'x')}_{pid}.png",
+                                            "subfolder": "", "type": "output"}]}
+        return {pid: {"status": {"status_str": "success", "messages": job["messages"]}, "outputs": outputs}}
 
     def _view(self, filename: str) -> bytes:
-        pid = filename.removeprefix("imagegen_").removesuffix(".png")
+        prefix, _, pid = filename.removesuffix(".png").rpartition("_")
         seed = _seed_of(self.prompts[pid]["workflow"]) if pid in self.prompts else 0
+        if prefix == "imagegen-scene":
+            return png_bytes(SCENE_COLOR)  # the scene before the cast went in: one colour, never black
         if pid in self.order[:self.blank_jobs]:
             return png_bytes((0, 0, 0))  # a NaN render
         # never black (seed 0 would be), so a normal job is never taken for a blank one
