@@ -2,7 +2,7 @@
 
 Every queued job "finishes" after `delay` seconds and outputs one small PNG whose colour comes
 from the job's seed, so different seeds give different files. Tests can inspect what was sent
-(`prompts`, `uploads`, `requests`) and switch on failures (`reject`, `fail_jobs`, `no_gpu`).
+(`prompts`, `uploads`, `requests`) and switch on failures (`reject`, `fail_jobs`, `blank_jobs`, `no_gpu`).
 
 Like ComfyUI, it "runs" each job's nodes in dependency order and reports them on the websocket
 (/ws?clientId=...) as execution_start, execution_cached, executing {node} ... executing None,
@@ -54,6 +54,8 @@ class FakeComfy:
         self.delay = 0.0          # seconds until a queued job shows up in /history
         self.reject: str | None = None  # /prompt answers 400 with this text
         self.fail_jobs = False    # finished jobs report status_str "error"
+        self.blank_jobs = 0       # the first N jobs queued render an all-black PNG (Qwen NaNs)
+        self.front: list[str] = []  # ids queued with "front": true (ahead of the waiting jobs)
         self.no_gpu = False       # /system_stats lists only a CPU
         self.vram_free = 12 * 1024 ** 3   # /system_stats numbers (tests may change them mid-run)
         self.ram_free = 20 * 1024 ** 3
@@ -166,7 +168,10 @@ class FakeComfy:
     def _view(self, filename: str) -> bytes:
         pid = filename.removeprefix("imagegen_").removesuffix(".png")
         seed = _seed_of(self.prompts[pid]["workflow"]) if pid in self.prompts else 0
-        return png_bytes(((seed * 37) % 256, (seed * 91) % 256, (seed * 13) % 256))
+        if pid in self.order[:self.blank_jobs]:
+            return png_bytes((0, 0, 0))  # a NaN render
+        # never black (seed 0 would be), so a normal job is never taken for a blank one
+        return png_bytes((40 + (seed * 37) % 216, 40 + (seed * 91) % 216, 40 + (seed * 13) % 216))
 
     def _handler(self):
         fake = self
@@ -240,6 +245,8 @@ class FakeComfy:
                     req = json.loads(body)
                     fake.prompts[pid] = {"workflow": wf, "queued_at": time.time(), "messages": []}
                     fake.order.append(pid)
+                    if req.get("front"):
+                        fake.front.append(pid)
                     threading.Thread(target=fake._execute, args=(pid, req.get("client_id")), daemon=True).start()
                     return self._send(200, {"prompt_id": pid, "number": len(fake.order)})
                 if u.path == "/queue":

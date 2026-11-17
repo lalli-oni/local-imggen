@@ -228,7 +228,10 @@ def run(day: date | None = None, wait: float = DEFAULT_WAIT, set_wallpaper: bool
         meta = json.loads(rf.read_text())
         meta["daily"] = run["daily"] = {k: p[k] for k in ("date", "theme", "from", "cast", "ref")}
         rf.write_text(json.dumps(meta, indent=2))
-        image = run["images"][0]["path"]
+        good = [im for im in run["images"] if not im.get("blank")]
+        if not good:  # a black wallpaper is worse than yesterday's
+            raise RuntimeError(f"every image came out blank (black) ({run['run_dir']})")
+        image = good[0]["path"]
         run["wallpaper"] = imagegen.set_wallpaper(image) if set_wallpaper else None
     except Exception as e:
         _log(f"FAILED, wallpaper unchanged: {type(e).__name__}: {e}", conf)

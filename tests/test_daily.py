@@ -372,3 +372,11 @@ def test_task_run(task_env, stub_calls):
     r = run_script([SCRIPT, "run"], task_env)
     assert r.code == 0
     assert "Start-ScheduledTask -TaskName 'imagegen-daily'" in _ps(stub_calls)[0]
+
+
+def test_blank_image_never_becomes_the_wallpaper(tulu, comfy, on_c_drive, stub_calls, out_dir, daily_conf):
+    daily_conf(preset="wallpaper_sdxl")
+    comfy.blank_jobs = 99  # black even after the retry
+    assert imagegen.main(["daily", "--wait", "5"]) == 1
+    assert _wallpaper_calls(stub_calls) == []
+    assert "every image came out blank" in _log_lines(out_dir)[0]

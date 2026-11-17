@@ -153,8 +153,9 @@ class Comfy:
                                        "(is the service running? `systemctl status comfyui`)")
                 time.sleep(2)
 
-    def queue(self, workflow: dict) -> str:
-        body = json.dumps({"prompt": workflow, "client_id": self.client_id}).encode()
+    def queue(self, workflow: dict, front: bool = False) -> str:
+        """Queue a job; front=True puts it ahead of the jobs already waiting."""
+        body = json.dumps({"prompt": workflow, "client_id": self.client_id, **({"front": True} if front else {})}).encode()
         req = urllib.request.Request(self.url + "/prompt", data=body,
                                      headers={"Content-Type": "application/json"})
         try:
@@ -815,6 +816,45 @@ def _progress(template: dict, params: dict, preset: str, count: int, comfy: "Com
             log(peak)
 
 
+BLANK_RETRIES = 1  # a job whose image comes out black is rendered again this many times
+BLANK_MAX = 8       # "black": no channel of any pixel brighter than this (ComfyUI turns NaNs into 0)
+
+
+def is_blank(data: bytes) -> bool:
+    """True for an all-black (or unreadable) PNG: what a NaN render looks like."""
+    try:
+        from PIL import Image  # lazy, like the other image helpers
+        with Image.open(io.BytesIO(data)) as im:
+            if im.mode not in ("RGB", "RGBA"):
+                im = im.convert("RGB")
+            return all(hi <= BLANK_MAX for _, hi in im.getextrema()[:3])
+    except Exception:
+        return False  # not ours to judge; the post steps or the viewer will complain
+
+
+def _finish_job(comfy: "Comfy", events: "Events", pid: str):
+    """Wait for a job and fetch its output images: (history entry, outs, [{png, fetch_s}], [blank?])."""
+    entry = comfy.wait_entry(pid, idle=events.idle)
+    if _LIVE is not None:  # in case the socket dropped the job's end
+        _LIVE.on_event(pid, "execution_success", {}, time.time())
+    outs = [im for o in entry.get("outputs", {}).values() for im in o.get("images", []) if im.get("type") == "output"]
+    datas = []
+    for im in outs:
+        t0 = time.time()
+        datas.append({"png": comfy.fetch(im), "fetch_s": round(time.time() - t0, 2)})
+    return entry, outs, datas, [is_blank(d["png"]) for d in datas]
+
+
+def _uncached(wf: dict, n: int) -> dict:
+    """The same graph with an extra input on its seed node(s), which ComfyUI ignores when running the node but
+    counts in its cache key: re-queued as it was, every node would be a cache hit and give the black image back."""
+    wf = json.loads(json.dumps(wf))
+    nodes = [nd for nd in wf.values() if {"seed", "noise_seed"} & set(nd.get("inputs", {}))] or list(wf.values())
+    for nd in nodes:
+        nd.setdefault("inputs", {})["imagegen_retry"] = n
+    return wf
+
+
 def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | None = None,
              negative: str | None = None, width: int | None = None, height: int | None = None,
              steps: int | None = None, cfg: float | None = None, label: str | None = None,
@@ -940,24 +980,42 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
             images, job_timings = [], []
             t_wait = time.time()
             for i, (s, pid, queued_at, wf) in enumerate(jobs, 1):
-                entry = comfy.wait_entry(pid, idle=events.idle)
+                entry, outs, datas, blanks = _finish_job(comfy, events, pid)
+                for attempt in range(1, BLANK_RETRIES + 1):
+                    if not any(blanks):
+                        break
+                    # a black image (NaNs, seen with Qwen when RAM ran out): the same seed usually renders fine
+                    log(f"  seed {s} came out blank (black), rendering it again (ComfyUI may be short of memory)")
+                    retry = None
+                    try:  # best effort: if the re-render fails, keep the blank image and the rest of the run
+                        retry = comfy.queue(_uncached(wf, attempt), front=True)  # next, not behind this run
+                        jobs[i - 1] = (s, retry, time.time(), wf)  # so a stop (Ctrl-C) cancels it
+                        if _LIVE is not None:
+                            _LIVE.forget(pid)  # the blank job no longer counts as a finished image
+                        result = _finish_job(comfy, events, retry)
+                    except Exception as e:
+                        log(f"  the re-render failed ({type(e).__name__}: {e}); keeping the blank image")
+                        jobs[i - 1] = (s, pid, queued_at, wf)
+                        if retry is not None:
+                            comfy.cancel([retry])
+                        break
+                    pid, queued_at = jobs[i - 1][1], jobs[i - 1][2]
+                    entry, outs, datas, blanks = result
+                if any(blanks):
+                    log(f"warning: seed {s} is still blank; kept and marked \"blank\" (gen daily won't use it)")
                 secs = round(time.time() - t_wait, 1)  # wall time; the first one includes loading the model
-                if _LIVE is not None:  # in case the socket dropped the job's end
-                    _LIVE.on_event(pid, "execution_success", {}, time.time())
-                outputs = entry.get("outputs", {})
                 try:  # best effort: a surprise in the events must not lose the finished images
                     jt = job_timing(wf, queued_at, events.wait_done(pid), entry)
                 except Exception as e:
                     log(f"note: no timing for seed {s} ({type(e).__name__}: {e})")
                     jt = {}
                 job_timings.append(jt)
-                outs = [im for o in outputs.values() for im in o.get("images", []) if im.get("type") == "output"]
-                for j, im in enumerate(outs):
+                for j, data in enumerate(datas):
                     name = f"{i:02d}-seed{s}" + (f"-{j}" if len(outs) > 1 else "") + ".png"
                     path = run_dir / name
-                    t0 = time.time()
-                    path.write_bytes(comfy.fetch(im))
-                    timing = {**_flat(jt), "fetch_s": round(time.time() - t0, 2)}
+                    path.write_bytes(data["png"])
+                    timing = {**_flat(jt), "fetch_s": data["fetch_s"]}
+                    flag = {"blank": True} if blanks[j] else {}
                     final = path
                     for step in p.get("post", []):
                         t0 = time.time()
@@ -972,11 +1030,11 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
                                                                     if k not in ("prompt", "negative")},
                             "file": final.name, "raw_file": path.name, "created": now.isoformat(timespec="seconds"),
                             "timing": {**timing, **{k: jt[k] for k in ("nodes", "cached") if k in jt}},
-                            **(source or {})}
+                            **flag, **(source or {})}
                     path.with_suffix(".json").write_text(json.dumps(meta, indent=2))
                     images.append({"path": str(final), "windows_path": to_windows_path(final), "seed": s,
                                    "seconds": secs if j == 0 else None,  # per job, not per output (gen bakeoff)
-                                   "timing": timing})
+                                   "timing": timing, **flag})
                 parts = _stage_parts(images[-1]["timing"] if outs else jt)
                 log(f"  [{i}/{count}] seed {s} done in {secs:.1f}s"
                     + (f" ({', '.join(parts)})" if parts else ""))
@@ -1330,7 +1388,11 @@ def main(argv: list[str]) -> int:
     run = generate(a.prompt, a.preset, a.count, a.seed, a.negative, w, h, a.steps, a.cfg, a.label)
     _print_run(run, a.open)
     if a.wallpaper and run["images"]:
-        print("wallpaper set:", set_wallpaper(run["images"][0]["path"]))
+        good = [im for im in run["images"] if not im.get("blank")]
+        if not good:
+            log("not setting the wallpaper: every image came out blank (black)")
+            return 1
+        print("wallpaper set:", set_wallpaper(good[0]["path"]))
     return 0
 
 

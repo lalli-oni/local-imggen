@@ -213,6 +213,11 @@ accepting jobs and never ran them), so the run stops and prints the `journalctl`
 comfyui` commands. A bake-off folder stopped before this had no sheet;
 `gen bakeoff --rebuild FOLDER` makes one from its images (times from the sidecars, no memory numbers).
 
+Qwen sometimes renders an all-black image when RAM runs out (seed 1 black, seed 2 fine, same run). Every
+`gen` run now checks for that: a black image is rendered again with the same seed (the log says so), and one
+that is still black is kept but marked `"blank": true`. `gen daily` and `gen --wallpaper` never set a blank image
+as the wallpaper.
+
 ```sh
 ~/imagegen/models/dreamshaper-xl-lightning.sh   # ~6.9 GB, asks y/N
 ~/imagegen/models/ipadapter-sdxl.sh             # ~3.4 GB, asks y/N; its --help shows the one-time node install

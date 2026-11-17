@@ -287,6 +287,13 @@ class Progress:
                         job.step_t = (t, v)
                     job.step, job.step_last = (v, m), t
 
+    def forget(self, pid: str) -> None:
+        """Drop a job that is being rendered again (a blank image): it must not count as a finished one."""
+        with self._lock:
+            self.jobs.pop(pid, None)
+            if pid in self.order:
+                self.order.remove(pid)
+
     def _leave_node(self, job: _Job, t: float) -> None:
         if job.node is not None:
             st = self.node_stage.get(job.node, "other")

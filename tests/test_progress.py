@@ -284,3 +284,13 @@ def test_a_broken_listener_does_not_lose_timing(comfy, monkeypatch):
     comfy.node_s = {"KSampler": 0.1}
     run = imagegen.generate("x", "draft", seed=1)
     assert run["timing"]["sample_s"] >= 0.1
+
+
+def test_forgotten_job_is_not_a_finished_image():
+    pr = make_progress(count=1)
+    play(pr, "a", 0.0, "1", "2", "3", "4", "5")
+    pr.on_event("a", "execution_success", {}, 5.0)
+    assert pr._finished() == 1
+    pr.forget("a")  # came out black: rendered again as "b"
+    play(pr, "b", 6.0, "3")
+    assert pr._finished() == 0 and "image 1/1" in text(pr, 7.0) and "saving" not in text(pr, 7.0)
