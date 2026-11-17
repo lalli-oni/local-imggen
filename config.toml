@@ -117,8 +117,14 @@ post = ["remove_bg", "keep_largest", "trim"]
 # doesn't silently change a project. Qwen runs at cfg 1, so negative_extra only reaches the SDXL presets.
 [styles.synthwave]
 description = "The house look: synthwave/vaporwave magical realism, realistic yet outrageous and funny"
-suffix = "synthwave vaporwave magical realism, a detailed realistic digital painting of an outrageous, over-the-top and funny scene, like a still from an 80s action movie, glowing hot pink, magenta, purple and cyan neon light, retro 80s sunset colours, chrome and wet reflective surfaces, any signs are neon with short punny English text, lots of quirky background details and sight gags, cinematic lighting, rich saturated colours"
+suffix = "synthwave vaporwave magical realism, a detailed realistic digital painting of an outrageous, over-the-top and funny scene, like a still from an 80s action movie, glowing hot pink, magenta, purple and cyan neon light, retro 80s sunset colours, chrome and wet reflective surfaces, lots of quirky background details and sight gags, cinematic lighting, rich saturated colours"
 negative_extra = "flat cartoon, childish storybook, washed out colours, dull grey lighting"
+
+# Þór's first direction to explore (2026-11-17): 80s/90s digital artefacts as a playful mood, a digital world
+# where anything is possible. Mix it in: gen "..." --style synthwave,retro_digital ([daily] uses both).
+[styles.retro_digital]
+description = "80s/90s digital artefacts: CRT scanlines, VHS glitches, dithering, pixels, early 3D"
+suffix = "a playful 80s and 90s digital world where anything is possible, old screen artefacts used as decoration: CRT scanlines and screen glow, VHS tracking lines and colour bleed, ordered dithering, chunky pixel-art and low-poly early-3D objects, shiny chrome, a glowing wireframe grid floor, small glitch effects"
 
 [styles.storybook]
 description = "The old daily look: cosy, soft, whimsical"
@@ -134,12 +140,13 @@ ref = ""                      # CHARACTER:REF, or an image path (relative = unde
 # are left out (they ask for a plain white background, so the model copied the ref as-is).
 # The character is part of the action (#52: blended into the scene, not posing in the middle). Other creatures
 # are fine (crab armies, flamingo guards), as long as they don't look like a second copy of the character.
-ref_prompt = "A wide, finished wallpaper image that fills the whole frame: {scene}. Any signs have short English text. Detailed background, scenery and lighting everywhere, no white or empty background, no border. The character from the reference image appears exactly once, as {name}: busy with the action as part of the scene, not posing in the centre, lit like the rest of the scene, in a new pose, with the same design and colours and its short rounded tail. Any other creatures look clearly different from {name}."
+ref_prompt = "A wide, finished wallpaper image that fills the whole frame: {scene}. The only text in the image is the sign text named in the scene, spelled exactly as given; no other signs, labels or writing. Detailed background, scenery and lighting everywhere, no white or empty background, no border. The character from the reference image appears exactly once, as {name}: busy with the action as part of the scene, not posing in the centre, lit like the rest of the scene, in a new pose, with the same design and colours and its short rounded tail. Any other creatures look clearly different from {name}."
 count = 1                     # images per day; the first one becomes the wallpaper
 no_repeat_days = 7            # at least this many days between two uses of a theme (past daily runs)
 cast = ["tulu"]               # characters (gen char) in every daily; their descriptions lead the prompt
-style = "synthwave"           # a [styles] name (or "a, b"), or literal text; "" = the preset's styles
-# Missions, absurd set pieces and a punny sign each: the house style is outrageous, extravagant and funny.
+style = "synthwave, retro_digital"  # [styles] names, or a phrase of literal text; "" = the preset's styles
+# Missions, absurd set pieces and a punny sign each. Give a sign's exact text in quotes (Qwen writes gibberish
+# on signs it makes up), and ref_prompt asks for no other text. The house style is outrageous and funny.
 themes = [
   "on a midnight heist in a neon casino vault, dodging pink laser beams while flamingo guards snooze, a neon sign reads 'SQUID PRO QUO'",
   "racing a chrome speedboat through a flooded neon Miami at sunset, chased by a giant inflatable rubber duck, a billboard reads 'TIDE WAITS FOR NO ONE'",

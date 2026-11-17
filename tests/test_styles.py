@@ -34,6 +34,7 @@ def test_config_styles_are_sane():
     assert conf["presets"]["wallpaper_ref"]["styles"] == ["synthwave"]
     assert not conf["presets"]["draft"].get("styles") and not conf["presets"]["icon"].get("styles")
     assert SYNTH and not SYNTH.startswith(",") and "synthwave" in SYNTH
+    assert daily.settings(conf)["styles"] == ["synthwave", "retro_digital"]  # daily explores both (2026-11-17)
 
 
 def test_preset_default_style(comfy):
