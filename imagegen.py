@@ -123,6 +123,18 @@ def check_styles(names, conf: dict | None = None) -> list[str]:
     return names
 
 
+def style_post(names, conf: dict | None = None, before: list[str] = ()) -> list[str]:
+    """before + the styles' `post` steps (e.g. crt), each once, in order; ValueError on an unknown step."""
+    conf = conf or load_config()
+    out = list(before)
+    for n in check_styles(names, conf):
+        out += [s for s in list_styles(conf)[n].get("post", []) if s not in out]
+    bad = [s for s in out if s not in POST]
+    if bad:
+        raise ValueError(f"unknown post step {', '.join(bad)} (known: {', '.join(POST)})")
+    return out
+
+
 def style_text(names, conf: dict | None = None, key: str = "suffix") -> str:
     """The styles' text (suffix, or negative_extra) joined with ", ", without a leading comma."""
     conf = conf or load_config()
@@ -697,7 +709,94 @@ def trim(path: Path) -> Path:
     return path
 
 
-POST = {"remove_bg": remove_bg, "keep_largest": keep_largest, "trim": trim}
+# crt: the warm look of an old CRT/VHS screen, added to a finished image (no model, no GPU). The knobs live in
+# [crt] in config.toml; CRT_DEFAULTS fills any that are missing. Sizes are for a 1080-line image and scale with it.
+CRT_DEFAULTS = {
+    "lines": 360,      # scanlines over the image height (fewer = thicker, further apart)
+    "scanline": 0.22,  # how dark the gaps between lines get, 0-1 (0 = no lines)
+    "blur": 0.6,       # softness, in px at 1080 lines (old screens were never sharp)
+    "bleed": 1.0,      # red/blue fringes, px at 1080 lines (colour bleeding sideways, like VHS)
+    "glow": 0.2,       # bright parts bloom into their surroundings, 0-1
+    "warmth": 0.04,    # warmer colours (a bit more red, less blue), 0-0.2
+    "vignette": 0.18,  # darker corners, 0-1
+}
+
+
+def crt_settings(conf: dict | None = None, **overrides) -> dict:
+    s = {**CRT_DEFAULTS, **(conf or load_config()).get("crt", {}),
+         **{k: v for k, v in overrides.items() if v is not None}}
+    unknown = set(s) - set(CRT_DEFAULTS)
+    if unknown:
+        raise ValueError(f"[crt]: unknown {', '.join(sorted(unknown))} (known: {', '.join(CRT_DEFAULTS)})")
+    return {k: float(v) for k, v in s.items()}
+
+
+def crt_image(im, s: dict):
+    """The CRT/VHS look on a PIL image (RGB or RGBA; alpha is kept): bleed, blur, glow, warmth, scanlines,
+    vignette, in that order. Pillow only (no numpy), fast enough for 4K."""
+    import math
+    from PIL import Image, ImageChops, ImageFilter
+    alpha = im.getchannel("A") if im.mode == "RGBA" else None
+    im = im.convert("RGB")
+    w, h = im.size
+    k = h / 1080
+    r, g, b = im.split()
+    if (shift := round(s["bleed"] * k)):
+        r, b = ImageChops.offset(r, shift, 0), ImageChops.offset(b, -shift, 0)
+    im = Image.merge("RGB", (r, g, b))
+    if s["blur"] > 0:
+        im = im.filter(ImageFilter.GaussianBlur(s["blur"] * k))
+    if s["glow"] > 0:
+        bright = im.point(lambda v: max(0, v - 160) * 255 // 95)  # only the bright parts glow
+        halo = bright.filter(ImageFilter.GaussianBlur(12 * k)).point(lambda v: round(v * s["glow"]))
+        im = ImageChops.screen(im, halo)
+    if s["warmth"] > 0:
+        r, g, b = im.split()
+        r = r.point(lambda v: min(255, round(v * (1 + s["warmth"]))))
+        b = b.point(lambda v: round(v * (1 - s["warmth"])))
+        im = Image.merge("RGB", (r, g, b))
+    if s["scanline"] > 0 and s["lines"] > 0:
+        period = h / s["lines"]
+        # a soft wave, not hard black lines; brightness is lifted a little so the image stays as bright
+        col = bytes(round(255 * (1 - s["scanline"] * (0.5 - 0.5 * math.cos(2 * math.pi * y / period))))
+                    for y in range(h))
+        mask = Image.frombytes("L", (1, h), col).resize((w, h), Image.NEAREST)
+        im = ImageChops.multiply(im, Image.merge("RGB", (mask, mask, mask)))
+        lift = 1 / (1 - s["scanline"] / 2)
+        im = im.point(lambda v: min(255, round(v * lift)))
+    if s["vignette"] > 0:
+        gw, gh = 64, max(1, round(64 * h / w))
+        grid = bytes(round(255 * (1 - s["vignette"] * min(1.0, ((x / (gw - 1) - 0.5) ** 2 + (y / (gh - 1) - 0.5) ** 2) * 2) ** 1.5))
+                     for y in range(gh) for x in range(gw))
+        mask = Image.frombytes("L", (gw, gh), grid).resize((w, h), Image.BILINEAR)
+        im = ImageChops.multiply(im, Image.merge("RGB", (mask, mask, mask)))
+    if alpha is not None:
+        im.putalpha(alpha)
+    return im
+
+
+def crt_source(path: Path) -> Path:
+    """The clean image a -crt.png was made from (so re-running crt never stacks the effect)."""
+    if path.stem.endswith("-crt"):
+        raw = path.with_name(path.stem.removesuffix("-crt") + path.suffix)
+        if raw.is_file():
+            return raw
+    return path
+
+
+def crt(path: Path, **overrides) -> Path:
+    """Writes <stem>-crt.png next to the image (the clean one stays) and returns it. overrides: [crt] knobs."""
+    from PIL import Image
+    src = crt_source(Path(path))
+    s = crt_settings(**overrides)
+    with Image.open(src) as im:
+        im.load()
+    out = src.with_name(src.stem + "-crt.png")
+    crt_image(im, s).save(out)
+    return out
+
+
+POST = {"remove_bg": remove_bg, "keep_largest": keep_largest, "trim": trim, "crt": crt}
 CLEANUP = ["keep_largest", "trim"]  # what `gen cutout --clean` runs after remove_bg
 
 
@@ -894,11 +993,12 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
              steps: int | None = None, cfg: float | None = None, label: str | None = None,
              source_image: str | None = None, mask: str | None = None,
              denoise: float | None = None, edit: bool = False, guidance: float | None = None,
-             styles: list[str] | None = None) -> dict:
+             styles: list[str] | None = None, post: list[str] | None = None) -> dict:
     """txt2img by default. With source_image: img2img (denoise = how much may change, 0-1).
     With source_image + mask: inpaint, only the white part of the mask is repainted.
     With source_image + edit=True: the prompt is an edit instruction for the preset's edit_workflow.
-    styles: [styles.NAME] looks added after the preset suffix (None = the preset's `styles`, [] = none)."""
+    styles: [styles.NAME] looks added after the preset suffix (None = the preset's `styles`, [] = none);
+    a style's `post` steps run after the preset's. post: more steps after those (gen daily: its styles' posts)."""
     t_start = time.time()
     conf = load_config()
     presets = conf["presets"]
@@ -907,6 +1007,7 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
     p = dict(presets[preset])
     count = max(1, int(count))
     styles = check_styles(p.get("styles", []) if styles is None else styles, conf)
+    post = style_post(styles, conf, p.get("post", []) + list(post or []))
     if mask is not None and source_image is None:
         raise ValueError("a mask needs a source image")
     if edit:
@@ -1058,7 +1159,7 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
                     timing = {**_flat(jt), "fetch_s": data["fetch_s"]}
                     flag = {"blank": True} if blanks[j] else {}
                     final = path
-                    for step in p.get("post", []):
+                    for step in post:
                         t0 = time.time()
                         final = POST[step](final)
                         timing[f"{step}_s"] = round(time.time() - t0, 2)
@@ -1100,7 +1201,7 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
         summary = timing_summary(run_timing, [im["timing"] for im in images])
         run_timing["summary"] = summary
         run = {"preset": preset, "styles": styles, "prompt": prompt, "base_seed": base_seed, "count": count,
-               "run_dir": str(run_dir), "images": images, "transparent": bool(p.get("post")), **(source or {}),
+               "run_dir": str(run_dir), "images": images, "transparent": "remove_bg" in post, **(source or {}),
                "timing": run_timing}
         (run_dir / "run.json").write_text(json.dumps(run, indent=2))
         sheet = write_contact_sheet(run_dir, run)
@@ -1423,6 +1524,26 @@ def main(argv: list[str]) -> int:
             return 1
         print(cutout(src, a.clean))
         return 0
+    if argv and argv[0] == "crt":
+        cp = argparse.ArgumentParser(
+            prog="gen crt", description="Add the CRT/VHS look to images -> NAME-crt.png (the clean image stays). "
+            "Knobs default to [crt] in config.toml; try some here, then put the ones you like there. "
+            "On a -crt.png it starts again from the clean image, so it never stacks.")
+        cp.add_argument("paths", nargs="+", metavar="PATH")
+        for k, v in CRT_DEFAULTS.items():
+            cp.add_argument(f"--{k}", type=float, help=f"default {v} (or [crt] {k})")
+        a = cp.parse_args(argv[1:])
+        knobs = {k: getattr(a, k) for k in CRT_DEFAULTS}
+        status = 0
+        for p in a.paths:
+            src = to_linux_path(p)
+            if not src.is_file():
+                print(f"not a file: {src}", file=sys.stderr)
+                status = 1
+                continue
+            out = crt(src, **knobs)
+            print(to_windows_path(out) or out)
+        return status
     if argv and argv[0] == "sheet":
         if argv[1:2] in (["-h"], ["--help"]):
             print("usage: gen sheet [PATH...]  rebuild index.html from run.json\n"

@@ -117,14 +117,28 @@ post = ["remove_bg", "keep_largest", "trim"]
 # doesn't silently change a project. Qwen runs at cfg 1, so negative_extra only reaches the SDXL presets.
 [styles.synthwave]
 description = "The house look: synthwave/vaporwave magical realism, realistic yet outrageous and funny"
-suffix = "synthwave vaporwave magical realism, a detailed realistic digital painting of an outrageous, over-the-top and funny scene, like a still from an 80s action movie, glowing hot pink, magenta, purple and cyan neon light, retro 80s sunset colours, chrome and wet reflective surfaces, lots of quirky background details and sight gags, cinematic lighting, rich saturated colours"
+suffix = "synthwave vaporwave magical realism, a detailed realistic digital painting of an outrageous, over-the-top and funny scene, like a still from an 80s action movie, believable everyday materials like concrete, brick, tiles, wood and carpet, lit by glowing pink, magenta and cyan neon accents from signs and lamps, retro 80s sunset colours, chrome and wet reflective surfaces, several funny sight gags spread through the scene with room to breathe between them, cinematic lighting, rich saturated colours"
 negative_extra = "flat cartoon, childish storybook, washed out colours, dull grey lighting"
 
 # Þór's first direction to explore (2026-11-17): 80s/90s digital artefacts as a playful mood, a digital world
-# where anything is possible. Mix it in: gen "..." --style synthwave,retro_digital ([daily] uses both).
+# where anything is possible. The screen look itself (scanlines, softness, colour bleed, warmth) is the crt post
+# step below, not the prompt: Qwen drew thin, crisp lines and random RGB glitch blocks when asked for them.
+# Mix it in: gen "..." --style synthwave,retro_digital ([daily] uses both).
 [styles.retro_digital]
-description = "80s/90s digital artefacts: CRT scanlines, VHS glitches, dithering, pixels, early 3D"
-suffix = "a playful 80s and 90s digital world where anything is possible, old screen artefacts used as decoration: CRT scanlines and screen glow, VHS tracking lines and colour bleed, ordered dithering, chunky pixel-art and low-poly early-3D objects, shiny chrome, a glowing wireframe grid floor, small glitch effects"
+description = "80s/90s digital world: pixel-art screens, chrome, and the crt post step (soft scanlines, VHS warmth)"
+suffix = "a playful 80s and 90s digital world where anything is possible, chunky pixel-art graphics on screens and signs, shiny chrome, a clean image"
+post = ["crt"]                # a style's post steps run after the preset's
+
+# The crt post step (gen crt IMAGE... tries other values on finished images, without generating again).
+# Sizes are for a 1080-line image and scale with it (a 4K wallpaper gets twice the px).
+[crt]
+lines = 360        # scanlines over the image height (fewer = thicker, further apart; old TVs had ~480)
+scanline = 0.22    # how dark the gaps between lines get, 0-1 (0 = no lines)
+blur = 0.6         # softness in px
+bleed = 1.0        # red/blue colour fringes sideways in px, like VHS
+glow = 0.2         # bright parts bloom into their surroundings, 0-1
+warmth = 0.04      # a bit more red, less blue, 0-0.2
+vignette = 0.18    # darker corners, 0-1
 
 [styles.storybook]
 description = "The old daily look: cosy, soft, whimsical"
@@ -173,6 +187,25 @@ themes = [
   "bowling with a giant pearl in a cosmic bowling alley on a space station, Earth glowing outside the window, a sign reads 'STRIKE FROM THE DEEP'",
   "delivering pizza on roller skates through a rainy neon city, pizza boxes stacked to the sky, a sign reads 'HOT IN 30 TENTACLES OR LESS'",
 ]
+
+# 80s/90s items: each day props_per_day of them, from as many different categories, are added to the theme
+# (", with a boombox and a DeLorean in the scene"). The date picks them, like the theme. Add freely.
+props_per_day = 3
+[daily.props]
+tech = ["a big chrome boombox", "a yellow Walkman with orange foam headphones", "a stack of VHS tapes",
+        "a glowing CRT television", "an arcade cabinet", "a beige home computer with a floppy drive",
+        "a brick-sized early mobile phone", "a grey brick-shaped handheld game console", "a Rubik's cube",
+        "a wall of cassette tapes", "a pocket calculator watch", "a dot-matrix printer spitting paper"]
+wearables = ["a light-up visor", "LED-lit high-top sneakers", "a chrome power glove", "a shiny holographic jacket",
+             "a chunky wrist computer", "mirrored aviator sunglasses", "neon leg warmers", "a jetpack made of chrome tubes",
+             "a cyber headset with a tiny screen over one eye"]
+vehicles = ["a silver DeLorean with gull-wing doors open", "a white Lamborghini Countach", "a red Ferrari Testarossa",
+            "a black talking 80s sports car with a red scanner light", "a hoverboard", "a BMX bike with neon spokes",
+            "a wood-panelled station wagon"]
+scifi = ["a robot butler with a tray", "a flickering blue hologram", "a chrome laser pistol",
+         "a flying saucer-shaped lamp", "a giant computer with blinking lights and tape reels", "a teleporter booth"]
+setting = ["a glowing wireframe grid floor stretching to the horizon", "palm trees", "Memphis-pattern walls in pastel squiggles",
+           "a lava lamp", "a mall fountain with pennies", "a checkerboard floor", "a mirror ball", "a pink flamingo lawn ornament"]
 
 # Optional: replaces `themes` on a day. The most specific entry wins: "YYYY-MM-DD", "MM-DD", month, weekday.
 # Movable feasts (Easter-based, Þorri) change date every year: add them as "YYYY-MM-DD", one year at a time.

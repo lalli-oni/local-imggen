@@ -19,13 +19,13 @@ TULU = "chibi green cthulhu, amber eyes"
 
 @pytest.fixture
 def daily_conf(monkeypatch):
-    """Override [daily] keys for a test: daily_conf(themes=[...], cast=[]) etc. No dates unless given."""
+    """Override [daily] keys for a test: daily_conf(themes=[...], cast=[]) etc. No dates or props unless given."""
     real = imagegen.load_config
 
     def set_(**kw):
         def load():
             conf = real()
-            conf["daily"] = {**conf.get("daily", {}), "dates": {}, **kw}
+            conf["daily"] = {**conf.get("daily", {}), "dates": {}, "props_per_day": 0, **kw}
             return conf
         monkeypatch.setattr(imagegen, "load_config", load)
     return set_

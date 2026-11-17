@@ -164,7 +164,7 @@ def daily_conf(monkeypatch):
         def load():
             conf = real()
             conf["daily"] = {**conf.get("daily", {}), "dates": {}, "months": {}, "weekdays": {},
-                             "themes": ["on a beach"], "ref_prompt": "", **kw}
+                             "themes": ["on a beach"], "ref_prompt": "", "props_per_day": 0, **kw}
             return conf
         monkeypatch.setattr(imagegen, "load_config", load)
     return set_
@@ -224,3 +224,132 @@ def test_mcp_styles(comfy):
     assert _prompt(comfy.workflows()[0]) == f"a fox, {STORY}"
     mcp_server.vary(out[0]["images"][0]["path"], count=1, styles=[], preview=False)
     assert STORY not in _prompt(comfy.workflows()[1])
+
+
+# ---------------------------------------------------------------- crt post step and daily props
+
+def _gradient(path, size=(320, 180), mode="RGB"):
+    from PIL import Image
+    im = Image.new(mode, size)
+    im.putdata([(x * 255 // size[0], y * 255 // size[1], 128) + ((200,) if mode == "RGBA" else ())
+                for y in range(size[1]) for x in range(size[0])])
+    im.save(path)
+    return path
+
+
+def test_crt_writes_a_copy_and_never_stacks(tmp_path):
+    from PIL import Image, ImageChops
+    src = _gradient(tmp_path / "a.png")
+    before = src.read_bytes()
+    out = imagegen.crt(src)
+    assert out == tmp_path / "a-crt.png" and src.read_bytes() == before  # the clean image stays
+    first = Image.open(out).convert("RGB")
+    assert first.size == (320, 180) and ImageChops.difference(first, Image.open(src)).getbbox()
+    again = imagegen.crt(out)  # from the -crt.png: starts over from the clean one
+    assert again == out and not ImageChops.difference(Image.open(again).convert("RGB"), first).getbbox()
+
+
+def test_crt_knobs(tmp_path):
+    from PIL import Image, ImageChops
+    src = _gradient(tmp_path / "a.png")
+    off = {k: 0 for k in imagegen.CRT_DEFAULTS}
+    out = imagegen.crt(src, **off)  # every knob at 0: the image as it was
+    assert not ImageChops.difference(Image.open(out).convert("RGB"), Image.open(src).convert("RGB")).getbbox()
+    lines = Image.open(imagegen.crt(src, **{**off, "lines": 18, "scanline": 0.5})).convert("L")
+    col = [lines.getpixel((100, y)) for y in range(20)]
+    assert max(col) - min(col) > 30  # dark gaps every 10 px (18 lines over 180 px)
+    with pytest.raises(ValueError, match="unknown sharpness"):
+        imagegen.crt_settings(sharpness=1)
+
+
+def test_crt_keeps_transparency(tmp_path):
+    from PIL import Image
+    out = imagegen.crt(_gradient(tmp_path / "a.png", mode="RGBA"))
+    im = Image.open(out)
+    assert im.mode == "RGBA" and im.getchannel("A").getextrema() == (200, 200)
+
+
+def test_crt_config_overrides(monkeypatch):
+    real = imagegen.load_config
+    monkeypatch.setattr(imagegen, "load_config", lambda: {**real(), "crt": {"lines": 240}})
+    s = imagegen.crt_settings(scanline=0.5)
+    assert s["lines"] == 240 and s["scanline"] == 0.5 and s["blur"] == imagegen.CRT_DEFAULTS["blur"]
+
+
+def test_style_post_step_runs_after_generate(comfy):
+    assert imagegen.list_styles()["retro_digital"]["post"] == ["crt"]
+    run = imagegen.generate("fjord", "draft", seed=1, styles=["retro_digital"])
+    im = Path(run["images"][0]["path"])
+    assert im.name.endswith("-crt.png") and im.is_file()
+    assert im.with_name(im.name.replace("-crt", "")).is_file()  # the clean one too
+    meta = json.loads(im.with_name(im.name.replace("-crt.png", ".json")).read_text())
+    assert meta["file"] == im.name and "crt_s" in meta["timing"]
+    assert run["transparent"] is False
+    imagegen.generate("fjord", "draft", seed=1, styles=[])
+    assert comfy.workflows()  # and without the style: no crt
+    assert not imagegen.recent_runs(1)[0]["images"][0].endswith("-crt.png")
+
+
+def test_unknown_post_step_in_a_style(monkeypatch):
+    real = imagegen.load_config
+
+    def load():
+        conf = real()
+        conf["styles"]["broken"] = {"suffix": "x", "post": ["sparkle"]}
+        return conf
+    monkeypatch.setattr(imagegen, "load_config", load)
+    with pytest.raises(ValueError, match="unknown post step sparkle"):
+        imagegen.style_post(["broken"])
+
+
+def test_gen_crt_cli(tmp_path, capsys):
+    src = _gradient(tmp_path / "a.png")
+    assert imagegen.main(["crt", str(src), "--lines", "90"]) == 0
+    assert (tmp_path / "a-crt.png").is_file()
+    assert imagegen.main(["crt", str(tmp_path / "missing.png")]) == 1
+
+
+def test_daily_ref_run_gets_the_styles_post_steps(tulu, daily_conf):
+    daily_conf(style="synthwave, retro_digital")
+    p = daily.plan(date(2026, 11, 10))
+    assert p["ref"] and p["gen_styles"] == [] and p["post"] == ["crt"]
+    daily_conf(style="synthwave, retro_digital", preset="wallpaper_sdxl")  # text only: generate() adds them
+    p = daily.plan(date(2026, 11, 10))
+    assert p["gen_styles"] == ["synthwave", "retro_digital"] and p["post"] == []
+
+
+PROPS = {"tech": ["a boombox", "a Walkman"], "cars": ["a DeLorean"], "wear": ["a visor", "LED sneakers"],
+         "empty": []}
+
+
+def test_daily_props(tulu, daily_conf):
+    daily_conf(props=PROPS, props_per_day=2, style="soft light", ref_prompt="")
+    p = daily.plan(date(2026, 11, 10))
+    assert len(p["props"]) == 2
+    cats = {c for item in p["props"] for c, items in PROPS.items() if item in items}
+    assert len(cats) == 2  # from different categories
+    assert p["prompt"] == f"on a beach, with {p['props'][0]} and {p['props'][1]} in the scene, soft light"
+    assert daily.plan(date(2026, 11, 10))["props"] == p["props"]  # the date decides
+    picks = {tuple(daily.plan(date(2026, 11, d))["props"]) for d in range(1, 29)}
+    assert len(picks) > 3
+    daily_conf(props=PROPS, props_per_day=9, style="soft light", ref_prompt="")
+    assert len(daily.plan(date(2026, 11, 10))["props"]) == 3  # at most one per non-empty category
+    daily_conf(props=PROPS, props_per_day=0, style="soft light", ref_prompt="")
+    assert daily.plan(date(2026, 11, 10))["prompt"] == "on a beach, soft light"
+    daily_conf(props={"tech": "a boombox"})
+    with pytest.raises(ValueError, match="daily.props"):
+        daily.plan(date(2026, 11, 10))
+
+
+def test_real_config_props_and_show(tulu, capsys):
+    p = daily.plan(date(2026, 11, 10))
+    assert len(p["props"]) == 3 and all(x in p["prompt"] for x in p["props"])
+    assert imagegen.main(["daily", "--show", "--date", "2026-11-10"]) == 0
+    assert "props:   " in capsys.readouterr().out
+
+
+def test_daily_run_records_props(tulu, comfy, daily_conf):
+    daily_conf(props=PROPS, props_per_day=1, style="soft light", preset="wallpaper_sdxl")
+    run = daily.run(date(2026, 11, 10), wait=1, set_wallpaper=False)
+    meta = json.loads((Path(run["run_dir"]) / "run.json").read_text())
+    assert len(meta["daily"]["props"]) == 1 and meta["daily"]["theme"] == "on a beach"  # theme without props

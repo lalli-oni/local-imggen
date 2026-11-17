@@ -10,6 +10,8 @@ Settings live in config.toml under [daily]:
            text-only presets get the styles from generate() (with their negative_extra)
   ref, ref_prompt  for an edit-only preset (wallpaper_ref): the image that shows the cast (CHARACTER:REF or a
            path; default the first cast character's first ref), and the prompt template ({scene}, {name})
+  props, props_per_day  [daily.props] category = [items]: each day props_per_day items, from as many different
+           categories, picked by the date, are added to the theme ("..., with a boombox and a DeLorean")
   themes   the scene for the day, picked at random (by the date: a re-run that day gets the same theme,
            with a new seed) from the ones the past daily runs haven't used in the last no_repeat_days
   no_repeat_days  at least this many days between two uses of a theme (default 7)
@@ -46,7 +48,10 @@ DEFAULT_WAIT = 600  # seconds for ComfyUI to come up: a scheduled run may have j
 def settings(conf: dict | None = None) -> dict:
     conf = conf or imagegen.load_config()
     d = {"preset": "wallpaper_ref", "count": 1, "cast": [], "style": "", "no_repeat_days": 7, "themes": [],
-         "dates": {}, "months": {}, "weekdays": {}, "ref": "", "ref_prompt": "", **conf.get("daily", {})}
+         "dates": {}, "months": {}, "weekdays": {}, "ref": "", "ref_prompt": "", "props": {}, "props_per_day": 0,
+         **conf.get("daily", {})}
+    if not isinstance(d["props"], dict) or not all(isinstance(v, list) for v in d["props"].values()):
+        raise ValueError("[daily.props]: use category = [\"item\", ...]")
     for key, names in (("months", MONTHS), ("weekdays", DAYS)):
         bad = [k for k in d[key] if k not in names]
         if bad:
@@ -157,6 +162,21 @@ def pick_theme(d: dict, day: date, recent: dict[str, date] | None = None) -> tup
     raise ValueError("[daily] has no themes: add themes = [\"...\"] to config.toml")
 
 
+def pick_props(d: dict, day: date) -> list[str]:
+    """props_per_day items for a day, each from a different [daily.props] category (the date decides)."""
+    cats = sorted(c for c, items in d["props"].items() if items)
+    n = min(max(0, int(d["props_per_day"])), len(cats))
+    rng = random.Random(f"props:{day.isoformat()}")
+    return [rng.choice(sorted(d["props"][c])) for c in rng.sample(cats, n)]
+
+
+def with_props(theme: str, props: list[str]) -> str:
+    if not props:
+        return theme
+    items = props[0] if len(props) == 1 else ", ".join(props[:-1]) + " and " + props[-1]
+    return f"{theme.rstrip().rstrip(',')}, with {items} in the scene"
+
+
 def compose(d: dict, theme: str) -> tuple[str, dict]:
     """The prompt (cast descriptions, theme, a literal style; joined like a project pass) and {character: version}.
     Named styles are left to generate() (plan's gen_styles), so their negative_extra applies too."""
@@ -198,13 +218,16 @@ def plan(day: date | None = None, conf: dict | None = None) -> dict:
     d = settings(conf)
     conf = conf or imagegen.load_config()
     theme, where = pick_theme(d, day, recent_themes(conf, day, max(1, int(d["no_repeat_days"])) - 1))
-    prompt, used = compose(d, theme)
+    props = pick_props(d, day)
+    scene = with_props(theme, props)
+    prompt, used = compose(d, scene)
     ref = None
     if d["uses_ref"]:
         ref = str(find_ref(d))
-        prompt = ref_prompt(d, theme, used)
-    return {"date": day.isoformat(), "theme": theme, "from": where, "prompt": prompt, "cast": used,
+        prompt = ref_prompt(d, scene, used)
+    return {"date": day.isoformat(), "theme": theme, "from": where, "props": props, "prompt": prompt, "cast": used,
             "styles": d["styles"], "gen_styles": [] if ref else d["styles"],  # with a ref: in the prompt
+            "post": imagegen.style_post(d["styles"], conf) if ref else [],  # ...so their post steps come from here
             "preset": d["preset"], "count": max(1, int(d["count"])), "ref": ref}
 
 
@@ -236,12 +259,12 @@ def run(day: date | None = None, wait: float = DEFAULT_WAIT, set_wallpaper: bool
         imagegen.Comfy(conf["comfy_url"]).wait_ready(timeout=wait)  # generate() then finds it up
         run = imagegen.generate(p["prompt"], p["preset"], p["count"], label=f"daily-{imagegen.slug(p['theme'], 30)}",
                                 source_image=p["ref"], edit=p["ref"] is not None,
-                                styles=p["gen_styles"])
+                                styles=p["gen_styles"], post=p["post"])
         if not run["images"]:
             raise RuntimeError(f"the run made no images ({run['run_dir']})")
         rf = Path(run["run_dir"]) / "run.json"
         meta = json.loads(rf.read_text())
-        meta["daily"] = run["daily"] = {k: p[k] for k in ("date", "theme", "from", "cast", "ref", "styles")}
+        meta["daily"] = run["daily"] = {k: p[k] for k in ("date", "theme", "from", "props", "cast", "ref", "styles")}
         rf.write_text(json.dumps(meta, indent=2))
         good = [im for im in run["images"] if not im.get("blank")]
         if not good:  # a black wallpaper is worse than yesterday's
@@ -275,6 +298,8 @@ def main(argv: list[str]) -> int:
         p = plan(a.date)
         print(f"{p['date']}: {p['theme']}  (from {p['from']})")
         print(f"preset:  {p['preset']} x{p['count']}" + (f", style {', '.join(p['styles'])}" if p["styles"] else ""))
+        if p["props"]:
+            print("props:   " + "; ".join(p["props"]))
         if p["ref"]:
             print(f"ref:     {p['ref']}")
         if p["cast"]:
