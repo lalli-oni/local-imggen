@@ -9,7 +9,10 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
 - `imagegen.py`: core + `gen` CLI (`gen --help`, `gen presets`, `gen recent`, `gen set-wallpaper PATH`,
   `gen vary PATH [--mask M] [-s 0.4]` for img2img/inpaint, `gen edit PATH "instruction"` for instruction edits
   (FLUX.2 klein by default since the #40 bake-off, `EDIT_PRESET`; `-p kontext` / `-p qwen`), `gen cutout PATH [--clean]` for background removal,
-  `gen bakeoff PATH "instr"...` (bakeoff.py: same edits through several edit presets, time/VRAM/RAM, one sheet),
+  `gen bakeoff PATH "instr"...` (bakeoff.py: same edits through several edit presets, time/VRAM/RAM, one sheet;
+  `--t2i "fresh prompt"... [--ref IMG --ref-prompt "scene"...]` compares text-to-image models, #51: fresh prompts from text,
+  and the ref test through each preset's edit_workflow or its `ref_preset` (SDXL -> sdxl_ref, IP-Adapter); labels from `model`;
+  the sheet is rewritten after every column and on Ctrl-C, `--rebuild FOLDER` for older stopped folders),
   `gen sheet [RUN_DIR|DATE]` to rebuild contact sheets (default: latest run), `gen doctor` for a health check)
 - `templates/contact_sheet.html`: the per-run `index.html` viewer (fit-all / size slider, A/B compare).
   Static, no build, opened via file://; `write_contact_sheet` inlines the run data as JSON.
@@ -37,7 +40,7 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   mtimes) to re-render on any change. Serves only images/.html under output_dir; POSTs must be same-origin JSON.
 - `daily.py`: `gen daily` (#3): picks the day's theme from `[daily]` in config.toml (a date-seeded pick among themes
   not used by past daily runs in `no_repeat_days`; `[daily.dates]` ("MM-DD" or "YYYY-MM-DD"), `[daily.months]`, `[daily.weekdays]` replace them, most specific first), puts the `cast` characters' descriptions
-  first, runs the preset, sets the first image as wallpaper. Default preset `wallpaper_ref` (edit-only: klein draws
+  first, runs the preset, sets the first image as wallpaper. Default preset `wallpaper_ref` (edit-only: Qwen-Image 2.1 since #51 draws
   the cast from a ref image, `[daily] ref`, default the first cast character's first ref, at 16:9 + 4x upscale). Failures leave the wallpaper alone; every attempt
   adds a line to `<output_dir>/daily.log`. `gen daily --show [--date D]` previews.
   `windows/daily-task.sh on [--at HH:MM]|off|status|run`: the Windows scheduled task (user-level, logged-on only,
@@ -47,6 +50,7 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   (stages done/running/pending, sampler step, ETA from the preset's past run.json timings, VRAM/RAM bars from
   /system_stats). `imagegen.log()` prints above it while `_LIVE` is set. Imports nothing from imagegen.
 - `doctor.py`: read-only health checks behind `gen doctor` and the MCP `doctor` tool
+  (warns when the limits are off while the wallpaper/daily presets use Qwen, `HEAVY_UNETS`)
 - `comfy/`: opt-in resource limits for the comfyui service, **off by default**. `comfy/limits.sh on|off|status`
   installs/removes `/etc/systemd/system/comfyui.service.d/zz-imagegen-limits.conf` built from `comfyui-args`
   (extra CLI flags) + `limits.conf` (Nice/CPUWeight/IOWeight). on/off restarts comfyui (sudo) after a y/N prompt
@@ -56,8 +60,8 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
 - `windows/install-wslconfig.sh`: writes `%USERPROFILE%\.wslconfig` (cores/RAM for WSL). Manual, never overwrites,
   always-on once applied (needs `wsl --shutdown`), so it is not part of the on/off toggle.
 - `models/*.sh`: opt-in downloads (ask y/N, resumable, sha256) into `~/comfyui/models`, sharing `models/_fetch.sh`:
-  `flux-kontext.sh` (~17.7 GB), `flux2-klein.sh` (~11.9 GB), `qwen-image-2.1.sh` (~30 GB, bf16: no int8, it renders
-  black on gfx1201). A preset's `download` key names its script; `gen doctor` shows those models (and nodes only
+  `flux-kontext.sh` (~17.7 GB), `flux2-klein.sh` (~11.9 GB), `dreamshaper-xl-lightning.sh` (~6.9 GB, SDXL finetune), `ipadapter-sdxl.sh` (~3.4 GB; the ComfyUI_IPAdapter_plus node is a manual git clone), `qwen-image-2.1.sh` (~30 GB, bf16: no int8, it renders
+  black on gfx1201). `qwen3vl-8b-fp8.sh` (~10.6 GB): the fp8 text encoder for `qwen_lite` (bf16's 16 GB swapped WSL and stalled Windows). A preset's `download` key names its script; `gen doctor` shows those models (and nodes only
   they use) as warn while missing. Never run automatically.
 - `test.sh` + `tests/`: the test suite (see Testing below). `requirements-dev.txt` / `requirements-browser.txt`
   hold test-only deps; CI runs it on every PR (`.github/workflows/test.yml`).
@@ -75,11 +79,21 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   optional `keep_largest` (drop stray shapes) and `trim` (crop + centre on a square of the shorter side); the last two rewrite the
   transparent PNG in place and skip images without transparency.
   An edit preset has `edit_workflow` (gets image, width/height; no checkpoint/negative); without `workflow` it is edit-only.
+  `ref_canvas = [w, h]` fits the source onto a canvas of its corner colour first (Qwen edits draw at the source's
+  aspect; any other latent size gave a blank image), used by `wallpaper_ref` for 16:9 from a portrait ref.
   A preset with `unet` (Flux/Qwen diffusion model) gets no default img2img/inpaint graph (`imagegen.mode_workflow`).
   steps/cfg/guidance/negative the chosen workflow has no `{{key}}` for are ignored with a note on stderr
   (`gen vary` on a klein/qwen image falls back to draft unless -p is given).
 - Outputs: `<output_dir>/<YYYY-MM-DD>/<HHMMSS>-<preset>-<slug>/` with PNGs, per-image JSON sidecars
   (prompt, seed, params, timing), `run.json` and `index.html` contact sheet.
+- Waiting (#51): a /history poll that times out means ComfyUI is busy (swapping), not gone: `wait_entry` waits up to `JOB_TIMEOUT`; only refused/reset connections give up after `DOWN_LIMIT` (90s).
+  When a `generate` stops (error, timeout, Ctrl-C), `Comfy.cancel` deletes its queued jobs and interrupts the running one; `gen bakeoff` refuses to start while ComfyUI is busy (`Comfy.busy`).
+  No websocket frame at all for `HANG_AFTER` (20 min, `Events.idle`) while a job is unfinished = ComfyUI's worker is dead (an HSA alloc failure did that): stop with the restart command.
+- Blank images (#51): a job whose PNG is all black (`is_blank`: Qwen NaNs under memory pressure) is queued again
+  with the same seed (`BLANK_RETRIES`), at the front of the queue and with an `imagegen_retry` input on the seed node
+  (`_uncached`: ComfyUI ignores it when running but its cache would otherwise return the black image). One still black
+  is kept with `"blank": true` (result + sidecar); `gen daily` and `gen --wallpaper` only set a non-blank image
+  (all blank = fail, wallpaper unchanged). Fake: `comfy.blank_jobs = N` (the first N jobs queued), `comfy.front`.
 - Timing (#2): `Events` in imagegen.py listens on ComfyUI's `/ws` (stdlib websocket client) and `job_timing`
   turns the `executing` events into `<stage>_s` seconds (stages from the node class, `STAGES`). Without the
   socket it falls back to `/history` timestamps (queue_s and comfy_s only). `run.json` `timing.summary` is the
@@ -94,7 +108,8 @@ Cloud sessions also run the contact sheet in Chromium (`/opt/pw-browsers`); else
 
 What's there to reuse, instead of building a one-off setup:
 - `comfy` fixture (`tests/fake_comfy.py`): a fake ComfyUI HTTP server with canned PNGs. Inspect `comfy.workflows()`,
-  `comfy.uploads`; switch on `reject`, `fail_jobs`, `no_gpu`, `delay` (slow jobs), `queue_running/pending`.
+  `comfy.uploads`; switch on `reject`, `fail_jobs`, `no_gpu`, `delay` (slow jobs), `queue_running/pending`, `running_ids`, `blank_jobs`;
+  cancels land in `deleted`, `cleared`, `interrupts`.
   It also plays the websocket events per node: `node_s` (seconds per class_type), `cached`, `ws = False`.
 - `make_run` (a finished run folder: PNGs, sidecars, run.json), `make_image`, `out_dir`, `fake_rembg`, `stub_calls()`
   (what the fake wslpath/powershell.exe/explorer.exe/systemctl/sudo were called with).

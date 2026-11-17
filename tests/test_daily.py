@@ -1,5 +1,6 @@
 """#3: gen daily (theme pick, cast prompt, set wallpaper, failure leaves it alone) and windows/daily-task.sh."""
 import base64
+import io
 import json
 import os
 from datetime import date, timedelta
@@ -166,19 +167,19 @@ def test_show(tulu, capsys):
     assert imagegen.main(["daily", "--show", "--date", "2026-12-24"]) == 0
     out = capsys.readouterr().out
     assert out.startswith("2026-12-24: ") and "(from dates.12-24)" in out and "tulu v1" in out
-    assert "prompt:  A wide, finished storybook illustration" in out and "ref:     " in out
+    assert "prompt:  A wide, finished wallpaper image" in out and "ref:     " in out
 
 
 # ---------------------------------------------------------------- runs
 
 def test_daily_generates_and_sets_wallpaper(tulu, comfy, on_c_drive, stub_calls, out_dir, capsys, daily_conf):
-    daily_conf(preset="wallpaper")  # SDXL, text only
+    daily_conf(preset="wallpaper_sdxl")  # SDXL, text only
     assert imagegen.main(["daily", "--wait", "5"]) == 0
     [wf] = comfy.workflows()
     prompts = [n["inputs"]["text"] for n in wf.values() if n["class_type"] == "CLIPTextEncode"]
     assert any(t.startswith(TULU + ", ") for t in prompts)
     [run] = imagegen.recent_runs(1)
-    assert run["preset"] == "wallpaper" and "-wallpaper-daily-" in run["run_dir"]
+    assert run["preset"] == "wallpaper_sdxl" and "-daily-" in run["run_dir"]
     meta = json.loads((Path(run["run_dir"]) / "run.json").read_text())
     assert meta["daily"]["cast"] == {"tulu": 1} and meta["daily"]["date"] == date.today().isoformat()
     [script] = _wallpaper_calls(stub_calls)
@@ -237,11 +238,18 @@ def test_default_preset_draws_from_the_cast_ref(tulu, comfy, on_c_drive, stub_ca
     assert imagegen.main(["daily", "--wait", "5"]) == 0
     [wf] = comfy.workflows()
     assert _node(wf, "LoadImage")["image"] in comfy.uploads  # the ref went up as the reference
-    latent = _node(wf, "EmptyFlux2LatentImage")
-    assert (latent["width"], latent["height"]) == (1536, 864)  # 16:9, not the ref's 3:4
+    assert _node(wf, "UNETLoader")["unet_name"] == "qwen_image_2.1_bf16.safetensors"  # Qwen since #51
+    assert _node(wf, "TextEncodeQwenImage21")["images.image_1"] == [next(k for k, n in wf.items()
+                                                                         if n["class_type"] == "LoadImage"), 0]
+    # Qwen draws at the ref's size: the ref went up on a 16:9 canvas, and the sampler uses the encoder's latent
+    from PIL import Image
+    up = Image.open(io.BytesIO(comfy.uploads[_node(wf, "LoadImage")["image"]]))
+    assert up.size == (1536, 864)  # 16:9, not the ref's 3:4
+    enc = next(k for k, n in wf.items() if n["class_type"] == "TextEncodeQwenImage21")
+    assert _node(wf, "KSampler")["latent_image"] == [enc, 2] and _node(wf, "TextEncodeQwenImage21")["resolution"] == 1152
     assert (_node(wf, "ImageScale")["width"], _node(wf, "ImageScale")["height"]) == (3840, 2160)
-    text = _node(wf, "CLIPTextEncode")["text"]
-    assert text.startswith("A wide, finished storybook illustration that fills the whole frame: ")
+    text = _node(wf, "TextEncodeQwenImage21")["prompt"]
+    assert text.startswith("A wide, finished wallpaper image that fills the whole frame: ")
     assert "as lil tulu, in a new pose" in text and "no white or empty background" in text
     assert TULU not in text  # the text description (plain background, standing...) would make it copy the ref
     [run] = imagegen.recent_runs(1)
@@ -364,3 +372,11 @@ def test_task_run(task_env, stub_calls):
     r = run_script([SCRIPT, "run"], task_env)
     assert r.code == 0
     assert "Start-ScheduledTask -TaskName 'imagegen-daily'" in _ps(stub_calls)[0]
+
+
+def test_blank_image_never_becomes_the_wallpaper(tulu, comfy, on_c_drive, stub_calls, out_dir, daily_conf):
+    daily_conf(preset="wallpaper_sdxl")
+    comfy.blank_jobs = 99  # black even after the retry
+    assert imagegen.main(["daily", "--wait", "5"]) == 1
+    assert _wallpaper_calls(stub_calls) == []
+    assert "every image came out blank" in _log_lines(out_dir)[0]

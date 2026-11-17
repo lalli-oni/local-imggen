@@ -1,7 +1,7 @@
 """gen daily (#3): make one new wallpaper and set it as the Windows desktop background.
 
 Settings live in config.toml under [daily]:
-  preset   the wallpaper preset (wallpaper / wallpaper_ultrawide)
+  preset   the wallpaper preset (wallpaper_ref by default; wallpaper / wallpaper_ultrawide from text only)
   count    images to make; the first becomes the wallpaper (the rest stay in the run folder)
   cast     characters (gen char) in every daily. Text-only presets: their descriptions lead the prompt, like a
            project pass. With a ref (wallpaper_ref) the ref shows them and the descriptions are left out
@@ -228,7 +228,10 @@ def run(day: date | None = None, wait: float = DEFAULT_WAIT, set_wallpaper: bool
         meta = json.loads(rf.read_text())
         meta["daily"] = run["daily"] = {k: p[k] for k in ("date", "theme", "from", "cast", "ref")}
         rf.write_text(json.dumps(meta, indent=2))
-        image = run["images"][0]["path"]
+        good = [im for im in run["images"] if not im.get("blank")]
+        if not good:  # a black wallpaper is worse than yesterday's
+            raise RuntimeError(f"every image came out blank (black) ({run['run_dir']})")
+        image = good[0]["path"]
         run["wallpaper"] = imagegen.set_wallpaper(image) if set_wallpaper else None
     except Exception as e:
         _log(f"FAILED, wallpaper unchanged: {type(e).__name__}: {e}", conf)

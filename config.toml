@@ -7,11 +7,14 @@ output_dir = "/mnt/c/Users/lalli/Pictures/imagegen"   # change this line to move
 checkpoint       = "sd_xl_base_1.0.safetensors"
 default_negative = "blurry, low quality, watermark, text, signature, jpeg artifacts"
 
-# Each preset = a workflow template in workflows/ + the values poured into it.
+# Each preset = a workflow template in workflows/ + the values poured into it. `model` names the model for
+# people (the gen bakeoff labels).
 # Keys a workflow uses as "{{key}}" must exist here (or come from CLI/MCP args).
 
 [presets.draft]
 description = "Quick square SDXL image for ideas and exploration"
+model = "SDXL base 1.0"
+ref_preset = "sdxl_ref"         # what draws with a ref image (gen bakeoff --t2i's ref test)
 workflow = "sdxl_base.json"
 width = 1024
 height = 1024
@@ -19,8 +22,50 @@ steps = 25
 cfg = 7.0
 suffix = ""
 
+# Wallpapers use Qwen-Image 2.1 since the #51 bake-off (best quality and on-model refs; ~3 min an image).
+# Keep the resource limits on (comfy/limits.sh on): without them a Qwen run can stall Windows.
+# The SDXL versions are wallpaper_sdxl / wallpaper_ultrawide_sdxl (fast, and they have gen vary graphs).
 [presets.wallpaper]
-description = "16:9 landscape, upscaled to 4K (3840x2160)"
+description = "16:9 landscape, upscaled to 4K (3840x2160) (Qwen-Image 2.1)"
+model = "Qwen-Image 2.1"
+workflow = "qwen_image_21_upscale.json"
+download = "qwen-image-2.1.sh"
+unet = "qwen_image_2.1_bf16.safetensors"
+weight_dtype = "fp8_e4m3fn"
+text_encoder = "qwen3vl_8b_bf16.safetensors"
+vae = "qwen_image_2.1_vae_bf16.safetensors"
+resolution = 1024
+steps = 25
+cfg = 1.0
+width = 1536                     # exactly 16:9 (multiples of 16), so the 4K scale crops nothing
+height = 864
+target_width = 3840
+target_height = 2160
+upscale_model = "RealESRGAN_x4plus.pth"
+suffix = ", wallpaper, wide landscape composition, highly detailed"
+
+[presets.wallpaper_ultrawide]
+description = "21:9 ultrawide, upscaled to 3440x1440 (Qwen-Image 2.1)"
+model = "Qwen-Image 2.1"
+workflow = "qwen_image_21_upscale.json"
+download = "qwen-image-2.1.sh"
+unet = "qwen_image_2.1_bf16.safetensors"
+weight_dtype = "fp8_e4m3fn"
+text_encoder = "qwen3vl_8b_bf16.safetensors"
+vae = "qwen_image_2.1_vae_bf16.safetensors"
+resolution = 1024
+steps = 25
+cfg = 1.0
+width = 1792                     # 21:9
+height = 768
+target_width = 3440
+target_height = 1440
+upscale_model = "RealESRGAN_x4plus.pth"
+suffix = ", ultrawide panoramic wallpaper, highly detailed"
+
+[presets.wallpaper_sdxl]
+description = "16:9 landscape, upscaled to 4K (3840x2160) (SDXL: fast)"
+model = "SDXL base 1.0"
 workflow = "sdxl_upscale.json"
 img2img_workflow = "sdxl_img2img_upscale.json"
 inpaint_workflow = "sdxl_inpaint_upscale.json"
@@ -33,8 +78,9 @@ target_height = 2160
 upscale_model = "RealESRGAN_x4plus.pth"
 suffix = ", wallpaper, wide landscape composition, highly detailed"
 
-[presets.wallpaper_ultrawide]
-description = "21:9 ultrawide, upscaled to 3440x1440"
+[presets.wallpaper_ultrawide_sdxl]
+description = "21:9 ultrawide, upscaled to 3440x1440 (SDXL: fast)"
+model = "SDXL base 1.0"
 workflow = "sdxl_upscale.json"
 img2img_workflow = "sdxl_img2img_upscale.json"
 inpaint_workflow = "sdxl_inpaint_upscale.json"
@@ -49,6 +95,7 @@ suffix = ", ultrawide panoramic wallpaper, highly detailed"
 
 [presets.icon]
 description = "Single centered icon, background removed -> transparent PNG"
+model = "SDXL base 1.0"
 workflow = "sdxl_base.json"
 width = 1024
 height = 1024
@@ -64,15 +111,15 @@ post = ["remove_bg", "keep_largest", "trim"]
 # Schedule it: windows/daily-task.sh on [--at 06:00]. Preview a day: gen daily --show [--date 2026-12-24].
 # Log: <output_dir>/daily.log. Themes are picked at random from the ones not used recently.
 [daily]
-preset = "wallpaper_ref"      # klein + the cast's ref image (on-model); "wallpaper" = SDXL from text only
+preset = "wallpaper_ref"      # Qwen + the cast's ref image (on-model); "wallpaper" = Qwen from text only
 ref = ""                      # CHARACTER:REF, or an image path (relative = under output_dir); "" = first cast character's first ref
 # With a ref, the prompt is this ({scene} = theme + style, {name} = the cast character); the cast descriptions
 # are left out (they ask for a plain white background, so the model copied the ref as-is).
-ref_prompt = "A wide, finished storybook illustration that fills the whole frame: {scene}. Detailed background, scenery and lighting everywhere, no white or empty background, no border. The character from the reference image appears exactly once, as {name}, in a new pose that fits the scene, with the same design and colours and its short rounded tail. No other characters."
+ref_prompt = "A wide, finished wallpaper image that fills the whole frame: {scene}. Any signs have short English text. Detailed background, scenery and lighting everywhere, no white or empty background, no border. The character from the reference image appears exactly once, as {name}, in a new pose that fits the scene, with the same design and colours and its short rounded tail. No other characters."
 count = 1                     # images per day; the first one becomes the wallpaper
 no_repeat_days = 7            # at least this many days between two uses of a theme (past daily runs)
 cast = ["tulu"]               # characters (gen char) in every daily; their descriptions lead the prompt
-style = "cosy whimsical storybook scene, soft light"
+style = "synthwave vaporwave magical realism, detailed and realistic yet outrageous, extravagant and funny, glowing neon pink and cyan, retro 80s sunset colours, cinematic lighting"
 themes = [
   "relaxing in a tide pool at sunset, wide rocky coastline",
   "reading a book in a cosy window nook on a rainy day",
@@ -132,11 +179,63 @@ dec = ["sledding down a snowy hill under twinkling lights", "decorating a kelp t
 # shows them as warn until then). Presets that load a diffusion model (`unet`) have no img2img/inpaint
 # (gen vary) unless they name an img2img_workflow / inpaint_workflow.
 
+# SDXL finetune for the text-to-image bake-off (#51). One checkpoint file, so no new nodes.
+# Models are opt-in (~6.9 GB, CreativeML Open RAIL++-M): run ~/imagegen/models/dreamshaper-xl-lightning.sh once.
+# Lightning is distilled: 4-8 steps at cfg ~2 with DPM++ SDE Karras. gen vary on it uses the SDXL img2img graph
+# (dpmpp_2m), which is not what Lightning is tuned for.
+[presets.dreamshaper]
+description = "DreamShaper XL Lightning (SDXL finetune, 6 steps): illustration-friendly, natural-language prompts"
+model = "DreamShaper XL Lightning"
+ref_preset = "dreamshaper_ref"
+workflow = "sdxl_lightning.json"
+download = "dreamshaper-xl-lightning.sh"
+checkpoint = "DreamShaperXL_Lightning.safetensors"
+width = 1024
+height = 1024
+steps = 6
+cfg = 2.0
+suffix = ""
+
+# SDXL + IP-Adapter (#51): an SDXL model draws the character in a ref image into a new scene. Edit-only
+# (gen edit REF "scene" -p sdxl_ref); `ref_preset` on draft/dreamshaper points the bake-off's ref test here.
+# Opt-in: ~/imagegen/models/ipadapter-sdxl.sh (~3.4 GB) + the ComfyUI_IPAdapter_plus node (see that script).
+# ipadapter_weight: how strongly the ref steers (higher = closer to the ref, less to the prompt).
+# ipadapter_end: the share of the steps it steers; the rest follow the prompt alone, so the scene can take over.
+# First tulu run (0.8, whole run): SDXL copied the ref's white sticker background and drew no scene.
+[presets.sdxl_ref]
+description = "SDXL base + IP-Adapter: the character in a ref image in a new scene: gen edit REF \"scene\" -p sdxl_ref"
+model = "SDXL base 1.0 + IP-Adapter"
+edit_workflow = "sdxl_ipadapter.json"
+download = "ipadapter-sdxl.sh"
+checkpoint = "sd_xl_base_1.0.safetensors"
+ipadapter_model = "ip-adapter-plus_sdxl_vit-h.safetensors"
+clip_vision = "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors"
+ipadapter_weight = 0.55
+ipadapter_end = 0.7
+ref_negative = "white background, plain background, simple background, isolated, sticker, border, blurry, low quality, watermark, text, multiple characters"
+steps = 25
+cfg = 7.0
+
+[presets.dreamshaper_ref]
+description = "DreamShaper XL Lightning + IP-Adapter: gen edit REF \"scene\" -p dreamshaper_ref"
+model = "DreamShaper XL Lightning + IP-Adapter"
+edit_workflow = "sdxl_lightning_ipadapter.json"
+download = "ipadapter-sdxl.sh"
+checkpoint = "DreamShaperXL_Lightning.safetensors"
+ipadapter_model = "ip-adapter-plus_sdxl_vit-h.safetensors"
+clip_vision = "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors"
+ipadapter_weight = 0.55
+ipadapter_end = 0.7
+ref_negative = "white background, plain background, simple background, isolated, sticker, border, blurry, low quality, watermark, text, multiple characters"
+steps = 6
+cfg = 2.0
+
 # Edit-only preset: `gen edit IMAGE "instruction"` / MCP edit. Not usable for gen "prompt" or gen vary.
 # Models are opt-in (~17.7 GB): run ~/imagegen/models/flux-kontext.sh once.
 # FLUX.1 Kontext [dev] is under the FLUX.1 [dev] non-commercial licence.
 [presets.kontext]
 description = "Edit an image by instruction (FLUX.1 Kontext dev, fp8): gen edit IMAGE \"...\""
+model = "FLUX.1 Kontext dev"
 edit_workflow = "flux_kontext.json"
 download = "flux-kontext.sh"
 unet = "flux1-dev-kontext_fp8_scaled.safetensors"
@@ -150,6 +249,7 @@ guidance = 2.5
 # FLUX.2 [klein] 4B distilled, fp8 (~11.9 GB, Apache 2.0): ~/imagegen/models/flux2-klein.sh
 [presets.klein]
 description = "FLUX.2 klein 4B (fp8, 4 steps): text-to-image, and gen edit IMAGE \"...\" -p klein"
+model = "FLUX.2 klein 4B"
 workflow = "flux2_klein_t2i.json"
 edit_workflow = "flux2_klein_edit.json"
 download = "flux2-klein.sh"
@@ -164,7 +264,28 @@ steps = 4
 # comes from the prompt; the ref only shows the character, so it stays on-model. gen daily uses it.
 # By hand: gen edit REF.png "lil tulu reading in a rainy window nook, only one character" -p wallpaper_ref
 [presets.wallpaper_ref]
-description = "16:9 wallpaper (4K) of the character in a ref image (FLUX.2 klein): gen edit REF \"scene\" -p wallpaper_ref"
+description = "16:9 wallpaper (4K) of the character in a ref image (Qwen-Image 2.1): gen edit REF \"scene\" -p wallpaper_ref"
+model = "Qwen-Image 2.1"
+edit_workflow = "qwen_image_21_ref_upscale.json"
+download = "qwen-image-2.1.sh"
+unet = "qwen_image_2.1_bf16.safetensors"
+weight_dtype = "fp8_e4m3fn"
+text_encoder = "qwen3vl_8b_bf16.safetensors"
+vae = "qwen_image_2.1_vae_bf16.safetensors"
+resolution = 1152              # Qwen draws at the ref's size within this pixel budget: 1152 on 16:9 = 1536x864
+steps = 25
+cfg = 1.0
+# The ref is fitted onto a 16:9 canvas of its own background colour first: Qwen only draws at the ref's
+# aspect (any other latent size breaks the edit: a blank image on tulu), and a portrait ref would crop badly.
+ref_canvas = [1536, 864]
+upscale_model = "RealESRGAN_x4plus.pth"
+target_width = 3840
+target_height = 2160
+
+# The daily wallpaper before #51: klein draws the ref's character (~20 s, but less polished than Qwen).
+[presets.wallpaper_ref_klein]
+description = "16:9 wallpaper (4K) of the character in a ref image (FLUX.2 klein: fast): gen edit REF \"scene\" -p wallpaper_ref_klein"
+model = "FLUX.2 klein 4B"
 edit_workflow = "flux2_klein_ref_upscale.json"
 download = "flux2-klein.sh"
 unet = "flux-2-klein-4b-fp8.safetensors"
@@ -182,12 +303,31 @@ target_height = 2160
 # resolution = the edit's pixel budget (1024 = ~1 MP; the model goes up to 2048). cfg 1 ignores the negative.
 [presets.qwen]
 description = "Qwen-Image-2.1 7B (fp8 at load): text-to-image, and gen edit IMAGE \"...\" -p qwen"
+model = "Qwen-Image 2.1"
 workflow = "qwen_image_21_t2i.json"
 edit_workflow = "qwen_image_21_edit.json"
 download = "qwen-image-2.1.sh"
 unet = "qwen_image_2.1_bf16.safetensors"
 weight_dtype = "fp8_e4m3fn"
 text_encoder = "qwen3vl_8b_bf16.safetensors"
+vae = "qwen_image_2.1_vae_bf16.safetensors"
+width = 1024
+height = 1024
+resolution = 1024
+steps = 25
+cfg = 1.0
+
+# #51: the same model with the fp8 Qwen3-VL text encoder (10.6 GB instead of 16 GB), so it fits in WSL's RAM
+# without swapping (the bf16 one locked up Windows during a video). Becomes `qwen` if the bake-off shows no loss.
+[presets.qwen_lite]
+description = "Qwen-Image-2.1 with the fp8 text encoder (less RAM): text-to-image and edits"
+model = "Qwen-Image 2.1 (fp8 encoder)"
+workflow = "qwen_image_21_t2i.json"
+edit_workflow = "qwen_image_21_edit.json"
+download = "qwen3vl-8b-fp8.sh"
+unet = "qwen_image_2.1_bf16.safetensors"
+weight_dtype = "fp8_e4m3fn"
+text_encoder = "qwen3vl_8b_fp8_scaled.safetensors"
 vae = "qwen_image_2.1_vae_bf16.safetensors"
 width = 1024
 height = 1024

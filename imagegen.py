@@ -10,6 +10,7 @@ Usage:
   gen vary PATH --mask MASK.png --prompt "..."  # inpaint: repaint only the white part of MASK
   gen edit PATH "make it wave, side view"      # instruction edit (FLUX.2 klein; -p kontext|qwen; opt-in models)
   gen bakeoff PATH "instr" ["instr"...]         # same edits through kontext, klein, qwen; time/VRAM/RAM
+  gen bakeoff --t2i "prompt"... [--ref IMG --ref-prompt "scene"]  # compare text-to-image models (#51)
   gen cutout PATH [--clean]                     # remove the background -> PATH-transparent.png
                                                 #   --clean: also drop stray shapes, centre on a square
   gen presets                                   # list presets
@@ -77,7 +78,7 @@ def load_config() -> dict:
 
 # Preset keys that are not workflow values (generate() drops them before filling the workflow).
 NOT_PARAMS = {"workflow", "img2img_workflow", "inpaint_workflow", "edit_workflow", "description",
-              "suffix", "negative_extra", "post", "download"}
+              "suffix", "negative_extra", "post", "download", "model", "ref_preset", "ref_canvas"}
 
 # Default img2img/inpaint graphs (SDXL). Presets that load a diffusion model (`unet`: Flux, Qwen) get none.
 DEFAULT_MODE_WORKFLOWS = {"img2img_workflow": "sdxl_img2img.json", "inpaint_workflow": "sdxl_inpaint.json"}
@@ -117,6 +118,19 @@ def fill(node, params: dict):
 
 # ---------------------------------------------------------------- ComfyUI client
 
+JOB_TIMEOUT = 3600  # s per job; quality first (#51): a swapping Qwen at 40 steps can take many minutes
+POLL_TIMEOUT = 60  # s for one /history answer; a timeout means "slow", not "down"
+DOWN_LIMIT = 90  # s of refused/dropped connections before a job counts as lost (ComfyUI crashed)
+HANG_AFTER = 1200  # s without a single websocket frame while ComfyUI says our job is running: its worker is
+# dead (#51: an HSA alloc failure left the server answering and queueing, but nothing ran for hours)
+SLOW_TIMEOUT = 300  # s for requests a busy ComfyUI may sit on: queueing, /free, upload, /view
+
+
+def _is_timeout(e: BaseException) -> bool:
+    """A read/connect timeout (ComfyUI busy) rather than a refused or reset connection (ComfyUI gone)."""
+    return isinstance(e, TimeoutError) or isinstance(getattr(e, "reason", None), TimeoutError)
+
+
 class Comfy:
     def __init__(self, url: str):
         self.url = url.rstrip("/")
@@ -139,12 +153,13 @@ class Comfy:
                                        "(is the service running? `systemctl status comfyui`)")
                 time.sleep(2)
 
-    def queue(self, workflow: dict) -> str:
-        body = json.dumps({"prompt": workflow, "client_id": self.client_id}).encode()
+    def queue(self, workflow: dict, front: bool = False) -> str:
+        """Queue a job; front=True puts it ahead of the jobs already waiting."""
+        body = json.dumps({"prompt": workflow, "client_id": self.client_id, **({"front": True} if front else {})}).encode()
         req = urllib.request.Request(self.url + "/prompt", data=body,
                                      headers={"Content-Type": "application/json"})
         try:
-            with urllib.request.urlopen(req, timeout=30) as r:
+            with urllib.request.urlopen(req, timeout=SLOW_TIMEOUT) as r:
                 return json.loads(r.read())["prompt_id"]
         except urllib.error.HTTPError as e:
             raise RuntimeError(f"ComfyUI rejected the workflow: {e.read().decode(errors='replace')[:2000]}")
@@ -153,7 +168,7 @@ class Comfy:
         """Unload all models and free their memory (ComfyUI's /free), so the next job loads from scratch."""
         req = urllib.request.Request(self.url + "/free", data=json.dumps(
             {"unload_models": True, "free_memory": True}).encode(), headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=SLOW_TIMEOUT) as r:
             r.read()
 
     def system_stats(self) -> dict:
@@ -162,28 +177,80 @@ class Comfy:
     CRASH_HINT = ("ComfyUI probably crashed (often out of RAM/VRAM): "
                   "journalctl -u comfyui -n 50; sudo dmesg | grep -i oom")
 
+    def _running(self, prompt_id: str) -> bool:
+        """Is this job the one ComfyUI is running now? False when unsure."""
+        try:
+            q = json.loads(self._get("/queue", timeout=POLL_TIMEOUT))
+        except Exception:
+            return False
+        return any(len(item) > 1 and item[1] == prompt_id for item in q.get("queue_running", []))
+
     def _queued(self, prompt_id: str) -> bool:
         q = json.loads(self._get("/queue"))
         return any(item[1] == prompt_id for k in ("queue_running", "queue_pending") for item in q.get(k, []))
 
-    def wait(self, prompt_id: str, timeout: float = 1800) -> dict:
+    def busy(self) -> tuple[int, int]:
+        """(running, waiting) jobs in ComfyUI's queue, anyone's."""
+        q = json.loads(self._get("/queue", timeout=POLL_TIMEOUT))
+        return len(q.get("queue_running", [])), len(q.get("queue_pending", []))
+
+    def cancel(self, prompt_ids: list[str]) -> None:
+        """Take our jobs out of ComfyUI (Ctrl-C, timeout): delete the waiting ones, interrupt the running one.
+        Without this they keep ComfyUI busy for whoever comes next (#51: a stopped Qwen sweep held it for an
+        hour). Best effort: never raises."""
+        if not prompt_ids:
+            return
+        def post(path, body):
+            req = urllib.request.Request(self.url + path, data=json.dumps(body).encode(),
+                                         headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=15) as r:
+                r.read()
+        try:
+            post("/queue", {"delete": list(prompt_ids)})
+            q = json.loads(self._get("/queue", timeout=15))
+            running = [item[1] for item in q.get("queue_running", []) if len(item) > 1]
+            for pid in (p for p in prompt_ids if p in running):
+                post("/interrupt", {"prompt_id": pid})  # older ComfyUI ignores the id: stops the running job
+            log(f"  cancelled {len(prompt_ids)} job(s) in ComfyUI")
+        except Exception as e:
+            log(f"  could not cancel the queued jobs ({type(e).__name__}: {e}); clear them with: "
+                f"curl --request POST --data '{{\"clear\": true}}' {self.url}/queue && "
+                f"curl --request POST {self.url}/interrupt")
+
+    def wait(self, prompt_id: str, timeout: float = JOB_TIMEOUT) -> dict:
         """The job's outputs, once it is done."""
         return self.wait_entry(prompt_id, timeout).get("outputs", {})
 
-    def wait_entry(self, prompt_id: str, timeout: float = 1800) -> dict:
-        """The job's whole /history entry (outputs, status messages with timestamps), once it is done."""
+    HANG_HINT = ("ComfyUI looks hung: nothing from it for {mins} min. Look for the cause, then restart it:\n"
+                 "  journalctl --unit comfyui --lines 40 --no-pager | grep --ignore-case --extended-regexp "
+                 "'hsa|error|out of memory'\n  sudo systemctl restart comfyui")
+
+    def wait_entry(self, prompt_id: str, timeout: float = JOB_TIMEOUT, idle=None) -> dict:
+        """The job's whole /history entry (outputs, status messages with timestamps), once it is done.
+        A ComfyUI that is up but slow to answer (a big model swapping, #51: Qwen) is waited for until `timeout`;
+        only refused or dropped connections (a crash) give up after DOWN_LIMIT seconds.
+        idle() -> seconds since ComfyUI last showed life (Events.idle), or None: over HANG_AFTER it is hung."""
         t0 = time.time()
         down_since = None  # set while ComfyUI is unreachable (crashed, systemd restarting it)
+        was_down = False  # it was unreachable at some point: on its return, check it still has the job
+        slow_logged = False
+        last_check = 0.0  # last /queue look for the hang check
         while time.time() - t0 < timeout:
             try:
-                hist = json.loads(self._get(f"/history/{prompt_id}"))
-                if down_since is not None and prompt_id not in hist and not self._queued(prompt_id):
+                hist = json.loads(self._get(f"/history/{prompt_id}", timeout=POLL_TIMEOUT))
+                if was_down and prompt_id not in hist and not self._queued(prompt_id):
                     raise RuntimeError(f"ComfyUI restarted and lost the job. {self.CRASH_HINT}")
-                down_since = None
-            except (urllib.error.URLError, ConnectionError, http.client.HTTPException, TimeoutError):
-                down_since = down_since or time.time()
-                if time.time() - down_since > 90:
-                    raise RuntimeError(f"lost the connection to ComfyUI for 90s. {self.CRASH_HINT}")
+                down_since, was_down = None, False
+            except (urllib.error.URLError, ConnectionError, http.client.HTTPException, TimeoutError) as e:
+                if _is_timeout(e):  # it's there, just busy: not a crash
+                    down_since = None
+                    if not slow_logged:
+                        log(f"  ComfyUI is slow to answer (swapping?); still waiting, up to {timeout:.0f}s per job")
+                        slow_logged = True
+                    continue
+                down_since, was_down = down_since or time.time(), True
+                if time.time() - down_since > DOWN_LIMIT:
+                    raise RuntimeError(f"lost the connection to ComfyUI for {DOWN_LIMIT}s. {self.CRASH_HINT}")
                 time.sleep(2)
                 continue
             if prompt_id in hist:
@@ -192,8 +259,13 @@ class Comfy:
                 if status.get("status_str") == "error":
                     raise RuntimeError(f"ComfyUI failed: {json.dumps(status.get('messages'))[:2000]}")
                 return entry
+            if idle is not None and (quiet := idle()) is not None and quiet > HANG_AFTER \
+                    and time.time() - last_check > 30:
+                last_check = time.time()
+                if self._running(prompt_id):  # ComfyUI only talks to the client whose job runs: one of
+                    raise RuntimeError(self.HANG_HINT.format(mins=round(quiet / 60)))  # someone else's may be long
             time.sleep(1)
-        raise TimeoutError(f"prompt {prompt_id} did not finish in {timeout}s")
+        raise TimeoutError(f"prompt {prompt_id} did not finish in {timeout:.0f}s")
 
     def upload(self, data: bytes, name: str) -> str:
         """Upload a PNG to ComfyUI's input folder; returns the name LoadImage expects."""
@@ -205,7 +277,7 @@ class Comfy:
         req = urllib.request.Request(self.url + "/upload/image", data=body,
                                      headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
         try:
-            with urllib.request.urlopen(req, timeout=60) as r:
+            with urllib.request.urlopen(req, timeout=SLOW_TIMEOUT) as r:
                 res = json.loads(r.read())
         except urllib.error.HTTPError as e:
             raise RuntimeError(f"ComfyUI rejected the upload: {e.read().decode(errors='replace')[:500]}")
@@ -213,7 +285,7 @@ class Comfy:
 
     def fetch(self, image: dict) -> bytes:
         q = urllib.parse.urlencode({k: image.get(k, "") for k in ("filename", "subfolder", "type")})
-        return self._get(f"/view?{q}", timeout=120)
+        return self._get(f"/view?{q}", timeout=SLOW_TIMEOUT)
 
 
 # ---------------------------------------------------------------- timing (per stage, from ComfyUI events)
@@ -229,6 +301,7 @@ class Events:
 
     def __init__(self, url: str, client_id: str, timeout: float = 5):
         self.by_prompt: dict[str, list[tuple[float, str, dict]]] = {}
+        self.last_frame = time.time()  # any frame (events, sampler previews): ComfyUI's worker is alive
         self.listeners: list = []  # called as f(prompt_id, type, data, time) for every job event (live progress)
         self.ok = False
         self._sock = None
@@ -275,6 +348,7 @@ class Events:
         try:
             while True:
                 fin, op, data = self._frame()
+                self.last_frame = time.time()
                 if op == 8:  # close
                     return
                 if op == 9:  # ping
@@ -293,6 +367,10 @@ class Events:
             with self._changed:
                 self._alive = False
                 self._changed.notify_all()
+
+    def idle(self) -> float | None:
+        """Seconds since ComfyUI last sent anything, or None without a working socket (then nobody knows)."""
+        return time.time() - self.last_frame if self.ok and self._alive else None
 
     def wait_done(self, prompt_id: str, timeout: float = 2.0) -> list | None:
         """The job's events, once the socket has its end too. /history can show a job as done a moment
@@ -612,15 +690,30 @@ def kontext_size(w: int, h: int) -> tuple[int, int]:
     return min(KONTEXT_SIZES, key=lambda s: abs(s[0] / s[1] - w / h))
 
 
-def prepare_source(path: Path, mask: Path | None = None,
-                   size_fn=None) -> tuple[bytes, bytes | None, tuple[int, int]]:
+def _on_canvas(im, canvas: tuple[int, int]):
+    """im scaled to fit inside canvas (w, h), centred on a canvas of its corners' average colour."""
+    from PIL import Image
+    cw, ch = canvas
+    w, h = im.size
+    corners = [im.getpixel(xy) for xy in ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1))]
+    fill = tuple(round(sum(c[i] for c in corners) / 4) for i in range(3))
+    scale = min(cw / w, ch / h)
+    fit = im.resize((max(1, round(w * scale)), max(1, round(h * scale))), Image.LANCZOS)
+    out = Image.new("RGB", canvas, fill)
+    out.paste(fit, ((cw - fit.width) // 2, (ch - fit.height) // 2))
+    return out
+
+
+def prepare_source(path: Path, mask: Path | None = None, size_fn=None,
+                   canvas: tuple[int, int] | None = None) -> tuple[bytes, bytes | None, tuple[int, int]]:
     """Load the source (and optional mask) as PNG bytes at an SDXL-friendly size.
 
     Transparency is flattened onto white, so icons and cut-outs work as sources.
     Mask: white = repaint, black = keep. It is resized to the source's size and its edge is
     feathered by MASK_FEATHER px, so pixels just outside the white area blend a little.
     Output is at this ~1 MP size, not the source's resolution. size_fn(w, h) picks another size
-    (edit uses kontext_size).
+    (edit uses kontext_size). canvas=(w, h): fit the whole image into a w x h canvas instead, centred on its
+    corner colour (#51: Qwen draws at the ref's size, so a portrait ref on a 16:9 canvas gives a 16:9 wallpaper).
     """
     from PIL import Image  # lazy: only img2img needs it
 
@@ -636,7 +729,9 @@ def prepare_source(path: Path, mask: Path | None = None,
         bg = Image.new("RGB", im.size, (255, 255, 255))
         bg.paste(im, mask=im.getchannel("A"))
         im = bg
-    size = (size_fn or _source_size)(*im.size)
+    if canvas is not None:
+        im = _on_canvas(im.convert("RGB"), canvas)
+    size = canvas or (size_fn or _source_size)(*im.size)
     src = png(im.convert("RGB").resize(size, Image.LANCZOS))
     m = None
     if mask is not None:
@@ -721,6 +816,45 @@ def _progress(template: dict, params: dict, preset: str, count: int, comfy: "Com
             log(peak)
 
 
+BLANK_RETRIES = 1  # a job whose image comes out black is rendered again this many times
+BLANK_MAX = 8       # "black": no channel of any pixel brighter than this (ComfyUI turns NaNs into 0)
+
+
+def is_blank(data: bytes) -> bool:
+    """True for an all-black (or unreadable) PNG: what a NaN render looks like."""
+    try:
+        from PIL import Image  # lazy, like the other image helpers
+        with Image.open(io.BytesIO(data)) as im:
+            if im.mode not in ("RGB", "RGBA"):
+                im = im.convert("RGB")
+            return all(hi <= BLANK_MAX for _, hi in im.getextrema()[:3])
+    except Exception:
+        return False  # not ours to judge; the post steps or the viewer will complain
+
+
+def _finish_job(comfy: "Comfy", events: "Events", pid: str):
+    """Wait for a job and fetch its output images: (history entry, outs, [{png, fetch_s}], [blank?])."""
+    entry = comfy.wait_entry(pid, idle=events.idle)
+    if _LIVE is not None:  # in case the socket dropped the job's end
+        _LIVE.on_event(pid, "execution_success", {}, time.time())
+    outs = [im for o in entry.get("outputs", {}).values() for im in o.get("images", []) if im.get("type") == "output"]
+    datas = []
+    for im in outs:
+        t0 = time.time()
+        datas.append({"png": comfy.fetch(im), "fetch_s": round(time.time() - t0, 2)})
+    return entry, outs, datas, [is_blank(d["png"]) for d in datas]
+
+
+def _uncached(wf: dict, n: int) -> dict:
+    """The same graph with an extra input on its seed node(s), which ComfyUI ignores when running the node but
+    counts in its cache key: re-queued as it was, every node would be a cache hit and give the black image back."""
+    wf = json.loads(json.dumps(wf))
+    nodes = [nd for nd in wf.values() if {"seed", "noise_seed"} & set(nd.get("inputs", {}))] or list(wf.values())
+    for nd in nodes:
+        nd.setdefault("inputs", {})["imagegen_retry"] = n
+    return wf
+
+
 def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | None = None,
              negative: str | None = None, width: int | None = None, height: int | None = None,
              steps: int | None = None, cfg: float | None = None, label: str | None = None,
@@ -761,7 +895,8 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
             raise FileNotFoundError(src_path)
     if edit:
         workflow = p["edit_workflow"]
-        src_png, mask_png, src_size = prepare_source(src_path, size_fn=kontext_size)
+        canvas = tuple(int(v) for v in p["ref_canvas"]) if p.get("ref_canvas") else None
+        src_png, mask_png, src_size = prepare_source(src_path, size_fn=kontext_size, canvas=canvas)
     elif src_path is not None:
         if mask is not None:
             mask_path = to_linux_path(mask)
@@ -833,57 +968,81 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
 
         # queue everything up front; ComfyUI works through it while we wait
         jobs = []
-        t_queue = time.time()
-        for i in range(count):
-            s = (base_seed + i) % MAX_SEED
-            wf = fill(template, {**params, "seed": s})
-            jobs.append((s, comfy.queue(wf), time.time(), wf))
-        log(f"queued {count} x {preset} (seeds {base_seed}..) -> {run_dir}")
+        done = 0  # jobs finished: on an error/Ctrl-C the rest are cancelled in ComfyUI
+        try:
+            t_queue = time.time()
+            for i in range(count):
+                s = (base_seed + i) % MAX_SEED
+                wf = fill(template, {**params, "seed": s})
+                jobs.append((s, comfy.queue(wf), time.time(), wf))
+            log(f"queued {count} x {preset} (seeds {base_seed}..) -> {run_dir}")
 
-        images, job_timings = [], []
-        t_wait = time.time()
-        for i, (s, pid, queued_at, wf) in enumerate(jobs, 1):
-            entry = comfy.wait_entry(pid)
-            secs = round(time.time() - t_wait, 1)  # wall time; the first one includes loading the model
-            if _LIVE is not None:  # in case the socket dropped the job's end
-                _LIVE.on_event(pid, "execution_success", {}, time.time())
-            outputs = entry.get("outputs", {})
-            try:  # best effort: a surprise in the events must not lose the finished images
-                jt = job_timing(wf, queued_at, events.wait_done(pid), entry)
-            except Exception as e:
-                log(f"note: no timing for seed {s} ({type(e).__name__}: {e})")
-                jt = {}
-            job_timings.append(jt)
-            outs = [im for o in outputs.values() for im in o.get("images", []) if im.get("type") == "output"]
-            for j, im in enumerate(outs):
-                name = f"{i:02d}-seed{s}" + (f"-{j}" if len(outs) > 1 else "") + ".png"
-                path = run_dir / name
-                t0 = time.time()
-                path.write_bytes(comfy.fetch(im))
-                timing = {**_flat(jt), "fetch_s": round(time.time() - t0, 2)}
-                final = path
-                for step in p.get("post", []):
-                    t0 = time.time()
-                    final = POST[step](final)
-                    timing[f"{step}_s"] = round(time.time() - t0, 2)
-                # this image's own time: ComfyUI's work (counted on a job's first image only) + fetch + post
-                own = [v for k, v in timing.items() if k not in ("queue_s", "comfy_s") + COMFY_STAGES]
-                timing["total_s"] = round(sum(own) + (jt.get("comfy_s", 0) if j == 0 else 0), 2)
-                meta = {"prompt": prompt, "full_prompt": full_prompt, "negative": full_negative,
-                        "user_negative": negative,
-                        "preset": preset, "seed": s, "params": {k: v for k, v in params.items()
-                                                                if k not in ("prompt", "negative")},
-                        "file": final.name, "raw_file": path.name, "created": now.isoformat(timespec="seconds"),
-                        "timing": {**timing, **{k: jt[k] for k in ("nodes", "cached") if k in jt}},
-                        **(source or {})}
-                path.with_suffix(".json").write_text(json.dumps(meta, indent=2))
-                images.append({"path": str(final), "windows_path": to_windows_path(final), "seed": s,
-                               "seconds": secs if j == 0 else None,  # per job, not per output (gen bakeoff)
-                               "timing": timing})
-            parts = _stage_parts(images[-1]["timing"] if outs else jt)
-            log(f"  [{i}/{count}] seed {s} done in {secs:.1f}s"
-                + (f" ({', '.join(parts)})" if parts else ""))
+            images, job_timings = [], []
             t_wait = time.time()
+            for i, (s, pid, queued_at, wf) in enumerate(jobs, 1):
+                entry, outs, datas, blanks = _finish_job(comfy, events, pid)
+                for attempt in range(1, BLANK_RETRIES + 1):
+                    if not any(blanks):
+                        break
+                    # a black image (NaNs, seen with Qwen when RAM ran out): the same seed usually renders fine
+                    log(f"  seed {s} came out blank (black), rendering it again (ComfyUI may be short of memory)")
+                    retry = None
+                    try:  # best effort: if the re-render fails, keep the blank image and the rest of the run
+                        retry = comfy.queue(_uncached(wf, attempt), front=True)  # next, not behind this run
+                        jobs[i - 1] = (s, retry, time.time(), wf)  # so a stop (Ctrl-C) cancels it
+                        if _LIVE is not None:
+                            _LIVE.forget(pid)  # the blank job no longer counts as a finished image
+                        result = _finish_job(comfy, events, retry)
+                    except Exception as e:
+                        log(f"  the re-render failed ({type(e).__name__}: {e}); keeping the blank image")
+                        jobs[i - 1] = (s, pid, queued_at, wf)
+                        if retry is not None:
+                            comfy.cancel([retry])
+                        break
+                    pid, queued_at = jobs[i - 1][1], jobs[i - 1][2]
+                    entry, outs, datas, blanks = result
+                if any(blanks):
+                    log(f"warning: seed {s} is still blank; kept and marked \"blank\" (gen daily won't use it)")
+                secs = round(time.time() - t_wait, 1)  # wall time; the first one includes loading the model
+                try:  # best effort: a surprise in the events must not lose the finished images
+                    jt = job_timing(wf, queued_at, events.wait_done(pid), entry)
+                except Exception as e:
+                    log(f"note: no timing for seed {s} ({type(e).__name__}: {e})")
+                    jt = {}
+                job_timings.append(jt)
+                for j, data in enumerate(datas):
+                    name = f"{i:02d}-seed{s}" + (f"-{j}" if len(outs) > 1 else "") + ".png"
+                    path = run_dir / name
+                    path.write_bytes(data["png"])
+                    timing = {**_flat(jt), "fetch_s": data["fetch_s"]}
+                    flag = {"blank": True} if blanks[j] else {}
+                    final = path
+                    for step in p.get("post", []):
+                        t0 = time.time()
+                        final = POST[step](final)
+                        timing[f"{step}_s"] = round(time.time() - t0, 2)
+                    # this image's own time: ComfyUI's work (counted on a job's first image only) + fetch + post
+                    own = [v for k, v in timing.items() if k not in ("queue_s", "comfy_s") + COMFY_STAGES]
+                    timing["total_s"] = round(sum(own) + (jt.get("comfy_s", 0) if j == 0 else 0), 2)
+                    meta = {"prompt": prompt, "full_prompt": full_prompt, "negative": full_negative,
+                            "user_negative": negative,
+                            "preset": preset, "seed": s, "params": {k: v for k, v in params.items()
+                                                                    if k not in ("prompt", "negative")},
+                            "file": final.name, "raw_file": path.name, "created": now.isoformat(timespec="seconds"),
+                            "timing": {**timing, **{k: jt[k] for k in ("nodes", "cached") if k in jt}},
+                            **flag, **(source or {})}
+                    path.with_suffix(".json").write_text(json.dumps(meta, indent=2))
+                    images.append({"path": str(final), "windows_path": to_windows_path(final), "seed": s,
+                                   "seconds": secs if j == 0 else None,  # per job, not per output (gen bakeoff)
+                                   "timing": timing, **flag})
+                parts = _stage_parts(images[-1]["timing"] if outs else jt)
+                log(f"  [{i}/{count}] seed {s} done in {secs:.1f}s"
+                    + (f" ({', '.join(parts)})" if parts else ""))
+                t_wait = time.time()
+                done = i
+        except BaseException:
+            comfy.cancel([j[1] for j in jobs[done:]])
+            raise
 
         run_timing = {"total_s": round(time.time() - t_start, 2), "setup_s": round(t_queue - t_start, 2)}
         if job_timings and "queue_s" in job_timings[0]:
@@ -992,7 +1151,7 @@ def write_contact_sheet(run_dir: Path, run: dict) -> Path:
         transparent = any(e["file"].endswith("-transparent.png") for e in images)
     data = {"prompt": run["prompt"], "preset": run["preset"], "base_seed": run["base_seed"],
             "count": run["count"], "transparent": transparent, "images": images,
-            "negative": (first or {}).get("negative"),
+            "negative": None if run.get("bakeoff") else (first or {}).get("negative"),  # bake-off: differs per model
             "source_image": Path(run["source_image"]).name if run.get("source_image") else None,
             "source_file": _sheet_source(run_dir, run.get("source_image")),
             "mask": bool(run.get("mask")), "denoise": run.get("denoise"), "edit": bool(run.get("edit")),
@@ -1229,7 +1388,11 @@ def main(argv: list[str]) -> int:
     run = generate(a.prompt, a.preset, a.count, a.seed, a.negative, w, h, a.steps, a.cfg, a.label)
     _print_run(run, a.open)
     if a.wallpaper and run["images"]:
-        print("wallpaper set:", set_wallpaper(run["images"][0]["path"]))
+        good = [im for im in run["images"] if not im.get("blank")]
+        if not good:
+            log("not setting the wallpaper: every image came out blank (black)")
+            return 1
+        print("wallpaper set:", set_wallpaper(good[0]["path"]))
     return 0
 
 

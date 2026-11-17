@@ -1,6 +1,8 @@
 """gen edit (FLUX.1 Kontext): edit-only preset, workflow filling, doctor's opt-in handling, crash handling."""
 import io
 import json
+import os
+import threading
 from pathlib import Path
 
 import pytest
@@ -47,7 +49,7 @@ def test_edit_only_preset_and_bad_args(comfy, make_image):
         imagegen.generate("x", "kontext")
     with pytest.raises(ValueError, match="edit-only"):
         imagegen.vary(src, prompt="x", preset="kontext")
-    with pytest.raises(ValueError, match="can't edit; edit presets: kontext"):
+    with pytest.raises(ValueError, match="can.t edit; edit presets: .*kontext"):
         imagegen.edit(src, "x", preset="draft")
     with pytest.raises(ValueError, match="does not take cfg"):
         imagegen.generate("x", "kontext", source_image=src, edit=True, cfg=3)
@@ -113,6 +115,59 @@ def test_wait_reports_a_crash_that_lost_the_job(monkeypatch):
         c.wait("p1")
 
 
+def test_wait_keeps_waiting_on_a_slow_comfyui(monkeypatch, capsys):
+    """#51: Qwen swapping made /history answers time out for minutes; that is "busy", not "crashed"."""
+    import urllib.error
+    c = imagegen.Comfy("http://x")
+    done = b'{"p1": {"status": {"status_str": "success"}, "outputs": {}}}'
+    answers = [TimeoutError("timed out"), urllib.error.URLError(TimeoutError("timed out"))] * 5 + [done]
+
+    def get(path, timeout=30):
+        a = answers.pop(0)
+        if isinstance(a, Exception):
+            raise a
+        return a
+    monkeypatch.setattr(c, "_get", get)
+    monkeypatch.setattr(imagegen, "DOWN_LIMIT", -1)  # a refused connection would fail at once
+    monkeypatch.setattr(imagegen.time, "sleep", lambda s: None)
+    assert c.wait_entry("p1")["status"]["status_str"] == "success"
+    assert capsys.readouterr().err.count("slow to answer") == 1
+
+
+def test_wait_gives_up_when_comfyui_is_gone(monkeypatch):
+    import urllib.error
+    c = imagegen.Comfy("http://x")
+
+    def get(path, timeout=30):
+        raise urllib.error.URLError(ConnectionRefusedError(111, "refused"))
+    monkeypatch.setattr(c, "_get", get)
+    monkeypatch.setattr(imagegen, "DOWN_LIMIT", -1)
+    monkeypatch.setattr(imagegen.time, "sleep", lambda s: None)
+    with pytest.raises(RuntimeError, match="lost the connection"):
+        c.wait_entry("p1")
+
+
+def test_a_busy_spell_resets_the_down_clock(monkeypatch):
+    """Refused for a while (restart), then busy loading: one more reset must not count the old outage."""
+    import urllib.error
+    c = imagegen.Comfy("http://x")
+    clock = iter(range(0, 10_000, 10))  # every call to time.time() is 10s later
+    monkeypatch.setattr(imagegen, "DOWN_LIMIT", 45)  # the outage alone (30s) and the last reset stay under it
+    refused = urllib.error.URLError(ConnectionRefusedError(111, "refused"))
+    done = b'{"p1": {"status": {"status_str": "success"}, "outputs": {}}}'
+    answers = [refused, refused, TimeoutError("t"), TimeoutError("t"), refused, done]
+
+    def get(path, timeout=30):
+        a = answers.pop(0)
+        if isinstance(a, Exception):
+            raise a
+        return a
+    monkeypatch.setattr(c, "_get", get)
+    monkeypatch.setattr(imagegen.time, "time", lambda: next(clock))
+    monkeypatch.setattr(imagegen.time, "sleep", lambda s: None)
+    assert c.wait_entry("p1")["status"]["status_str"] == "success"
+
+
 def test_default_edit_preset_is_klein(comfy, make_image, capsys):
     """#40 bake-off: klein is the default for gen edit (and MCP edit, which passes EDIT_PRESET)."""
     assert imagegen.EDIT_PRESET == "klein"
@@ -121,3 +176,59 @@ def test_default_edit_preset_is_klein(comfy, make_image, capsys):
     assert _node(comfy.workflows()[0], "UNETLoader")["unet_name"] == "flux-2-klein-4b-fp8.safetensors"
     assert imagegen.main(["edit", str(make_image()), "make it wave"]) == 0
     assert "-klein-edit-" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("exc", [TimeoutError("did not finish"), KeyboardInterrupt()])
+def test_a_stopped_run_cancels_its_jobs_in_comfyui(comfy, monkeypatch, exc):
+    """#51: Ctrl-C or a timeout stopped only the client; the queued Qwen jobs held ComfyUI for an hour."""
+    def wait_entry(pid, timeout=None):
+        comfy.running_ids = [pid]  # the first job is on the GPU, the second one waits
+        raise exc
+    monkeypatch.setattr(imagegen.Comfy, "wait_entry", lambda self, pid, timeout=None, idle=None: wait_entry(pid))
+    with pytest.raises(type(exc)):
+        imagegen.generate("a fox", "draft", count=2, seed=1)
+    assert comfy.deleted == comfy.order and len(comfy.order) == 2
+    assert comfy.interrupts == [{"prompt_id": comfy.order[0]}]
+
+
+def test_cancel_never_raises(capsys):
+    imagegen.Comfy(os.environ["IMAGEGEN_COMFY_URL"]).cancel(["p1"])  # nothing listens there
+    assert "could not cancel" in capsys.readouterr().err
+
+
+def test_a_hung_comfyui_is_reported_not_waited_on_for_an_hour(comfy, monkeypatch):
+    """#51: an HSA alloc failure killed ComfyUI's worker; the server kept answering, nothing ran for hours."""
+    monkeypatch.setattr(imagegen, "HANG_AFTER", 0.5)
+    comfy.delay = 30  # the job "runs" but nothing comes from it: no websocket frames at all
+    threading.Timer(0.3, lambda: setattr(comfy, "running_ids", list(comfy.order))).start()
+    with pytest.raises(RuntimeError, match=r"looks hung(.|\n)*systemctl restart comfyui"):
+        imagegen.generate("a fox", "draft", count=1, seed=1)
+    assert comfy.deleted == comfy.order  # and its job is cancelled
+
+
+def test_no_websocket_means_no_hang_check(comfy, monkeypatch):
+    """Without the socket there is no sign of life to go by: wait as before."""
+    monkeypatch.setattr(imagegen, "HANG_AFTER", 0.2)
+    comfy.ws, comfy.delay = False, 1.0
+    assert len(imagegen.generate("a fox", "draft", count=1, seed=1)["images"]) == 1
+
+
+def test_a_long_job_of_someone_elses_is_not_a_hang(comfy, monkeypatch):
+    """ComfyUI only sends progress to the client whose job runs: waiting behind another one is quiet."""
+    monkeypatch.setattr(imagegen, "HANG_AFTER", 0.2)
+    comfy.queue_running, comfy.delay = 1, 1.0  # another client's job runs while ours waits
+    assert len(imagegen.generate("a fox", "draft", count=1, seed=1)["images"]) == 1
+
+
+def test_ref_canvas_fits_a_portrait_ref_onto_16_9(tmp_path):
+    """#51: Qwen only draws at the ref's aspect; wallpaper_ref puts the ref on a 16:9 canvas of its background."""
+    from PIL import Image
+    ref = tmp_path / "ref.png"
+    im = Image.new("RGB", (300, 400), (255, 255, 255))
+    im.paste((0, 128, 0), (100, 100, 200, 300))  # a green "character" on white
+    im.save(ref)
+    data, _, size = imagegen.prepare_source(ref, canvas=(1536, 864))
+    out = Image.open(io.BytesIO(data))
+    assert size == out.size == (1536, 864)
+    assert out.getpixel((10, 10)) == (255, 255, 255) and out.getpixel((1525, 850)) == (255, 255, 255)
+    assert out.getpixel((768, 432))[1] > 100  # the character, centred and whole

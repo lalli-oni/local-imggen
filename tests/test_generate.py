@@ -1,4 +1,5 @@
 """generate() / vary() end to end against the fake ComfyUI."""
+import io
 import json
 from pathlib import Path
 
@@ -6,6 +7,7 @@ import pytest
 from PIL import Image
 
 import imagegen
+from fake_comfy import png_bytes
 
 
 def _node(wf, class_type):
@@ -33,10 +35,10 @@ def test_txt2img_writes_run_folder(comfy, out_dir):
 
 
 def test_prompt_suffix_negative_and_overrides(comfy):
-    imagegen.generate("fjord", "wallpaper", seed=1, negative="people", width=512, height=256, steps=5, cfg=3.0)
+    imagegen.generate("fjord", "wallpaper_sdxl", seed=1, negative="people", width=512, height=256, steps=5, cfg=3.0)
     wf = comfy.workflows()[0]
     texts = [n["inputs"]["text"] for n in wf.values() if n["class_type"] == "CLIPTextEncode"]
-    preset = imagegen.list_presets()["wallpaper"]
+    preset = imagegen.list_presets()["wallpaper_sdxl"]
     assert "fjord" + preset["suffix"] in texts
     assert "people" in texts  # user negative replaces default_negative
     latent = _node(wf, "EmptyLatentImage")
@@ -162,3 +164,96 @@ def test_vary_outside_image_needs_prompt(comfy, make_image):
         imagegen.vary(str(make_image()))
     run = imagegen.vary(str(make_image()), count=1, prompt="a cat")
     assert run["preset"] == "draft"
+
+
+def test_wallpapers_use_qwen(comfy):
+    """#51: the bake-off winner draws the wallpapers, at an exact 16:9 / 21:9 before the 4x upscale."""
+    for preset, size, target in (("wallpaper", (1536, 864), (3840, 2160)),
+                                 ("wallpaper_ultrawide", (1792, 768), (3440, 1440))):
+        imagegen.generate("a fjord at dawn", preset, seed=1)
+        wf = comfy.workflows()[-1]
+        assert _node(wf, "UNETLoader")["unet_name"] == "qwen_image_2.1_bf16.safetensors"
+        assert _node(wf, "TextEncodeQwenImage21")["prompt"].startswith("a fjord at dawn, ")
+        latent = _node(wf, "EmptyLatentImage")
+        assert (latent["width"], latent["height"]) == size
+        assert (_node(wf, "ImageScale")["width"], _node(wf, "ImageScale")["height"]) == target
+
+
+def test_is_blank():
+    assert imagegen.is_blank(png_bytes((0, 0, 0)))
+    assert imagegen.is_blank(png_bytes((8, 8, 8)))
+    assert not imagegen.is_blank(png_bytes((9, 0, 0)))
+    assert not imagegen.is_blank(png_bytes((255, 255, 255)))  # a plain white image is not a NaN render
+    assert not imagegen.is_blank(b"not a png")
+    img = Image.new("RGB", (64, 48))
+    img.putpixel((3, 3), (200, 10, 10))  # a dark scene with one light is not blank
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    assert not imagegen.is_blank(buf.getvalue())
+
+
+def test_blank_image_is_rendered_again(comfy, capsys):
+    comfy.blank_jobs = 1  # the first job comes out black, as Qwen did under memory pressure
+    run = imagegen.generate("x", count=2, seed=1)
+    wfs = comfy.workflows()
+    assert len(wfs) == 3
+    assert [_node(wf, "KSampler")["seed"] for wf in wfs] == [1, 2, 1]  # the same seed again
+    assert _node(wfs[2], "KSampler")["imagegen_retry"] == 1  # else ComfyUI's cache hands back the black image
+    assert "imagegen_retry" not in _node(wfs[0], "KSampler")
+    assert comfy.front == [comfy.order[2]]  # ahead of the run's other waiting jobs
+    assert [im["seed"] for im in run["images"]] == [1, 2]
+    for im in run["images"]:
+        assert "blank" not in im and not imagegen.is_blank(Path(im["path"]).read_bytes())
+        assert "blank" not in json.loads(Path(im["path"]).with_suffix(".json").read_text())
+    assert "seed 1 came out blank (black), rendering it again" in capsys.readouterr().err
+
+
+def test_still_blank_is_kept_and_marked(comfy, capsys):
+    comfy.blank_jobs = 5
+    run = imagegen.generate("x", seed=1)
+    assert len(comfy.workflows()) == 1 + imagegen.BLANK_RETRIES
+    [im] = run["images"]
+    assert im["blank"] is True
+    assert json.loads(Path(im["path"]).with_suffix(".json").read_text())["blank"] is True
+    assert "still blank" in capsys.readouterr().err
+
+
+def test_stop_during_the_rerender_cancels_it(comfy, monkeypatch):
+    comfy.blank_jobs = 1
+    real_wait = imagegen.Comfy.wait_entry
+    waits = []
+
+    def wait(self, pid, **kw):
+        waits.append(pid)
+        if len(waits) == 2:  # waiting on the re-render
+            raise KeyboardInterrupt
+        return real_wait(self, pid, **kw)
+    monkeypatch.setattr(imagegen.Comfy, "wait_entry", wait)
+    with pytest.raises(KeyboardInterrupt):
+        imagegen.generate("x", seed=1)
+    assert waits[1] != waits[0] and comfy.deleted == [waits[1]]  # the re-render, not the finished first try
+
+
+def test_failed_rerender_keeps_the_run(comfy, monkeypatch, capsys):
+    comfy.blank_jobs = 1
+    real_queue = imagegen.Comfy.queue
+
+    def queue(self, wf, front=False):
+        if front:
+            raise RuntimeError("ComfyUI rejected the workflow: boom")
+        return real_queue(self, wf)
+    monkeypatch.setattr(imagegen.Comfy, "queue", queue)
+    run = imagegen.generate("x", count=2, seed=1)
+    assert [im.get("blank", False) for im in run["images"]] == [True, False]
+    assert "the re-render failed (RuntimeError" in capsys.readouterr().err
+
+
+def test_wallpaper_flag_skips_blank_images(comfy, monkeypatch):
+    comfy.blank_jobs = 3  # both first tries and the re-render of seed 1 come out black; seed 2's re-render is fine
+    set_to = []
+    monkeypatch.setattr(imagegen, "set_wallpaper", lambda p: set_to.append(p) or p)
+    assert imagegen.main(["x", "--count", "2", "--seed", "1", "--wallpaper"]) == 0
+    assert [Path(p).name for p in set_to] == ["02-seed2.png"]
+    comfy.blank_jobs = 99
+    assert imagegen.main(["x", "--seed", "1", "--wallpaper"]) == 1
+    assert len(set_to) == 1

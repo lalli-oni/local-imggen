@@ -2,7 +2,7 @@
 
 Every queued job "finishes" after `delay` seconds and outputs one small PNG whose colour comes
 from the job's seed, so different seeds give different files. Tests can inspect what was sent
-(`prompts`, `uploads`, `requests`) and switch on failures (`reject`, `fail_jobs`, `no_gpu`).
+(`prompts`, `uploads`, `requests`) and switch on failures (`reject`, `fail_jobs`, `blank_jobs`, `no_gpu`).
 
 Like ComfyUI, it "runs" each job's nodes in dependency order and reports them on the websocket
 (/ws?clientId=...) as execution_start, execution_cached, executing {node} ... executing None,
@@ -54,23 +54,32 @@ class FakeComfy:
         self.delay = 0.0          # seconds until a queued job shows up in /history
         self.reject: str | None = None  # /prompt answers 400 with this text
         self.fail_jobs = False    # finished jobs report status_str "error"
+        self.blank_jobs = 0       # the first N jobs queued render an all-black PNG (Qwen NaNs)
+        self.front: list[str] = []  # ids queued with "front": true (ahead of the waiting jobs)
         self.no_gpu = False       # /system_stats lists only a CPU
         self.vram_free = 12 * 1024 ** 3   # /system_stats numbers (tests may change them mid-run)
         self.ram_free = 20 * 1024 ** 3
         self.frees = 0            # POST /free calls (unload models)
-        self.fail_preset: str | None = None  # /prompt rejects workflows whose unet_name contains this
-        self.models = {"checkpoints": ["sd_xl_base_1.0.safetensors"],
+        self.fail_preset: str | None = None  # /prompt rejects workflows whose unet_name or ckpt_name contains this
+        self.models = {"checkpoints": ["sd_xl_base_1.0.safetensors", "DreamShaperXL_Lightning.safetensors"],
                        "upscale_models": ["RealESRGAN_x4plus.pth"],
                        "diffusion_models": ["flux1-dev-kontext_fp8_scaled.safetensors",
                                             "flux-2-klein-4b-fp8.safetensors", "qwen_image_2.1_bf16.safetensors"],
                        "text_encoders": ["clip_l.safetensors", "t5xxl_fp8_e4m3fn_scaled.safetensors",
-                                         "qwen_3_4b.safetensors", "qwen3vl_8b_bf16.safetensors"],
-                       "vae": ["ae.safetensors", "flux2-vae.safetensors", "qwen_image_2.1_vae_bf16.safetensors"]}
+                                         "qwen_3_4b.safetensors", "qwen3vl_8b_bf16.safetensors",
+                                         "qwen3vl_8b_fp8_scaled.safetensors"],
+                       "vae": ["ae.safetensors", "flux2-vae.safetensors", "qwen_image_2.1_vae_bf16.safetensors"],
+                       "ipadapter": ["ip-adapter-plus_sdxl_vit-h.safetensors"],
+                       "clip_vision": ["CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors"]}
         # node types /object_info lists: every class_type the repo's workflows use (tests may remove some)
         self.nodes = {n["class_type"] for wf in WORKFLOWS_DIR.glob("*.json")
                       for n in json.loads(wf.read_text()).values()}
-        self.queue_running = 0
+        self.queue_running = 0    # other jobs /queue lists (counts; a test may also list our own ids)
         self.queue_pending = 0
+        self.running_ids: list[str] = []  # prompt ids /queue shows as running (for cancel)
+        self.deleted: list[str] = []      # ids POST /queue {"delete": [...]} took out
+        self.cleared = 0                  # POST /queue {"clear": true} calls
+        self.interrupts: list[dict] = []  # POST /interrupt bodies
         self.ws = True
         self.node_s: dict[str, float] = {}  # class_type -> seconds each node of it takes
         self.cached: list[str] = []         # node ids reported as cached (not run)
@@ -159,7 +168,10 @@ class FakeComfy:
     def _view(self, filename: str) -> bytes:
         pid = filename.removeprefix("imagegen_").removesuffix(".png")
         seed = _seed_of(self.prompts[pid]["workflow"]) if pid in self.prompts else 0
-        return png_bytes(((seed * 37) % 256, (seed * 91) % 256, (seed * 13) % 256))
+        if pid in self.order[:self.blank_jobs]:
+            return png_bytes((0, 0, 0))  # a NaN render
+        # never black (seed 0 would be), so a normal job is never taken for a blank one
+        return png_bytes((40 + (seed * 37) % 216, 40 + (seed * 91) % 216, 40 + (seed * 13) % 216))
 
     def _handler(self):
         fake = self
@@ -191,8 +203,10 @@ class FakeComfy:
                 if u.path == "/view":
                     return self._send(200, fake._view(q.get("filename", "")), "image/png")
                 if u.path == "/queue":
-                    return self._send(200, {"queue_running": [[0]] * fake.queue_running,
-                                            "queue_pending": [[0]] * fake.queue_pending})
+                    return self._send(200, {
+                        "queue_running": [[i, f"other-{i}"] for i in range(fake.queue_running)]
+                        + [[0, pid] for pid in fake.running_ids],
+                        "queue_pending": [[i, f"waiting-{i}"] for i in range(fake.queue_pending)]})
                 if u.path == "/object_info":
                     return self._send(200, {c: {} for c in fake.nodes})
                 if u.path == "/ws" and fake.ws:
@@ -223,15 +237,26 @@ class FakeComfy:
                 body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
                 if u.path == "/prompt":
                     wf = json.loads(body)["prompt"]
-                    unets = [n["inputs"].get("unet_name", "") for n in wf.values() if n["class_type"] == "UNETLoader"]
-                    if fake.reject or (fake.fail_preset and any(fake.fail_preset in u for u in unets)):
+                    models = [n["inputs"].get("unet_name") or n["inputs"].get("ckpt_name") or "" for n in wf.values()
+                              if n["class_type"] in ("UNETLoader", "CheckpointLoaderSimple")]
+                    if fake.reject or (fake.fail_preset and any(fake.fail_preset in m for m in models)):
                         return self._send(400, {"error": fake.reject or "value_not_in_list: unet_name"})
                     pid = uuid.uuid4().hex
                     req = json.loads(body)
                     fake.prompts[pid] = {"workflow": wf, "queued_at": time.time(), "messages": []}
                     fake.order.append(pid)
+                    if req.get("front"):
+                        fake.front.append(pid)
                     threading.Thread(target=fake._execute, args=(pid, req.get("client_id")), daemon=True).start()
                     return self._send(200, {"prompt_id": pid, "number": len(fake.order)})
+                if u.path == "/queue":
+                    req = json.loads(body or b"{}")
+                    fake.deleted += req.get("delete", [])
+                    fake.cleared += bool(req.get("clear"))
+                    return self._send(200, {})
+                if u.path == "/interrupt":
+                    fake.interrupts.append(json.loads(body or b"{}"))
+                    return self._send(200, {})
                 if u.path == "/free":
                     fake.frees += 1
                     return self._send(200, {})

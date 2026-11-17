@@ -44,7 +44,8 @@ def test_lists_missing_and_says_no_without_a_terminal(script, env):
     assert files, "no FILES entries"
     for folder, name, path, _ in files:
         assert f"missing  {folder}/{name}" in r.out
-        assert path.endswith("/" + name) and "/resolve/main/" in path
+        # the name ComfyUI sees; Hugging Face may call it something generic (model.safetensors)
+        assert path.rsplit("/", 1)[1].split(".")[-1] == name.split(".")[-1] and "/resolve/main/" in path
         assert "int8" not in name  # int8_convrot renders black on the RX 9070 XT (#40)
     assert "To download: about" in r.out
 
@@ -59,7 +60,7 @@ def test_downloads_verifies_and_is_then_done(script, env, tmp_path):
         assert (models / folder / name).read_bytes() == DATA
         assert not (models / folder / (name + ".part")).exists()
     again = run_script([str(REPO / "models" / script)], env)
-    assert again.code == 0 and "All there. Try: gen edit" in again.out
+    assert again.code == 0 and "All there. Try: gen " in again.out
 
 
 def test_checksum_mismatch_deletes_the_file(env, tmp_path):

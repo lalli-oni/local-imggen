@@ -32,7 +32,8 @@ MODES = [("workflow", set()),
 EDIT_MODE = ("edit_workflow", {"image", "width", "height"})
 # Which ComfyUI model folder each model-like preset key lives in.
 MODEL_KEYS = {"checkpoint": "checkpoints", "upscale_model": "upscale_models", "unet": "diffusion_models",
-              "clip_l": "text_encoders", "t5": "text_encoders", "text_encoder": "text_encoders", "vae": "vae"}
+              "clip_l": "text_encoders", "t5": "text_encoders", "text_encoder": "text_encoders", "vae": "vae",
+              "ipadapter_model": "ipadapter", "clip_vision": "clip_vision"}
 MODELS_DIR = "~/imagegen/models"  # where a preset's `download` script lives
 
 
@@ -271,9 +272,19 @@ def check_output_dir(conf: dict) -> dict:
     return _check("output_dir", "ok", f"{d} writable")
 
 
-def check_limits() -> dict:
+HEAVY_UNETS = ("qwen_image",)  # #51: Qwen-Image without the limits stalled Windows (RAM at the WSL cap, VRAM full)
+
+
+def check_limits(conf: dict | None = None) -> dict:
     if LIMITS_DROPIN.is_file():
         return _check("resource limits", "info", "ON (comfy/limits.sh status for details)")
+    presets = (conf or {}).get("presets", {})
+    daily = (conf or {}).get("daily", {}).get("preset")
+    heavy = [n for n in dict.fromkeys(["wallpaper", "wallpaper_ultrawide", "wallpaper_ref", daily])
+             if n in presets and str(presets[n].get("unet", "")).startswith(HEAVY_UNETS)]
+    if heavy:
+        return _check("resource limits", "warn", f"off, but {', '.join(heavy)} use Qwen-Image, which can stall "
+                      "Windows without them (RAM and VRAM)", "~/imagegen/comfy/limits.sh on")
     return _check("resource limits", "info", "off (opt-in: comfy/limits.sh on)")
 
 
@@ -309,7 +320,7 @@ def run_checks(include_mcp: bool = True) -> list[dict]:
     checks.append(check_output_dir(conf))
     if include_mcp:
         checks.append(check_mcp_import())
-    checks.append(check_limits())
+    checks.append(check_limits(conf))
     return checks
 
 

@@ -21,8 +21,8 @@ def filled(preset: str, **extra) -> dict:
 
 
 def test_describe_sdxl_wallpaper():
-    line = progress.describe(filled("wallpaper"), "wallpaper", 4, imagegen.stage_of)
-    assert line == ("wallpaper: sd_xl_base_1.0 · 1 pass, 30 steps · 1344x768 -> 3840x2160 (RealESRGAN_x4plus)"
+    line = progress.describe(filled("wallpaper_sdxl"), "wallpaper_sdxl", 4, imagegen.stage_of)
+    assert line == ("wallpaper_sdxl: sd_xl_base_1.0 · 1 pass, 30 steps · 1344x768 -> 3840x2160 (RealESRGAN_x4plus)"
                     " · 4 images")
 
 
@@ -219,10 +219,10 @@ def test_generate_draws_the_live_block(comfy, capsys, monkeypatch):
     monkeypatch.setattr(progress, "MEM_EVERY", 0.05)
     comfy.steps = True
     comfy.node_s = {"KSampler": 0.4, "ImageUpscaleWithModel": 0.3}
-    run = imagegen.generate("a misty fjord", "wallpaper", count=2, seed=5)
+    run = imagegen.generate("a misty fjord", "wallpaper_sdxl", count=2, seed=5)
     err = capsys.readouterr().err
     plain = ANSI.sub("", err)
-    assert "wallpaper: sd_xl_base_1.0 · 1 pass, 30 steps" in plain
+    assert "wallpaper_sdxl: sd_xl_base_1.0 · 1 pass, 30 steps" in plain
     assert re.search(r"▶ sample \d+/30", plain)
     assert "✓ sample  ✓ decode  ▶ upscale" in plain
     assert "[1/2] seed 5 done" in plain and "[2/2] seed 6 done" in plain
@@ -284,3 +284,13 @@ def test_a_broken_listener_does_not_lose_timing(comfy, monkeypatch):
     comfy.node_s = {"KSampler": 0.1}
     run = imagegen.generate("x", "draft", seed=1)
     assert run["timing"]["sample_s"] >= 0.1
+
+
+def test_forgotten_job_is_not_a_finished_image():
+    pr = make_progress(count=1)
+    play(pr, "a", 0.0, "1", "2", "3", "4", "5")
+    pr.on_event("a", "execution_success", {}, 5.0)
+    assert pr._finished() == 1
+    pr.forget("a")  # came out black: rendered again as "b"
+    play(pr, "b", 6.0, "3")
+    assert pr._finished() == 0 and "image 1/1" in text(pr, 7.0) and "saving" not in text(pr, 7.0)

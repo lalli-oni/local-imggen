@@ -29,7 +29,8 @@ def healthy(comfy, comfy_venv, tmp_path, monkeypatch):
     u2.mkdir()
     (u2 / "u2net.onnx").write_bytes(b"x")
     monkeypatch.setenv("U2NET_HOME", str(u2))
-    monkeypatch.setattr(doctor, "LIMITS_DROPIN", tmp_path / "no-dropin.conf")
+    (tmp_path / "dropin.conf").write_text("")  # healthy = limits on: the wallpapers use Qwen (#51)
+    monkeypatch.setattr(doctor, "LIMITS_DROPIN", tmp_path / "dropin.conf")
     return comfy
 
 
@@ -44,7 +45,7 @@ def test_all_good(healthy):
     names = by_name(checks)
     assert "RX 9070 XT" in names["ComfyUI API"]["detail"] and "12.0/16.0 GiB" in names["ComfyUI API"]["detail"]
     assert names["MCP server"]["status"] == "ok"
-    assert names["resource limits"]["detail"].startswith("off")
+    assert names["resource limits"]["detail"].startswith("ON")
 
 
 def test_main_exit_codes(healthy, capsys, monkeypatch):
@@ -121,6 +122,16 @@ def test_limits_on(monkeypatch, tmp_path):
     f.write_text("")
     monkeypatch.setattr(doctor, "LIMITS_DROPIN", f)
     assert doctor.check_limits()["detail"].startswith("ON")
+
+
+def test_limits_off_warns_when_wallpapers_use_qwen(monkeypatch, tmp_path):
+    """#51: a Qwen run without the limits stalled Windows during a video."""
+    monkeypatch.setattr(doctor, "LIMITS_DROPIN", tmp_path / "none.conf")
+    conf = imagegen.load_config()
+    c = doctor.check_limits(conf)
+    assert c["status"] == "warn" and "wallpaper" in c["detail"] and c["fix"] == "~/imagegen/comfy/limits.sh on"
+    sdxl = {"presets": {"wallpaper": {"checkpoint": "x"}}, "daily": {"preset": "wallpaper"}}
+    assert doctor.check_limits(sdxl)["status"] == "info"
 
 
 def test_bad_config(monkeypatch):
