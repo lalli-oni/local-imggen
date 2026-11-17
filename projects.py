@@ -403,7 +403,7 @@ def run_pass(slug: str, count: int = 4, extra: str | None = None, seed: int | No
     tag = {"slug": slug, "version": v, **({"chars": used} if used else {}), **({"ref": ref} if ref else {})}
     for im in run["images"]:
         img = Path(im["path"])
-        for f in (img.with_suffix(".json"), img.with_name(img.stem.removesuffix("-transparent") + ".json")):
+        for f in imagegen.sidecar_paths(img):
             if f.is_file():
                 _tag_json(f, tag)
                 break

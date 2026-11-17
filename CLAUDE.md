@@ -20,7 +20,13 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   run.json record `styles`; `gen vary` reuses the image's (none for sidecars from before #10). `gen styles`, MCP
   `list_styles`. A project snippet `"@NAME"` copies the style's prompt text (so the project versions it), so project
   passes and gen bakeoff pass `styles=[]`. `[daily] style`: style names ("" = the preset's) or a phrase of literal
-  text; with a ref it goes into ref_prompt's {scene} (and `styles=[]`), text-only presets get it from generate().
+  text; with a ref it goes into ref_prompt's {scene} (and `styles=[]`, its styles' post steps via `post=`), text-only
+  presets get it from generate(). A style's `post = [...]` steps run after the preset's (`style_post`).
+- `crt` post step: the CRT/VHS look on a finished image, Pillow only (soft scanlines, blur, colour bleed, glow, warmth,
+  vignette; knobs in `[crt]`, `CRT_DEFAULTS`, sizes per 1080 lines). Writes `<stem>-crt.png` and keeps the clean PNG;
+  on a -crt.png it restarts from the clean one. `gen crt PATH... [--lines N ...]` re-tunes finished images.
+  `retro_digital` uses it. `[daily.props]` (category = [items]) + `props_per_day`: date-picked 80s items, one per
+  category, added to the theme ("..., with X and Y in the scene"); run.json `daily.props`.
 - `templates/contact_sheet.html`: the per-run `index.html` viewer (fit-all / size slider, A/B compare).
   Static, no build, opened via file://; `write_contact_sheet` inlines the run data as JSON.
 - `mcp_server.py`: MCP tools (generate, get_job, vary, edit, cutout, doctor, list_presets, recent_runs, view_image, set_wallpaper,

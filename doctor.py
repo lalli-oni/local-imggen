@@ -303,6 +303,34 @@ def check_mcp_import() -> dict:
 
 # ---------------------------------------------------------------- entry points
 
+def check_styles(conf: dict) -> dict:
+    """[styles] post steps, the presets' default styles, [crt] knobs and [daily] style resolve (#10)."""
+    problems = []
+    for name, p in conf["presets"].items():
+        try:
+            imagegen.style_post(p.get("styles", []), conf, p.get("post", []))
+        except ValueError as e:
+            problems.append(f"preset {name}: {e}")
+    for name in imagegen.list_styles(conf):
+        try:
+            imagegen.style_post([name], conf)
+        except ValueError as e:
+            problems.append(f"style {name}: {e}")
+    try:
+        imagegen.crt_settings(conf)
+    except (ValueError, TypeError) as e:
+        problems.append(str(e))
+    if "daily" in conf:
+        import daily
+        try:
+            daily.settings(conf)
+        except ValueError as e:
+            problems.append(str(e))
+    if problems:
+        return _check("styles", "fail", "; ".join(problems), "fix [styles], [crt] or [daily] in config.toml")
+    return _check("styles", "ok", f"{len(imagegen.list_styles(conf))} styles")
+
+
 def run_checks(include_mcp: bool = True) -> list[dict]:
     try:
         conf = imagegen.load_config()
@@ -315,6 +343,7 @@ def run_checks(include_mcp: bool = True) -> list[dict]:
     checks.append(check_torch())
     checks += check_models(conf, api_up=stats is not None)
     checks += check_workflows(conf)
+    checks.append(check_styles(conf))
     if stats is not None:
         checks.append(check_nodes(conf, conf["comfy_url"]))
     checks.append(check_output_dir(conf))
