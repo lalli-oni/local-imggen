@@ -115,11 +115,11 @@ preset = "wallpaper_ref"      # Qwen + the cast's ref image (on-model); "wallpap
 ref = ""                      # CHARACTER:REF, or an image path (relative = under output_dir); "" = first cast character's first ref
 # With a ref, the prompt is this ({scene} = theme + style, {name} = the cast character); the cast descriptions
 # are left out (they ask for a plain white background, so the model copied the ref as-is).
-ref_prompt = "A wide, finished storybook illustration that fills the whole frame: {scene}. Detailed background, scenery and lighting everywhere, no white or empty background, no border. The character from the reference image appears exactly once, as {name}, in a new pose that fits the scene, with the same design and colours and its short rounded tail. No other characters."
+ref_prompt = "A wide, finished wallpaper image that fills the whole frame: {scene}. Any signs have short English text. Detailed background, scenery and lighting everywhere, no white or empty background, no border. The character from the reference image appears exactly once, as {name}, in a new pose that fits the scene, with the same design and colours and its short rounded tail. No other characters."
 count = 1                     # images per day; the first one becomes the wallpaper
 no_repeat_days = 7            # at least this many days between two uses of a theme (past daily runs)
 cast = ["tulu"]               # characters (gen char) in every daily; their descriptions lead the prompt
-style = "cosy whimsical storybook scene, soft light"
+style = "synthwave vaporwave magical realism, detailed and realistic yet outrageous, extravagant and funny, glowing neon pink and cyan, retro 80s sunset colours, cinematic lighting"
 themes = [
   "relaxing in a tide pool at sunset, wide rocky coastline",
   "reading a book in a cosy window nook on a rainy day",

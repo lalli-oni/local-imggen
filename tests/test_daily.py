@@ -167,7 +167,7 @@ def test_show(tulu, capsys):
     assert imagegen.main(["daily", "--show", "--date", "2026-12-24"]) == 0
     out = capsys.readouterr().out
     assert out.startswith("2026-12-24: ") and "(from dates.12-24)" in out and "tulu v1" in out
-    assert "prompt:  A wide, finished storybook illustration" in out and "ref:     " in out
+    assert "prompt:  A wide, finished wallpaper image" in out and "ref:     " in out
 
 
 # ---------------------------------------------------------------- runs
@@ -249,7 +249,7 @@ def test_default_preset_draws_from_the_cast_ref(tulu, comfy, on_c_drive, stub_ca
     assert _node(wf, "KSampler")["latent_image"] == [enc, 2] and _node(wf, "TextEncodeQwenImage21")["resolution"] == 1152
     assert (_node(wf, "ImageScale")["width"], _node(wf, "ImageScale")["height"]) == (3840, 2160)
     text = _node(wf, "TextEncodeQwenImage21")["prompt"]
-    assert text.startswith("A wide, finished storybook illustration that fills the whole frame: ")
+    assert text.startswith("A wide, finished wallpaper image that fills the whole frame: ")
     assert "as lil tulu, in a new pose" in text and "no white or empty background" in text
     assert TULU not in text  # the text description (plain background, standing...) would make it copy the ref
     [run] = imagegen.recent_runs(1)
