@@ -304,7 +304,7 @@ def test_cast_prompt_override_and_errors(comfy, make_image):
         imagegen.generate("a beach", "wallpaper_cast", refs=["/no/such.png"])
     with pytest.raises(ValueError, match="at most 15"):
         imagegen.generate("a beach", "wallpaper_cast", refs=[ref] * 16)
-    with pytest.raises(ValueError, match=r"has no img2img \(gen vary\)$"):
+    with pytest.raises(ValueError, match=r"has no img2img \(gen vary\)"):
         imagegen.generate("a beach", "wallpaper_cast", refs=[ref], source_image=ref)
     assert len(comfy.workflows()) == 1
 
@@ -350,3 +350,22 @@ def test_sheet_lists_a_shared_scene_once(comfy, make_image):
     run = imagegen.generate("a beach", "wallpaper_cast", refs=[str(make_image("t.png"))], seed=3)
     assert len(run["images"]) == 2 and run["images"][0]["scene"] == run["images"][1]["scene"]
     assert (Path(run["run_dir"]) / "index.html").read_text().count('"caption": "scene · seed 3"') == 1
+
+
+def test_cast_edit_reruns_only_the_cast_pass(comfy, make_image):
+    """gen edit SCENE "..." -p wallpaper_cast --ref: the scene as image 1 at 16:9, the ref as image 2, no upscale."""
+    scene, ref = make_image("scene.png", (1536, 864)), make_image("tulu.png", (600, 800))
+    assert imagegen.main(["edit", str(scene), "Replace the creature with the character from {images}.",
+                          "-p", "wallpaper_cast", "--ref", str(ref), "--seed", "4"]) == 0
+    [wf] = comfy.workflows()
+    enc = _node(wf, "TextEncodeQwenImage21")
+    assert enc["prompt"] == "Replace the creature with the character from image 2."  # no suffix, no style
+    up1, up2 = (wf[enc[f"images.image_{k}"][0]]["inputs"]["image"] for k in (1, 2))
+    assert Image.open(io.BytesIO(comfy.uploads[up1])).size == (1536, 864)
+    assert up2 in comfy.uploads and up1 != up2
+    assert not any(n["class_type"] == "ImageUpscaleWithModel" for n in wf.values())
+    [run] = imagegen.recent_runs(1)
+    meta = json.loads((Path(run["run_dir"]) / "run.json").read_text())
+    assert meta["source_image"] == str(scene) and meta["refs"][0]["path"] == str(ref) and meta["edit"] is True
+    with pytest.raises(ValueError, match="give it ref images"):
+        imagegen.edit(str(scene), "x", preset="wallpaper_cast")

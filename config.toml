@@ -382,6 +382,9 @@ description = "16:9 wallpaper (4K): a scene from text, then the characters from 
 styles = ["synthwave"]           # the house look ([styles] below), for the scene; gen --style none for a plain one
 model = "Qwen-Image 2.1"
 workflow = "qwen_image_21_scene_cast_upscale.json"
+# Only the cast pass, on a finished scene (no upscale): gen edit 01-seedS-scene.png "Replace ..." -p wallpaper_cast --ref REF
+edit_workflow = "qwen_image_21_cast_edit.json"
+ref_canvas = [1536, 864]         # gen edit: the scene goes in at its own 16:9 size
 download = "qwen-image-2.1.sh"
 unet = "qwen_image_2.1_bf16.safetensors"
 weight_dtype = "fp8_e4m3fn"

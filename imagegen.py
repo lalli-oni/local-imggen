@@ -1119,6 +1119,7 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
         raise ValueError(f"unknown preset '{preset}'. Available: {', '.join(presets)}")
     p = dict(presets[preset])
     count = max(1, int(count))
+    styles_arg = styles
     styles = check_styles(p.get("styles", []) if styles is None else styles, conf)
     post = style_post(styles, conf, p.get("post", []) + list(post or []))
     if "crt" in post:
@@ -1172,7 +1173,7 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
     refs = [r for r in (refs or []) if r]
     ref_paths: list[Path] = []
     if takes_refs(template_text):
-        if src_path is not None:
+        if src_path is not None and not edit:
             raise ValueError(f"preset '{preset}' draws a new scene: it takes refs, not a source image")
         if not refs:
             raise ValueError(f"preset '{preset}' puts characters into the scene: give it ref images (--ref)")
@@ -1192,10 +1193,15 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
     if unused:  # e.g. -g on klein, or a project's cfg after switching it to klein: say so, then go on
         log(f"note: {workflow} has no {', '.join(unused)}, ignoring {'it' if len(unused) == 1 else 'them'}")
     base_seed = seed if seed is not None else random.randrange(MAX_SEED)
+    cast_edit = edit and bool(ref_paths)  # gen edit SCENE "Replace ..." --ref: only the cast pass (#52)
+    if cast_edit:
+        prompt = prompt.replace("{images}", image_list(len(ref_paths)))
+        if styles_arg is None:
+            styles = []  # an instruction, not a scene: the preset's look and suffix stay out unless asked for
     look = style_text(styles, conf)
 
     def dress(q: str) -> str:  # the preset suffix, then the styles
-        full = q + p.get("suffix", "")
+        full = q + ("" if cast_edit else p.get("suffix", ""))
         return f"{full.rstrip().rstrip(',')}, {look}" if look else full
     full_prompt = dress(prompt)
     per_image = [q for q in (prompts or []) if q and q.strip()]
@@ -1216,7 +1222,7 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
             params[k] = v
     if ref_paths:
         tmpl = cast_prompt if cast_prompt is not None else str(p.get("cast_prompt") or "")
-        if not tmpl.strip():
+        if not tmpl.strip() and not edit:
             raise ValueError(f"preset '{preset}' has no cast_prompt: pass one")
         params["cast_prompt"] = tmpl.replace("{images}", image_list(len(ref_paths)))
         ref_pngs = [prepare_source(r, size_fn=kontext_size)[0] for r in ref_paths]
@@ -1256,7 +1262,8 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
             except OSError as e:
                 log(f"warning: could not save {SHEET_SOURCE}: {e}")
         if ref_paths:
-            source = {"refs": [], "cast_prompt": params["cast_prompt"]}
+            source = {**(source or {}), "refs": [],
+                      "cast_prompt": full_prompt if cast_edit else params["cast_prompt"]}
             for k, (path, data) in enumerate(zip(ref_paths, ref_pngs), 1):
                 params[f"ref_{k}"] = comfy.upload(data, f"imagegen-ref-{hashlib.sha1(data).hexdigest()[:16]}.png")
                 ref = {"path": str(path), "file": f"ref-{k}.png"}
@@ -1423,18 +1430,19 @@ EDIT_PRESET = "klein"  # picked by the #40 bake-off: fastest, followed instructi
 
 def edit(path: str, instruction: str, count: int = 1, preset: str = EDIT_PRESET, seed: int | None = None,
          steps: int | None = None, guidance: float | None = None, label: str | None = None,
-         styles: list[str] | None = None) -> dict:
+         styles: list[str] | None = None, refs: list[str] | None = None) -> dict:
     """Edit an image by instruction ("make it wave, keep the same character") with an edit preset
     (default FLUX.2 klein). Output is ~1 MP at the Kontext bucket closest to the source's aspect ratio.
 
     Each image is a fresh edit of the source with its own seed, not a chain of edits.
+    refs (#52, -p wallpaper_cast): the source is image 1 (a scene), the refs images 2..: only the cast pass.
     """
     if not instruction.strip():
         raise ValueError("edit needs an instruction")
     stem = Path(path.replace("\\", "/")).stem
     return generate(instruction, preset, count, seed, steps=steps, guidance=guidance,
                     label=label or f"edit-{slug(stem, 20)}-{slug(instruction, 20)}",
-                    source_image=path, edit=True, styles=styles)
+                    source_image=path, edit=True, styles=styles, refs=refs)
 
 
 SHEET_TEMPLATE = ROOT / "templates" / "contact_sheet.html"
@@ -1680,10 +1688,13 @@ def main(argv: list[str]) -> int:
         ep.add_argument("-g", "--guidance", type=float, help="kontext only: how strongly to follow the text (2.5)")
         ep.add_argument("--label", help="folder name instead of edit-<image>-<instruction>")
         _add_style_arg(ep)
+        ep.add_argument("--ref", action="append", dest="refs", metavar="IMAGE",
+                        help="-p wallpaper_cast: put the character from this ref into the scene PATH (repeatable; "
+                             "PATH = image 1, refs = image 2, 3..). Re-runs only the cast pass of a daily")
         ep.add_argument("--open", action="store_true", help="open contact sheet in Windows browser")
         a = ep.parse_args(argv[1:])
         run = edit(a.path, a.instruction, a.count, a.preset, a.seed, a.steps, a.guidance, a.label,
-                   _style_arg(a.styles))
+                   _style_arg(a.styles), a.refs)
         _print_run(run, a.open)
         return 0
     if argv and argv[0] == "bakeoff":
