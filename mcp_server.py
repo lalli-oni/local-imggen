@@ -44,11 +44,21 @@ def list_presets() -> dict:
     out = {}
     for name, p in imagegen.list_presets().items():
         if "workflow" not in p:  # edit-only (e.g. kontext): use the edit tool
-            out[name] = {"description": p.get("description", ""), "mode": "edit only", "size": "~1 MP, source aspect"}
+            out[name] = {"description": p.get("description", ""), "mode": "edit only", "size": "~1 MP, source aspect",
+                         **({"styles": p["styles"]} if p.get("styles") else {})}
             continue
         out[name] = {"description": p.get("description", ""), "size": f"{p['width']}x{p['height']}",
-                     **({"output_size": f"{p['target_width']}x{p['target_height']}"} if "target_width" in p else {})}
+                     **({"output_size": f"{p['target_width']}x{p['target_height']}"} if "target_width" in p else {}),
+                     **({"styles": p["styles"]} if p.get("styles") else {})}
     return out
+
+
+@mcp.tool()
+def list_styles() -> dict:
+    """Looks ([styles.NAME] in config.toml) for generate(styles=[...]) or a project snippet "@NAME":
+    {name: {description, text}}. A preset's own default styles are in list_presets."""
+    return {name: {"description": st.get("description", ""), "text": imagegen.style_text([name])}
+            for name, st in imagegen.list_styles().items()}
 
 
 WAIT_S = 45  # the remote bridge times out at ~60s, so never block longer than this per call
@@ -91,8 +101,11 @@ def _wait_and_report(job_id: str, wait: float) -> list:
 @mcp.tool()
 def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | None = None,
              negative: str | None = None, width: int | None = None, height: int | None = None,
-             steps: int | None = None, preview: bool = True) -> list:
+             steps: int | None = None, preview: bool = True, styles: list[str] | None = None) -> list:
     """Generate images with a preset. count 1-8 uses consecutive seeds (seed, seed+1, ...).
+
+    styles: looks from list_styles() added to the prompt (default: the preset's own, its "styles" in
+    list_presets, e.g. synthwave on the wallpaper presets; [] = none).
 
     Waits up to ~45s. If finished: returns run info (paths, contact sheet) plus JPEG thumbnails
     (if preview=True). If still running: returns {status: "running", job_id} -- call get_job(job_id)
@@ -100,7 +113,7 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
     Re-use a seed to reproduce or refine an image.
     """
     kwargs = dict(prompt=prompt, preset=preset, count=min(max(1, count), MAX_COUNT), seed=seed,
-                  negative=negative, width=width, height=height, steps=steps)
+                  negative=negative, width=width, height=height, steps=steps, styles=styles)
     return _start(imagegen.generate, kwargs, preview)
 
 
@@ -115,17 +128,18 @@ def _start(fn, kwargs: dict, preview: bool) -> list:
 @mcp.tool()
 def vary(path: str, count: int = 4, strength: float | None = None, prompt: str | None = None,
          negative: str | None = None, preset: str | None = None, mask: str | None = None,
-         seed: int | None = None, preview: bool = True) -> list:
+         seed: int | None = None, preview: bool = True, styles: list[str] | None = None) -> list:
     """Variations of an existing image (img2img), or inpaint with a mask. path/mask: Linux or Windows paths.
 
     strength = how much may change, 0-1 (default 0.4; 0.85 with a mask). ~0.25 keeps the composition,
     ~0.6+ reinterprets it. mask: white = repaint, black = keep; pixels away from the (slightly feathered)
     mask edge are kept. Output is ~1 MP (source aspect), except wallpaper presets which upscale.
-    prompt/preset/negative default to the image's sidecar JSON; an outside image needs a prompt.
+    prompt/preset/negative/styles default to the image's sidecar JSON; an outside image needs a prompt.
+    styles: list_styles() looks ([] = none).
     Same waiting/job_id behaviour as generate.
     """
     kwargs = dict(path=path, count=min(max(1, count), MAX_COUNT), strength=strength, prompt=prompt,
-                  negative=negative, preset=preset, mask=mask, seed=seed)
+                  negative=negative, preset=preset, mask=mask, seed=seed, styles=styles)
     return _start(imagegen.vary, kwargs, preview)
 
 
@@ -134,7 +148,8 @@ MAX_EDITS = 4
 
 @mcp.tool()
 def edit(path: str, instruction: str, count: int = 1, seed: int | None = None, steps: int | None = None,
-         guidance: float | None = None, preview: bool = True, preset: str = imagegen.EDIT_PRESET) -> list:
+         guidance: float | None = None, preview: bool = True, preset: str = imagegen.EDIT_PRESET,
+         styles: list[str] | None = None) -> list:
     """Edit an image by plain-language instruction (default FLUX.2 klein). path: Linux or Windows path.
 
     Write the instruction as what to change plus what to keep, e.g. "Make the character wave with one
@@ -147,9 +162,11 @@ def edit(path: str, instruction: str, count: int = 1, seed: int | None = None, s
     "qwen" (Qwen-Image-2.1, follows text most literally but 2-9 min per image).
     Same waiting/job_id behaviour as generate, so poll get_job.
     Needs the preset's opt-in models (doctor shows them as warn if missing).
+    styles: list_styles() looks added to the instruction (default: the preset's own, e.g. synthwave on
+    wallpaper_ref; [] = none).
     """
     kwargs = dict(path=path, instruction=instruction, count=min(max(1, count), MAX_EDITS), seed=seed,
-                  steps=steps, guidance=guidance, preset=preset)
+                  steps=steps, guidance=guidance, preset=preset, styles=styles)
     return _start(imagegen.edit, kwargs, preview)
 
 
@@ -250,7 +267,8 @@ def project_update(slug: str, note: str, prompt: str | None = None, negative: st
                    drop_refs: list[str] | None = None, cast: dict | None = None,
                    uncast: list[str] | None = None, docs: dict | None = None) -> dict:
     """Change a project's state; creates a new project version with your note (say why).
-    params: {width, height, steps, cfg, strength}; snippets: {name: text}, appended to the prompt in order;
+    params: {width, height, steps, cfg, strength}; snippets: {name: text}, appended to the prompt in order
+    (text "@STYLE" copies the prompt text of a list_styles() look, not its negative);
     a null value removes a param or snippet. palette: hex list (replaces it). refs: {name: image path}.
     cast: {character: null, or a version to pin}: shared characters (character_*) whose descriptions go
     in front of the prompt. docs: {name: path to .md/.txt} (null removes).

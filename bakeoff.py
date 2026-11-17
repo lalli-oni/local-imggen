@@ -317,7 +317,7 @@ def bakeoff(path: str, instructions: list[str], presets: list[str] | tuple[str, 
 
     def call(preset):
         return lambda n, text: imagegen.edit(str(src), text, count, preset, seed=base_seed,
-                                             label=f"bakeoff-{preset}-{n}-{imagegen.slug(text, 20)}")
+                                             label=f"bakeoff-{preset}-{n}-{imagegen.slug(text, 20)}", styles=[])
     items = list(enumerate(instructions, 1))
 
     def build(results, images, done=True):
@@ -426,11 +426,12 @@ def t2i_bakeoff(prompts: list[str] | None = None, presets: list[str] | tuple[str
 
     def text_call(preset, st):
         return lambda n, text: imagegen.generate(text, preset, count, base_seed, width=w, height=h, steps=st,
-                                                 label=f"bakeoff-{preset}-{n}-{imagegen.slug(text, 20)}")
+                                                 label=f"bakeoff-{preset}-{n}-{imagegen.slug(text, 20)}",
+                                                 styles=[])  # the same prompt for every model
 
     def ref_call(preset, rp, st):  # rp: the preset that draws preset's model with the ref
         return lambda n, text: imagegen.generate(text + REF_SUFFIX, rp, count, base_seed, source_image=str(src),
-                                                 edit=True, steps=st,
+                                                 edit=True, steps=st, styles=[],
                                                  label=f"bakeoff-{preset}-ref-{n}-{imagegen.slug(text, 20)}")
     text_items = list(enumerate(prompts, 1))
     ref_items = list(enumerate(ref_prompts, len(prompts) + 1))  # numbered after the fresh prompts

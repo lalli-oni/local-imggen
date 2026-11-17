@@ -14,6 +14,13 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   and the ref test through each preset's edit_workflow or its `ref_preset` (SDXL -> sdxl_ref, IP-Adapter); labels from `model`;
   the sheet is rewritten after every column and on Ctrl-C, `--rebuild FOLDER` for older stopped folders),
   `gen sheet [RUN_DIR|DATE]` to rebuild contact sheets (default: latest run), `gen doctor` for a health check)
+- Styles (#10): `[styles.NAME]` in config.toml (`suffix`, optional `negative_extra`) is a look added after the preset
+  suffix; a preset's `styles = [...]` is its default (the wallpaper presets: `synthwave`, the house style), and
+  `generate(styles=[...])` / `gen --style NAME|none` / MCP `generate(styles=)` replace it (`[]` = none). Sidecars and
+  run.json record `styles`; `gen vary` reuses the image's (none for sidecars from before #10). `gen styles`, MCP
+  `list_styles`. A project snippet `"@NAME"` copies the style's prompt text (so the project versions it), so project
+  passes and gen bakeoff pass `styles=[]`. `[daily] style`: style names ("" = the preset's) or a phrase of literal
+  text; with a ref it goes into ref_prompt's {scene} (and `styles=[]`), text-only presets get it from generate().
 - `templates/contact_sheet.html`: the per-run `index.html` viewer (fit-all / size slider, A/B compare).
   Static, no build, opened via file://; `write_contact_sheet` inlines the run data as JSON.
 - `mcp_server.py`: MCP tools (generate, get_job, vary, edit, cutout, doctor, list_presets, recent_runs, view_image, set_wallpaper,

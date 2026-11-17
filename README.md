@@ -22,6 +22,7 @@ gen "misty fjord at sunrise" -p wallpaper --open
 | Command | What it does |
 |---|---|
 | `gen "prompt" [-p PRESET] [-n 4] [--open]` | Text to image with a preset (`gen presets` lists them) |
+| `gen "prompt" --style NAME` / `gen styles` | A named look from `[styles]` in `config.toml` (repeatable; `--style none` = plain). The wallpaper presets default to `synthwave`, the house style |
 | `gen vary PATH [--mask M] [-s 0.4]` | img2img variations, or inpaint with a mask |
 | `gen cutout PATH [--clean]` | Remove the background (transparent PNG); `--clean` also drops stray shapes and centres it on a square |
 | `gen edit PATH "instruction" [-p klein\|kontext\|qwen]` | Edit with a plain-language instruction; FLUX.2 klein by default, opt-in models (`models/*.sh`) |

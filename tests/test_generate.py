@@ -35,7 +35,8 @@ def test_txt2img_writes_run_folder(comfy, out_dir):
 
 
 def test_prompt_suffix_negative_and_overrides(comfy):
-    imagegen.generate("fjord", "wallpaper_sdxl", seed=1, negative="people", width=512, height=256, steps=5, cfg=3.0)
+    imagegen.generate("fjord", "wallpaper_sdxl", seed=1, negative="people", width=512, height=256, steps=5, cfg=3.0,
+                      styles=[])  # the preset's house style: test_styles.py
     wf = comfy.workflows()[0]
     texts = [n["inputs"]["text"] for n in wf.values() if n["class_type"] == "CLIPTextEncode"]
     preset = imagegen.list_presets()["wallpaper_sdxl"]

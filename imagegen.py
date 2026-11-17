@@ -78,7 +78,7 @@ def load_config() -> dict:
 
 # Preset keys that are not workflow values (generate() drops them before filling the workflow).
 NOT_PARAMS = {"workflow", "img2img_workflow", "inpaint_workflow", "edit_workflow", "description",
-              "suffix", "negative_extra", "post", "download", "model", "ref_preset", "ref_canvas"}
+              "suffix", "negative_extra", "post", "download", "model", "ref_preset", "ref_canvas", "styles"}
 
 # Default img2img/inpaint graphs (SDXL). Presets that load a diffusion model (`unet`: Flux, Qwen) get none.
 DEFAULT_MODE_WORKFLOWS = {"img2img_workflow": "sdxl_img2img.json", "inpaint_workflow": "sdxl_inpaint.json"}
@@ -95,6 +95,40 @@ def mode_workflow(p: dict, key: str) -> str | None:
 
 def list_presets() -> dict[str, dict]:
     return load_config()["presets"]
+
+
+# ---------------------------------------------------------------- styles (#10)
+# [styles.NAME] in config.toml: a look (suffix, optional negative_extra) that any preset or prompt can use.
+# A preset's `styles = [...]` are its defaults; generate(styles=[...]) / gen --style NAME replace them.
+
+def list_styles(conf: dict | None = None) -> dict[str, dict]:
+    return (conf or load_config()).get("styles", {})
+
+
+def split_styles(value) -> list[str]:
+    """"a, b" or ["a", "b,c"] -> ["a", "b", "c"] (gen --style, [daily] style)."""
+    values = [value] if isinstance(value, str) else list(value or [])
+    return [n.strip() for v in values for n in str(v).split(",") if n.strip()]
+
+
+def check_styles(names, conf: dict | None = None) -> list[str]:
+    """The style names as a list, or ValueError naming the unknown ones and the known ones."""
+    if isinstance(names, str):
+        names = [names]
+    names = [n.strip() for n in names if n and n.strip()]
+    known = list_styles(conf)
+    bad = [n for n in names if n not in known]
+    if bad:
+        raise ValueError(f"unknown style {', '.join(bad)} (styles: {', '.join(known) or 'none in config.toml'})")
+    return names
+
+
+def style_text(names, conf: dict | None = None, key: str = "suffix") -> str:
+    """The styles' text (suffix, or negative_extra) joined with ", ", without a leading comma."""
+    conf = conf or load_config()
+    known = list_styles(conf)
+    parts = (str(known[n].get(key, "")).strip().strip(",").strip() for n in check_styles(names, conf))
+    return ", ".join(p for p in parts if p)
 
 
 # ---------------------------------------------------------------- workflow templating
@@ -859,10 +893,12 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
              negative: str | None = None, width: int | None = None, height: int | None = None,
              steps: int | None = None, cfg: float | None = None, label: str | None = None,
              source_image: str | None = None, mask: str | None = None,
-             denoise: float | None = None, edit: bool = False, guidance: float | None = None) -> dict:
+             denoise: float | None = None, edit: bool = False, guidance: float | None = None,
+             styles: list[str] | None = None) -> dict:
     """txt2img by default. With source_image: img2img (denoise = how much may change, 0-1).
     With source_image + mask: inpaint, only the white part of the mask is repainted.
-    With source_image + edit=True: the prompt is an edit instruction for the preset's edit_workflow."""
+    With source_image + edit=True: the prompt is an edit instruction for the preset's edit_workflow.
+    styles: [styles.NAME] looks added after the preset suffix (None = the preset's `styles`, [] = none)."""
     t_start = time.time()
     conf = load_config()
     presets = conf["presets"]
@@ -870,6 +906,7 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
         raise ValueError(f"unknown preset '{preset}'. Available: {', '.join(presets)}")
     p = dict(presets[preset])
     count = max(1, int(count))
+    styles = check_styles(p.get("styles", []) if styles is None else styles, conf)
     if mask is not None and source_image is None:
         raise ValueError("a mask needs a source image")
     if edit:
@@ -921,8 +958,12 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
         log(f"note: {workflow} has no {', '.join(unused)}, ignoring {'it' if len(unused) == 1 else 'them'}")
     base_seed = seed if seed is not None else random.randrange(MAX_SEED)
     full_prompt = prompt + p.get("suffix", "")
+    if look := style_text(styles, conf):
+        full_prompt = f"{full_prompt.rstrip().rstrip(',')}, {look}"
     full_negative = "" if edit else (negative if negative is not None else conf.get("default_negative", "")) \
         + p.get("negative_extra", "")  # edit workflows (Kontext, cfg 1) have no negative
+    if not edit and (style_neg := style_text(styles, conf, "negative_extra")):
+        full_negative = f"{full_negative.rstrip().rstrip(',')}, {style_neg}" if full_negative.strip() else style_neg
 
     params = {k: v for k, v in p.items() if k not in NOT_PARAMS}
     params.update(prompt=full_prompt, negative=full_negative)
@@ -1026,7 +1067,7 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
                     timing["total_s"] = round(sum(own) + (jt.get("comfy_s", 0) if j == 0 else 0), 2)
                     meta = {"prompt": prompt, "full_prompt": full_prompt, "negative": full_negative,
                             "user_negative": negative,
-                            "preset": preset, "seed": s, "params": {k: v for k, v in params.items()
+                            "preset": preset, "styles": styles, "seed": s, "params": {k: v for k, v in params.items()
                                                                     if k not in ("prompt", "negative")},
                             "file": final.name, "raw_file": path.name, "created": now.isoformat(timespec="seconds"),
                             "timing": {**timing, **{k: jt[k] for k in ("nodes", "cached") if k in jt}},
@@ -1058,7 +1099,7 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
             run_timing["note"] = "no websocket: only queue and ComfyUI totals"
         summary = timing_summary(run_timing, [im["timing"] for im in images])
         run_timing["summary"] = summary
-        run = {"preset": preset, "prompt": prompt, "base_seed": base_seed, "count": count,
+        run = {"preset": preset, "styles": styles, "prompt": prompt, "base_seed": base_seed, "count": count,
                "run_dir": str(run_dir), "images": images, "transparent": bool(p.get("post")), **(source or {}),
                "timing": run_timing}
         (run_dir / "run.json").write_text(json.dumps(run, indent=2))
@@ -1072,10 +1113,10 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
 def vary(path: str, count: int = 4, strength: float | None = None, prompt: str | None = None,
          negative: str | None = None, preset: str | None = None, mask: str | None = None,
          seed: int | None = None, steps: int | None = None, cfg: float | None = None,
-         label: str | None = None) -> dict:
+         label: str | None = None, styles: list[str] | None = None) -> dict:
     """Variations of an existing image (img2img), or inpaint with a mask.
 
-    Prompt, preset and negative default to the image's JSON sidecar when it has one;
+    Prompt, preset, negative and styles default to the image's JSON sidecar when it has one;
     an outside image (no sidecar) needs a prompt.
     """
     src = to_linux_path(path)
@@ -1092,6 +1133,9 @@ def vary(path: str, count: int = 4, strength: float | None = None, prompt: str |
             raise ValueError(f"no sidecar JSON next to {src.name}; pass a prompt")
     if negative is None:
         negative = meta.get("user_negative")
+    if styles is None and meta:  # the image's own look; a sidecar from before #10 had none
+        known = list_styles()
+        styles = [n for n in meta.get("styles", []) if n in known]  # a style removed since: skip it
     if preset is None:
         preset = meta.get("preset") or "draft"
         key = "inpaint_workflow" if mask else "img2img_workflow"
@@ -1100,14 +1144,15 @@ def vary(path: str, count: int = 4, strength: float | None = None, prompt: str |
             preset = "draft"
     return generate(prompt, preset, count, seed, negative, steps=steps, cfg=cfg,
                     label=label or ("inpaint-" if mask else "vary-") + slug(src.stem, 30),
-                    source_image=str(src), mask=mask, denoise=strength)
+                    source_image=str(src), mask=mask, denoise=strength, styles=styles)
 
 
 EDIT_PRESET = "klein"  # picked by the #40 bake-off: fastest, followed instructions; -p kontext|qwen still work
 
 
 def edit(path: str, instruction: str, count: int = 1, preset: str = EDIT_PRESET, seed: int | None = None,
-         steps: int | None = None, guidance: float | None = None, label: str | None = None) -> dict:
+         steps: int | None = None, guidance: float | None = None, label: str | None = None,
+         styles: list[str] | None = None) -> dict:
     """Edit an image by instruction ("make it wave, keep the same character") with an edit preset
     (default FLUX.2 klein). Output is ~1 MP at the Kontext bucket closest to the source's aspect ratio.
 
@@ -1118,7 +1163,7 @@ def edit(path: str, instruction: str, count: int = 1, preset: str = EDIT_PRESET,
     stem = Path(path.replace("\\", "/")).stem
     return generate(instruction, preset, count, seed, steps=steps, guidance=guidance,
                     label=label or f"edit-{slug(stem, 20)}-{slug(instruction, 20)}",
-                    source_image=path, edit=True)
+                    source_image=path, edit=True, styles=styles)
 
 
 SHEET_TEMPLATE = ROOT / "templates" / "contact_sheet.html"
@@ -1225,7 +1270,8 @@ def recent_runs(n: int = 5) -> list[dict]:
     out = []
     for f in runs:
         r = json.loads(f.read_text())
-        out.append({"run_dir": r["run_dir"], "preset": r["preset"], "prompt": r["prompt"],
+        out.append({"run_dir": r["run_dir"], "preset": r["preset"], "styles": r.get("styles", []),
+                    "prompt": r["prompt"],
                     "images": [im["path"] for im in r["images"]]})
     return out
 
@@ -1269,15 +1315,39 @@ def _print_run(run: dict, open_sheet: bool) -> None:
         open_in_windows(run["contact_sheet"])
 
 
+def _style_arg(names: list[str] | None) -> list[str] | None:
+    """--style values: None (not given) = the default, 'none' = no style; commas split too."""
+    if names is None:
+        return None
+    names = split_styles(names)
+    return [] if names in ([], ["none"]) else names
+
+
+def _add_style_arg(parser, help: str = "a [styles.NAME] look from config.toml (repeatable or a, b; replaces "
+                   "the preset's default styles; 'none' = no style). gen styles lists them") -> None:
+    parser.add_argument("--style", action="append", dest="styles", metavar="NAME", help=help)
+
+
 def main(argv: list[str]) -> int:
     import argparse
     if argv and argv[0] == "presets":
         for name, p in list_presets().items():
-            print(f"{name:22} {'(gen edit only) ' if 'workflow' not in p else ''}{p.get('description', '')}")
+            look = f" [style: {', '.join(p['styles'])}]" if p.get("styles") else ""
+            print(f"{name:22} {'(gen edit only) ' if 'workflow' not in p else ''}{p.get('description', '')}{look}")
+        return 0
+    if argv and argv[0] == "styles":
+        conf = load_config()
+        if not list_styles(conf):
+            print("no styles: add [styles.NAME] tables to config.toml")
+        for name, st in list_styles(conf).items():
+            users = [n for n, p in conf["presets"].items() if name in p.get("styles", [])]
+            print(f"{name:14} {st.get('description', '')}" + (f" (default in {', '.join(users)})" if users else ""))
+            print(f"{'':14} + {style_text([name], conf)}")
         return 0
     if argv and argv[0] == "recent":
         for r in recent_runs(int(argv[1]) if len(argv) > 1 else 5):
-            print(f"{r['preset']:12} {r['prompt'][:50]:50} {r['run_dir']}")
+            label = "+".join([r["preset"], *r["styles"]])
+            print(f"{label:24} {r['prompt'][:50]:50} {r['run_dir']}")
         return 0
     if argv and argv[0] == "project":
         import projects
@@ -1309,10 +1379,11 @@ def main(argv: list[str]) -> int:
         vp.add_argument("--steps", type=int)
         vp.add_argument("--cfg", type=float)
         vp.add_argument("--label", help="folder name instead of vary-<image>")
+        _add_style_arg(vp, "default: the image's own styles (its sidecar); 'none' = no style; gen styles lists them")
         vp.add_argument("--open", action="store_true", help="open contact sheet in Windows browser")
         a = vp.parse_args(argv[1:])
         run = vary(a.path, a.count, a.strength, a.prompt, a.negative, a.preset, a.mask,
-                   a.seed, a.steps, a.cfg, a.label)
+                   a.seed, a.steps, a.cfg, a.label, _style_arg(a.styles))
         _print_run(run, a.open)
         return 0
     if argv and argv[0] == "edit":
@@ -1329,9 +1400,11 @@ def main(argv: list[str]) -> int:
         ep.add_argument("--steps", type=int, help="default from the preset (kontext 20, klein 4, qwen 25)")
         ep.add_argument("-g", "--guidance", type=float, help="kontext only: how strongly to follow the text (2.5)")
         ep.add_argument("--label", help="folder name instead of edit-<image>-<instruction>")
+        _add_style_arg(ep)
         ep.add_argument("--open", action="store_true", help="open contact sheet in Windows browser")
         a = ep.parse_args(argv[1:])
-        run = edit(a.path, a.instruction, a.count, a.preset, a.seed, a.steps, a.guidance, a.label)
+        run = edit(a.path, a.instruction, a.count, a.preset, a.seed, a.steps, a.guidance, a.label,
+                   _style_arg(a.styles))
         _print_run(run, a.open)
         return 0
     if argv and argv[0] == "bakeoff":
@@ -1379,13 +1452,15 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--steps", type=int)
     ap.add_argument("--cfg", type=float)
     ap.add_argument("--label", help="folder name instead of prompt slug")
+    _add_style_arg(ap)
     ap.add_argument("--open", action="store_true", help="open contact sheet in Windows browser")
     ap.add_argument("--wallpaper", action="store_true", help="set the first result as wallpaper")
     a = ap.parse_args(argv)
     w = h = None
     if a.size:
         w, h = (int(x) for x in a.size.lower().split("x"))
-    run = generate(a.prompt, a.preset, a.count, a.seed, a.negative, w, h, a.steps, a.cfg, a.label)
+    run = generate(a.prompt, a.preset, a.count, a.seed, a.negative, w, h, a.steps, a.cfg, a.label,
+                   styles=_style_arg(a.styles))
     _print_run(run, a.open)
     if a.wallpaper and run["images"]:
         good = [im for im in run["images"] if not im.get("blank")]
