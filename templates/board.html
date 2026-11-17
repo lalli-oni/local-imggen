@@ -11,7 +11,8 @@
   Served by `gen board serve` (boardserve.py, #55) the data says "live": the buttons and keys rate and
   note through the server's /api, "Generate 4 more" runs a pass, and the page re-renders itself when the
   project or board changes (polling /api/projects/SLUG/stamp).
-  Keys: 1 pick, 2 maybe, 3 reject, 0 clear, n note, j/k or arrows move between cards, h history.
+  Clicking an image selects its card; double-click, o or Enter opens it full size in a new tab.
+  Keys: arrows (up/down by row) or j/k move, 1 pick, 2 maybe, 3 reject, 0 clear, n note, o open, Esc deselect, h history.
   Passes are grouped by the project version they were made from, newest first. The History button (h)
   lists every version, including the ones without a pass.
 -->
@@ -62,7 +63,7 @@ section.version > details p { margin: 4px 0 0; overflow-wrap: anywhere; color: v
 .pass h3 b { color: var(--text); font-weight: 600; }
 .grid { display: grid; gap: var(--gap); grid-template-columns: repeat(auto-fill, minmax(min(var(--thumb), 100%), 1fr)); }
 .card { margin: 0; min-width: 0; }
-.card img { width: 100%; display: block; border-radius: 8px; background: #111;
+.card img { width: 100%; display: block; border-radius: 8px; background: #111; cursor: pointer;
   outline: 3px solid transparent; outline-offset: 2px; }
 .card.pick img { outline-color: var(--pick); }
 .card.maybe img { outline-color: var(--maybe); }
@@ -70,6 +71,7 @@ section.version > details p { margin: 4px 0 0; overflow-wrap: anywhere; color: v
 .card figcaption { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 6px;
   font-size: 12px; color: var(--muted); }
 .card figcaption .id { color: var(--text); font-weight: 600; }
+.card figcaption a.open { text-decoration: none; padding: 0 2px; }
 .badge { padding: 0 6px; border-radius: 4px; font-size: 11px; color: #000; font-weight: 600; }
 .badge.pick { background: var(--pick); } .badge.maybe { background: var(--maybe); } .badge.reject { background: var(--reject); }
 .card figcaption button { padding: 0 6px; font-size: 11px; line-height: 16px; }
@@ -127,6 +129,7 @@ dialog.note .row { display: flex; flex-wrap: wrap; justify-content: space-betwee
   <span class="counts" id="counts"></span>
   <button id="board-note">Board note</button>
   <button id="gen-more" hidden title="Run a pass of 4 from the current project state">Generate 4 more</button>
+  <span class="keys" title="Click an image to select it. Arrows (up/down by row) or j/k move, 1 pick, 2 maybe, 3 reject, 0 clear, n note, o or double-click opens full size, Esc deselects, h history">keys: ←↑↓→ 1 2 3 0 n o</span>
   <span class="live-status" id="live-status"></span>
   <button id="history-open" title="Every project version, including the ones without a pass (h)">History</button>
 </div>
@@ -263,13 +266,19 @@ function card(im) {
   nb.addEventListener("click", () => openNote(fig));
   acts.append(nb);
   fig.append(...[
-    el("a", { href: im.src, target: "_blank", tabIndex: -1 }, img(im.src, { alt: label })),
+    img(im.src, { alt: label, title: "click selects · double-click or o opens full size" }),
     el("figcaption", {}, el("span", { className: "id", textContent: label }),
+      el("a", { href: im.src, target: "_blank", className: "open", tabIndex: -1, title: "open full size (o)", textContent: "↗" }),
       im.seed != null ? `seed ${im.seed}` : null,
       im.rating ? el("span", { className: "badge " + im.rating, textContent: im.rating }) : null, acts),
     noteList(im.notes)].filter(Boolean));
+  fig.addEventListener("dblclick", (e) => { if (e.target.tagName === "IMG") openFull(fig); });
   cards.push(fig);
   return fig;
+}
+function openFull(c) {
+  const a = c.querySelector("a.open");
+  if (a) window.open(a.href, "_blank");
 }
 function renderHeader() {
   $("title").textContent = `${B.title} · v${B.version}`;
@@ -378,17 +387,43 @@ for (const b of document.querySelectorAll("[data-filter]")) {
 $("hide-rejects").addEventListener("change", (e) => { state.hideRejects = e.target.checked; store.set("hideRejects", state.hideRejects); apply(); });
 $("size").addEventListener("input", (e) => { state.thumb = Number(e.target.value); store.set("thumb", state.thumb); apply(); });
 
-/* ---------- keys: 1/2/3/0 rate, n note, j/k or arrows move, h history ---------- */
+/* ---------- keys: arrows/j/k move, 1/2/3/0 rate, n note, o open, Esc deselect, h history ---------- */
 const visible = () => cards.filter((c) => !c.hidden);
+const selected = () => document.activeElement && document.activeElement.closest && document.activeElement.closest(".card");
+function select(c) {
+  if (!c) return;
+  c.focus({ preventScroll: true });
+  c.scrollIntoView({ block: "nearest" });
+}
+function firstInView(vis) {  // nothing selected yet: start where the user is looking, below the sticky bar
+  const top = document.querySelector(".bar").getBoundingClientRect().bottom;
+  return vis.find((c) => c.getBoundingClientRect().bottom > top) || vis[0];
+}
 function move(step) {
   const vis = visible();
   if (!vis.length) return;
-  const cur = document.activeElement && document.activeElement.closest && document.activeElement.closest(".card");
-  const i = vis.indexOf(cur);
-  const next = vis[i < 0 ? (step > 0 ? 0 : vis.length - 1) : Math.min(vis.length - 1, Math.max(0, i + step))];
-  next.focus({ preventScroll: true });
-  next.scrollIntoView({ block: "nearest" });
+  const i = vis.indexOf(selected());
+  select(i < 0 ? firstInView(vis) : vis[Math.min(vis.length - 1, Math.max(0, i + step))]);
 }
+function moveRow(dir) {  // up/down: the nearest card in the next row (also across passes), by position
+  const vis = visible();
+  const cur = selected();
+  if (!cur || !vis.includes(cur)) return select(firstInView(vis));
+  const r = cur.getBoundingClientRect();
+  const cx = r.left + r.width / 2;
+  const rows = vis.map((c) => [c, c.getBoundingClientRect()])
+    .filter(([, b]) => dir > 0 ? b.top >= r.bottom - 1 : b.bottom <= r.top + 1);
+  if (!rows.length) return;
+  const edge = dir > 0 ? Math.min(...rows.map(([, b]) => b.top)) : Math.max(...rows.map(([, b]) => b.top));
+  const row = rows.filter(([, b]) => Math.abs(b.top - edge) < 2);
+  row.sort(([, a], [, b]) => Math.abs(a.left + a.width / 2 - cx) - Math.abs(b.left + b.width / 2 - cx));
+  select(row[0][0]);
+}
+// a click on a card's image (or anywhere on it but its buttons and links) selects the card
+document.addEventListener("click", (e) => {
+  const c = e.target.closest && e.target.closest(".card");
+  if (c && !e.target.closest("button, a")) c.focus({ preventScroll: true });
+});
 document.addEventListener("keydown", (e) => {
   if (e.ctrlKey || e.metaKey || e.altKey || document.querySelector("dialog[open]")) return;
   // typing goes to text fields; the size slider and checkboxes leave the keys to the board
@@ -396,9 +431,13 @@ document.addEventListener("keydown", (e) => {
   const c = e.target.closest && e.target.closest(".card");
   const k = e.key;
   if (k === "h") { $("history").showModal(); return; }
-  if (k === "j" || k === "ArrowRight" || k === "ArrowDown") { if (k.startsWith("Arrow") && !c) return; e.preventDefault(); move(1); return; }
-  if (k === "k" || k === "ArrowLeft" || k === "ArrowUp") { if (k.startsWith("Arrow") && !c) return; e.preventDefault(); move(-1); return; }
+  if (k.startsWith("Arrow") && e.target.matches && e.target.matches("input[type=range]")) return;  // the size slider
+  if (k === "j" || k === "ArrowRight") { e.preventDefault(); move(1); return; }
+  if (k === "k" || k === "ArrowLeft") { e.preventDefault(); move(-1); return; }
+  if (k === "ArrowDown" || k === "ArrowUp") { e.preventDefault(); moveRow(k === "ArrowDown" ? 1 : -1); return; }
   if (!c) return;
+  if (k === "Escape") { document.activeElement.blur(); return; }
+  if ((k === "o" || k === "Enter") && !e.target.closest("button, a")) { e.preventDefault(); openFull(c); return; }
   const r = { 1: "pick", 2: "maybe", 3: "reject", 0: "clear" }[k];
   if (r) { e.preventDefault(); rate(c, r); }
   else if (k === "n") { e.preventDefault(); openNote(c); }
