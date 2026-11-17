@@ -1,5 +1,6 @@
 """#3: gen daily (theme pick, cast prompt, set wallpaper, failure leaves it alone) and windows/daily-task.sh."""
 import base64
+import io
 import json
 import os
 from datetime import date, timedelta
@@ -240,8 +241,12 @@ def test_default_preset_draws_from_the_cast_ref(tulu, comfy, on_c_drive, stub_ca
     assert _node(wf, "UNETLoader")["unet_name"] == "qwen_image_2.1_bf16.safetensors"  # Qwen since #51
     assert _node(wf, "TextEncodeQwenImage21")["images.image_1"] == [next(k for k, n in wf.items()
                                                                          if n["class_type"] == "LoadImage"), 0]
-    latent = _node(wf, "EmptyLatentImage")
-    assert (latent["width"], latent["height"]) == (1536, 864)  # 16:9, not the ref's 3:4
+    # Qwen draws at the ref's size: the ref went up on a 16:9 canvas, and the sampler uses the encoder's latent
+    from PIL import Image
+    up = Image.open(io.BytesIO(comfy.uploads[_node(wf, "LoadImage")["image"]]))
+    assert up.size == (1536, 864)  # 16:9, not the ref's 3:4
+    enc = next(k for k, n in wf.items() if n["class_type"] == "TextEncodeQwenImage21")
+    assert _node(wf, "KSampler")["latent_image"] == [enc, 2] and _node(wf, "TextEncodeQwenImage21")["resolution"] == 1152
     assert (_node(wf, "ImageScale")["width"], _node(wf, "ImageScale")["height"]) == (3840, 2160)
     text = _node(wf, "TextEncodeQwenImage21")["prompt"]
     assert text.startswith("A wide, finished storybook illustration that fills the whole frame: ")

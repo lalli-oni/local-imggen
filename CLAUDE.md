@@ -79,6 +79,8 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   optional `keep_largest` (drop stray shapes) and `trim` (crop + centre on a square of the shorter side); the last two rewrite the
   transparent PNG in place and skip images without transparency.
   An edit preset has `edit_workflow` (gets image, width/height; no checkpoint/negative); without `workflow` it is edit-only.
+  `ref_canvas = [w, h]` fits the source onto a canvas of its corner colour first (Qwen edits draw at the source's
+  aspect; any other latent size gave a blank image), used by `wallpaper_ref` for 16:9 from a portrait ref.
   A preset with `unet` (Flux/Qwen diffusion model) gets no default img2img/inpaint graph (`imagegen.mode_workflow`).
   steps/cfg/guidance/negative the chosen workflow has no `{{key}}` for are ignored with a note on stderr
   (`gen vary` on a klein/qwen image falls back to draft unless -p is given).

@@ -218,3 +218,17 @@ def test_a_long_job_of_someone_elses_is_not_a_hang(comfy, monkeypatch):
     monkeypatch.setattr(imagegen, "HANG_AFTER", 0.2)
     comfy.queue_running, comfy.delay = 1, 1.0  # another client's job runs while ours waits
     assert len(imagegen.generate("a fox", "draft", count=1, seed=1)["images"]) == 1
+
+
+def test_ref_canvas_fits_a_portrait_ref_onto_16_9(tmp_path):
+    """#51: Qwen only draws at the ref's aspect; wallpaper_ref puts the ref on a 16:9 canvas of its background."""
+    from PIL import Image
+    ref = tmp_path / "ref.png"
+    im = Image.new("RGB", (300, 400), (255, 255, 255))
+    im.paste((0, 128, 0), (100, 100, 200, 300))  # a green "character" on white
+    im.save(ref)
+    data, _, size = imagegen.prepare_source(ref, canvas=(1536, 864))
+    out = Image.open(io.BytesIO(data))
+    assert size == out.size == (1536, 864)
+    assert out.getpixel((10, 10)) == (255, 255, 255) and out.getpixel((1525, 850)) == (255, 255, 255)
+    assert out.getpixel((768, 432))[1] > 100  # the character, centred and whole

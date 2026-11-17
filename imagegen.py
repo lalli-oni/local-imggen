@@ -78,7 +78,7 @@ def load_config() -> dict:
 
 # Preset keys that are not workflow values (generate() drops them before filling the workflow).
 NOT_PARAMS = {"workflow", "img2img_workflow", "inpaint_workflow", "edit_workflow", "description",
-              "suffix", "negative_extra", "post", "download", "model", "ref_preset"}
+              "suffix", "negative_extra", "post", "download", "model", "ref_preset", "ref_canvas"}
 
 # Default img2img/inpaint graphs (SDXL). Presets that load a diffusion model (`unet`: Flux, Qwen) get none.
 DEFAULT_MODE_WORKFLOWS = {"img2img_workflow": "sdxl_img2img.json", "inpaint_workflow": "sdxl_inpaint.json"}
@@ -689,15 +689,30 @@ def kontext_size(w: int, h: int) -> tuple[int, int]:
     return min(KONTEXT_SIZES, key=lambda s: abs(s[0] / s[1] - w / h))
 
 
-def prepare_source(path: Path, mask: Path | None = None,
-                   size_fn=None) -> tuple[bytes, bytes | None, tuple[int, int]]:
+def _on_canvas(im, canvas: tuple[int, int]):
+    """im scaled to fit inside canvas (w, h), centred on a canvas of its corners' average colour."""
+    from PIL import Image
+    cw, ch = canvas
+    w, h = im.size
+    corners = [im.getpixel(xy) for xy in ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1))]
+    fill = tuple(round(sum(c[i] for c in corners) / 4) for i in range(3))
+    scale = min(cw / w, ch / h)
+    fit = im.resize((max(1, round(w * scale)), max(1, round(h * scale))), Image.LANCZOS)
+    out = Image.new("RGB", canvas, fill)
+    out.paste(fit, ((cw - fit.width) // 2, (ch - fit.height) // 2))
+    return out
+
+
+def prepare_source(path: Path, mask: Path | None = None, size_fn=None,
+                   canvas: tuple[int, int] | None = None) -> tuple[bytes, bytes | None, tuple[int, int]]:
     """Load the source (and optional mask) as PNG bytes at an SDXL-friendly size.
 
     Transparency is flattened onto white, so icons and cut-outs work as sources.
     Mask: white = repaint, black = keep. It is resized to the source's size and its edge is
     feathered by MASK_FEATHER px, so pixels just outside the white area blend a little.
     Output is at this ~1 MP size, not the source's resolution. size_fn(w, h) picks another size
-    (edit uses kontext_size).
+    (edit uses kontext_size). canvas=(w, h): fit the whole image into a w x h canvas instead, centred on its
+    corner colour (#51: Qwen draws at the ref's size, so a portrait ref on a 16:9 canvas gives a 16:9 wallpaper).
     """
     from PIL import Image  # lazy: only img2img needs it
 
@@ -713,7 +728,9 @@ def prepare_source(path: Path, mask: Path | None = None,
         bg = Image.new("RGB", im.size, (255, 255, 255))
         bg.paste(im, mask=im.getchannel("A"))
         im = bg
-    size = (size_fn or _source_size)(*im.size)
+    if canvas is not None:
+        im = _on_canvas(im.convert("RGB"), canvas)
+    size = canvas or (size_fn or _source_size)(*im.size)
     src = png(im.convert("RGB").resize(size, Image.LANCZOS))
     m = None
     if mask is not None:
@@ -838,7 +855,8 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
             raise FileNotFoundError(src_path)
     if edit:
         workflow = p["edit_workflow"]
-        src_png, mask_png, src_size = prepare_source(src_path, size_fn=kontext_size)
+        canvas = tuple(int(v) for v in p["ref_canvas"]) if p.get("ref_canvas") else None
+        src_png, mask_png, src_size = prepare_source(src_path, size_fn=kontext_size, canvas=canvas)
     elif src_path is not None:
         if mask is not None:
             mask_path = to_linux_path(mask)

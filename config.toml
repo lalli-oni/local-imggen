@@ -272,11 +272,12 @@ unet = "qwen_image_2.1_bf16.safetensors"
 weight_dtype = "fp8_e4m3fn"
 text_encoder = "qwen3vl_8b_bf16.safetensors"
 vae = "qwen_image_2.1_vae_bf16.safetensors"
-resolution = 1024              # pixel budget for the ref image
+resolution = 1152              # Qwen draws at the ref's size within this pixel budget: 1152 on 16:9 = 1536x864
 steps = 25
 cfg = 1.0
-out_width = 1536                # exactly 16:9 (and multiples of 16), so the 4K scale crops nothing
-out_height = 864
+# The ref is fitted onto a 16:9 canvas of its own background colour first: Qwen only draws at the ref's
+# aspect (any other latent size breaks the edit: a blank image on tulu), and a portrait ref would crop badly.
+ref_canvas = [1536, 864]
 upscale_model = "RealESRGAN_x4plus.pth"
 target_width = 3840
 target_height = 2160
