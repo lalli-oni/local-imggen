@@ -33,10 +33,10 @@ def test_txt2img_writes_run_folder(comfy, out_dir):
 
 
 def test_prompt_suffix_negative_and_overrides(comfy):
-    imagegen.generate("fjord", "wallpaper", seed=1, negative="people", width=512, height=256, steps=5, cfg=3.0)
+    imagegen.generate("fjord", "wallpaper_sdxl", seed=1, negative="people", width=512, height=256, steps=5, cfg=3.0)
     wf = comfy.workflows()[0]
     texts = [n["inputs"]["text"] for n in wf.values() if n["class_type"] == "CLIPTextEncode"]
-    preset = imagegen.list_presets()["wallpaper"]
+    preset = imagegen.list_presets()["wallpaper_sdxl"]
     assert "fjord" + preset["suffix"] in texts
     assert "people" in texts  # user negative replaces default_negative
     latent = _node(wf, "EmptyLatentImage")
@@ -162,3 +162,16 @@ def test_vary_outside_image_needs_prompt(comfy, make_image):
         imagegen.vary(str(make_image()))
     run = imagegen.vary(str(make_image()), count=1, prompt="a cat")
     assert run["preset"] == "draft"
+
+
+def test_wallpapers_use_qwen(comfy):
+    """#51: the bake-off winner draws the wallpapers, at an exact 16:9 / 21:9 before the 4x upscale."""
+    for preset, size, target in (("wallpaper", (1536, 864), (3840, 2160)),
+                                 ("wallpaper_ultrawide", (1792, 768), (3440, 1440))):
+        imagegen.generate("a fjord at dawn", preset, seed=1)
+        wf = comfy.workflows()[-1]
+        assert _node(wf, "UNETLoader")["unet_name"] == "qwen_image_2.1_bf16.safetensors"
+        assert _node(wf, "TextEncodeQwenImage21")["prompt"].startswith("a fjord at dawn, ")
+        latent = _node(wf, "EmptyLatentImage")
+        assert (latent["width"], latent["height"]) == size
+        assert (_node(wf, "ImageScale")["width"], _node(wf, "ImageScale")["height"]) == target

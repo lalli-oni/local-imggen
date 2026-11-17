@@ -56,10 +56,13 @@ under `"timing"` (seconds per stage; the sidecar also lists every node). They co
 events. `load` is reading weights from disk; moving them onto the GPU is counted in `sample`, so the first
 image after a model change is slower. `queue` is the wait before ComfyUI started on the job.
 
-Presets: `draft` (1024², quick), `wallpaper` (16:9, upscaled to 3840x2160), `wallpaper_ultrawide`
-(21:9, upscaled to 3440x1440), `icon` (centered object, background removed). Opt-in: `kontext` (edit only),
-`klein` and `qwen` (text-to-image and `gen edit -p ...`; no `gen vary`), `wallpaper_ref` (klein: a 4K 16:9
-wallpaper of the character in a ref image, `gen edit REF "scene" -p wallpaper_ref`; `gen daily` uses it).
+Presets: `draft` (SDXL, 1024², quick), `wallpaper` (Qwen-Image 2.1, 16:9, upscaled to 3840x2160),
+`wallpaper_ultrawide` (Qwen, 21:9, upscaled to 3440x1440), `wallpaper_ref` (Qwen: a 4K 16:9 wallpaper of the
+character in a ref image, `gen edit REF "scene" -p wallpaper_ref`; `gen daily` uses it), `icon` (SDXL, centered
+object, background removed). The wallpapers moved to Qwen after the #51 bake-off: about 3 minutes an image, so keep
+the resource limits on (`comfy/limits.sh on`; `gen doctor` warns otherwise). The fast SDXL/klein versions are still
+there: `wallpaper_sdxl`, `wallpaper_ultrawide_sdxl`, `wallpaper_ref_klein`. Also: `kontext` (edit only), `klein`,
+`qwen`, `qwen_lite` (text-to-image and `gen edit -p ...`; no `gen vary`).
 
 ### How a preset works, and how to see it
 

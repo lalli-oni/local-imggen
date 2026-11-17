@@ -113,7 +113,7 @@ def test_doctor_opt_in_presets(comfy):
     # nodes only opt-in presets use: a warning, even in their text-to-image workflows
     comfy.nodes -= {"TextEncodeQwenImage21", "Flux2Scheduler"}
     c = doctor.check_nodes(conf, comfy.url)
-    assert c["status"] == "warn" and "TextEncodeQwenImage21 (in qwen_image_21_edit.json, qwen_image_21_t2i.json)" \
+    assert c["status"] == "warn" and "TextEncodeQwenImage21 (in qwen_image_21_edit.json, qwen_image_21_ref_upscale.json," \
         in c["detail"]
 
 

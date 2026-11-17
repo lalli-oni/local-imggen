@@ -21,8 +21,8 @@ def filled(preset: str, **extra) -> dict:
 
 
 def test_describe_sdxl_wallpaper():
-    line = progress.describe(filled("wallpaper"), "wallpaper", 4, imagegen.stage_of)
-    assert line == ("wallpaper: sd_xl_base_1.0 · 1 pass, 30 steps · 1344x768 -> 3840x2160 (RealESRGAN_x4plus)"
+    line = progress.describe(filled("wallpaper_sdxl"), "wallpaper_sdxl", 4, imagegen.stage_of)
+    assert line == ("wallpaper_sdxl: sd_xl_base_1.0 · 1 pass, 30 steps · 1344x768 -> 3840x2160 (RealESRGAN_x4plus)"
                     " · 4 images")
 
 
@@ -219,10 +219,10 @@ def test_generate_draws_the_live_block(comfy, capsys, monkeypatch):
     monkeypatch.setattr(progress, "MEM_EVERY", 0.05)
     comfy.steps = True
     comfy.node_s = {"KSampler": 0.4, "ImageUpscaleWithModel": 0.3}
-    run = imagegen.generate("a misty fjord", "wallpaper", count=2, seed=5)
+    run = imagegen.generate("a misty fjord", "wallpaper_sdxl", count=2, seed=5)
     err = capsys.readouterr().err
     plain = ANSI.sub("", err)
-    assert "wallpaper: sd_xl_base_1.0 · 1 pass, 30 steps" in plain
+    assert "wallpaper_sdxl: sd_xl_base_1.0 · 1 pass, 30 steps" in plain
     assert re.search(r"▶ sample \d+/30", plain)
     assert "✓ sample  ✓ decode  ▶ upscale" in plain
     assert "[1/2] seed 5 done" in plain and "[2/2] seed 6 done" in plain

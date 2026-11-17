@@ -172,13 +172,13 @@ def test_show(tulu, capsys):
 # ---------------------------------------------------------------- runs
 
 def test_daily_generates_and_sets_wallpaper(tulu, comfy, on_c_drive, stub_calls, out_dir, capsys, daily_conf):
-    daily_conf(preset="wallpaper")  # SDXL, text only
+    daily_conf(preset="wallpaper_sdxl")  # SDXL, text only
     assert imagegen.main(["daily", "--wait", "5"]) == 0
     [wf] = comfy.workflows()
     prompts = [n["inputs"]["text"] for n in wf.values() if n["class_type"] == "CLIPTextEncode"]
     assert any(t.startswith(TULU + ", ") for t in prompts)
     [run] = imagegen.recent_runs(1)
-    assert run["preset"] == "wallpaper" and "-wallpaper-daily-" in run["run_dir"]
+    assert run["preset"] == "wallpaper_sdxl" and "-daily-" in run["run_dir"]
     meta = json.loads((Path(run["run_dir"]) / "run.json").read_text())
     assert meta["daily"]["cast"] == {"tulu": 1} and meta["daily"]["date"] == date.today().isoformat()
     [script] = _wallpaper_calls(stub_calls)
@@ -237,10 +237,13 @@ def test_default_preset_draws_from_the_cast_ref(tulu, comfy, on_c_drive, stub_ca
     assert imagegen.main(["daily", "--wait", "5"]) == 0
     [wf] = comfy.workflows()
     assert _node(wf, "LoadImage")["image"] in comfy.uploads  # the ref went up as the reference
-    latent = _node(wf, "EmptyFlux2LatentImage")
+    assert _node(wf, "UNETLoader")["unet_name"] == "qwen_image_2.1_bf16.safetensors"  # Qwen since #51
+    assert _node(wf, "TextEncodeQwenImage21")["images.image_1"] == [next(k for k, n in wf.items()
+                                                                         if n["class_type"] == "LoadImage"), 0]
+    latent = _node(wf, "EmptyLatentImage")
     assert (latent["width"], latent["height"]) == (1536, 864)  # 16:9, not the ref's 3:4
     assert (_node(wf, "ImageScale")["width"], _node(wf, "ImageScale")["height"]) == (3840, 2160)
-    text = _node(wf, "CLIPTextEncode")["text"]
+    text = _node(wf, "TextEncodeQwenImage21")["prompt"]
     assert text.startswith("A wide, finished storybook illustration that fills the whole frame: ")
     assert "as lil tulu, in a new pose" in text and "no white or empty background" in text
     assert TULU not in text  # the text description (plain background, standing...) would make it copy the ref

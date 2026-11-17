@@ -1,7 +1,7 @@
 """gen daily (#3): make one new wallpaper and set it as the Windows desktop background.
 
 Settings live in config.toml under [daily]:
-  preset   the wallpaper preset (wallpaper / wallpaper_ultrawide)
+  preset   the wallpaper preset (wallpaper_ref by default; wallpaper / wallpaper_ultrawide from text only)
   count    images to make; the first becomes the wallpaper (the rest stay in the run folder)
   cast     characters (gen char) in every daily. Text-only presets: their descriptions lead the prompt, like a
            project pass. With a ref (wallpaper_ref) the ref shows them and the descriptions are left out

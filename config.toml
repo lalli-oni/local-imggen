@@ -22,8 +22,49 @@ steps = 25
 cfg = 7.0
 suffix = ""
 
+# Wallpapers use Qwen-Image 2.1 since the #51 bake-off (best quality and on-model refs; ~3 min an image).
+# Keep the resource limits on (comfy/limits.sh on): without them a Qwen run can stall Windows.
+# The SDXL versions are wallpaper_sdxl / wallpaper_ultrawide_sdxl (fast, and they have gen vary graphs).
 [presets.wallpaper]
-description = "16:9 landscape, upscaled to 4K (3840x2160)"
+description = "16:9 landscape, upscaled to 4K (3840x2160) (Qwen-Image 2.1)"
+model = "Qwen-Image 2.1"
+workflow = "qwen_image_21_upscale.json"
+download = "qwen-image-2.1.sh"
+unet = "qwen_image_2.1_bf16.safetensors"
+weight_dtype = "fp8_e4m3fn"
+text_encoder = "qwen3vl_8b_bf16.safetensors"
+vae = "qwen_image_2.1_vae_bf16.safetensors"
+resolution = 1024
+steps = 25
+cfg = 1.0
+width = 1536                     # exactly 16:9 (multiples of 16), so the 4K scale crops nothing
+height = 864
+target_width = 3840
+target_height = 2160
+upscale_model = "RealESRGAN_x4plus.pth"
+suffix = ", wallpaper, wide landscape composition, highly detailed"
+
+[presets.wallpaper_ultrawide]
+description = "21:9 ultrawide, upscaled to 3440x1440 (Qwen-Image 2.1)"
+model = "Qwen-Image 2.1"
+workflow = "qwen_image_21_upscale.json"
+download = "qwen-image-2.1.sh"
+unet = "qwen_image_2.1_bf16.safetensors"
+weight_dtype = "fp8_e4m3fn"
+text_encoder = "qwen3vl_8b_bf16.safetensors"
+vae = "qwen_image_2.1_vae_bf16.safetensors"
+resolution = 1024
+steps = 25
+cfg = 1.0
+width = 1792                     # 21:9
+height = 768
+target_width = 3440
+target_height = 1440
+upscale_model = "RealESRGAN_x4plus.pth"
+suffix = ", ultrawide panoramic wallpaper, highly detailed"
+
+[presets.wallpaper_sdxl]
+description = "16:9 landscape, upscaled to 4K (3840x2160) (SDXL: fast)"
 model = "SDXL base 1.0"
 workflow = "sdxl_upscale.json"
 img2img_workflow = "sdxl_img2img_upscale.json"
@@ -37,8 +78,8 @@ target_height = 2160
 upscale_model = "RealESRGAN_x4plus.pth"
 suffix = ", wallpaper, wide landscape composition, highly detailed"
 
-[presets.wallpaper_ultrawide]
-description = "21:9 ultrawide, upscaled to 3440x1440"
+[presets.wallpaper_ultrawide_sdxl]
+description = "21:9 ultrawide, upscaled to 3440x1440 (SDXL: fast)"
 model = "SDXL base 1.0"
 workflow = "sdxl_upscale.json"
 img2img_workflow = "sdxl_img2img_upscale.json"
@@ -70,7 +111,7 @@ post = ["remove_bg", "keep_largest", "trim"]
 # Schedule it: windows/daily-task.sh on [--at 06:00]. Preview a day: gen daily --show [--date 2026-12-24].
 # Log: <output_dir>/daily.log. Themes are picked at random from the ones not used recently.
 [daily]
-preset = "wallpaper_ref"      # klein + the cast's ref image (on-model); "wallpaper" = SDXL from text only
+preset = "wallpaper_ref"      # Qwen + the cast's ref image (on-model); "wallpaper" = Qwen from text only
 ref = ""                      # CHARACTER:REF, or an image path (relative = under output_dir); "" = first cast character's first ref
 # With a ref, the prompt is this ({scene} = theme + style, {name} = the cast character); the cast descriptions
 # are left out (they ask for a plain white background, so the model copied the ref as-is).
@@ -223,7 +264,26 @@ steps = 4
 # comes from the prompt; the ref only shows the character, so it stays on-model. gen daily uses it.
 # By hand: gen edit REF.png "lil tulu reading in a rainy window nook, only one character" -p wallpaper_ref
 [presets.wallpaper_ref]
-description = "16:9 wallpaper (4K) of the character in a ref image (FLUX.2 klein): gen edit REF \"scene\" -p wallpaper_ref"
+description = "16:9 wallpaper (4K) of the character in a ref image (Qwen-Image 2.1): gen edit REF \"scene\" -p wallpaper_ref"
+model = "Qwen-Image 2.1"
+edit_workflow = "qwen_image_21_ref_upscale.json"
+download = "qwen-image-2.1.sh"
+unet = "qwen_image_2.1_bf16.safetensors"
+weight_dtype = "fp8_e4m3fn"
+text_encoder = "qwen3vl_8b_bf16.safetensors"
+vae = "qwen_image_2.1_vae_bf16.safetensors"
+resolution = 1024              # pixel budget for the ref image
+steps = 25
+cfg = 1.0
+out_width = 1536                # exactly 16:9 (and multiples of 16), so the 4K scale crops nothing
+out_height = 864
+upscale_model = "RealESRGAN_x4plus.pth"
+target_width = 3840
+target_height = 2160
+
+# The daily wallpaper before #51: klein draws the ref's character (~20 s, but less polished than Qwen).
+[presets.wallpaper_ref_klein]
+description = "16:9 wallpaper (4K) of the character in a ref image (FLUX.2 klein: fast): gen edit REF \"scene\" -p wallpaper_ref_klein"
 model = "FLUX.2 klein 4B"
 edit_workflow = "flux2_klein_ref_upscale.json"
 download = "flux2-klein.sh"
