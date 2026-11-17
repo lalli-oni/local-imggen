@@ -239,9 +239,11 @@ def page_data(proj: dict, b: dict) -> dict:
             ids[key] = f"{pi}:{ni}"
             e = b["images"].get(key, {})
             ims.append({"id": f"{pi}:{ni}", "src": _url(path, d), "path": str(path), "seed": im.get("seed"),
-                        "rating": e.get("rating"), "notes": e.get("notes", [])})
+                        "rating": e.get("rating"), "notes": e.get("notes", []),
+                        **({"prompt": im["prompt"]} if im.get("prompt") else {})})
         passes.append({"n": pi, "version": p["version"], "at": p["at"], "author": p["author"],
                        "extra": p.get("extra"), "ref": p.get("ref"), "chars": p.get("chars"),
+                       "stage": p.get("stage"), "source": p.get("source"), "text": p.get("text"),
                        "prompt": (run or {}).get("prompt"), "missing": run is None,
                        "sheet": _url(Path(p["run_dir"]) / "index.html", d), "images": ims})
     others = [{"src": _url(_abs(k), d), "path": str(_abs(k)), "rating": e.get("rating"), "notes": e.get("notes", [])}
@@ -258,6 +260,7 @@ def page_data(proj: dict, b: dict) -> dict:
                   "refs": [{"name": n, "role": r["role"], "src": _url(Path(r["path"]), d)} for n, r in st["refs"].items()]},
         "assets": [{"name": n, "current": a["current"], "stale": a["stale"], "reasons": a["stale_reasons"],
                     "src": _url(Path(a["file"]), d)} for n, a in s["assets"].items()],
+        "stage": s["stage"],  # #68: {"character", "stage", "stages": {name: what its generate runs}} or None
         "versions": versions, "passes": passes, "others": others, "notes": b["notes"], "counts": counts(b, ids),
     }
 

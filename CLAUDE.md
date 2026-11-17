@@ -47,6 +47,13 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   rebuilds `<project>/index.html` from `templates/board.html` (passes grouped by version, History popup; buttons copy the
   `gen project rate|note` command). `gen project rate|note|board`, MCP `project_rate`/`project_note`;
   `project_get` returns `board` and the ratings/notes in `new_since_last_look`.
+- `stages.py`: character stages (#68, v1; process in `docs/character-stages.md`): a character's `state.stage`
+  (explore/converge/polish, `gen char set NAME --stage S`, stales nothing); a project works in its first cast
+  character's stage. `run_stage` makes a pass the way `[stages.*]` in config.toml says (mode text/edit/img2img,
+  preset, count, `instruction` with `{text}`, `ideas` = one per image via `generate(prompts=...)`, `needs_text`),
+  editing the selected board image (`source` P:N/path/CHAR:REF) or the character's first ref; `projects.record_pass`
+  records stage/source/text. The board gets a stage row (stage menu, one button per stage) and a "ref" button per card.
+  Not built yet: poses, variants, base-version staleness for them (see #68).
 - `boardserve.py`: `gen board serve [SLUG] [--port 8190] [--open]` (#55): the same board.html served on 127.0.0.1
   (stdlib http.server) with `"live": true`, so a click selects a card and buttons and keys (arrows, 1/2/3/0, n, o) rate and note via `/api/projects/<slug>/...`,
   "Generate 4 more" runs `projects.run_pass` (one job at a time), and the page polls `stamp` (project.json + board.json
