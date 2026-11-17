@@ -291,7 +291,8 @@ def make_server(port: int = DEFAULT_PORT, host: str = "127.0.0.1", jobs: Jobs | 
 
 USAGE = """usage: gen board serve [SLUG] [--port N] [--open]
   serve the project boards on http://127.0.0.1:PORT (default {port}) until Ctrl+C:
-  rate with clicks or keys (1 pick, 2 maybe, 3 reject, 0 clear, n note, j/k move),
+  click an image to select it; keys: arrows move, 1 pick, 2 maybe, 3 reject,
+  0 clear, n note, o open full size,
   "generate 4 more", and the page refreshes itself when the project or board changes.
   SLUG: the board to open with --open (default: the list of projects)."""
 
