@@ -4,7 +4,8 @@ A character lives in <output_dir>/characters/<name>/:
   character.json   current state + version history
   refs/            reference images (<ref>-v<N>.<ext>, never overwritten)
 
-- state: description (the prompt text that draws the character), palette (hex) and refs.
+- state: description (the prompt text that draws the character), palette (hex), refs, and the stage
+  the character's work is in (#68, stages.py: explore / converge / polish; changing it stales nothing).
 - Every change makes a new character version that snapshots the state, like project versions.
 - Projects cast characters (projects.py, state["cast"]); a pass puts the cast's descriptions in front
   of the project prompt, and records which character versions it used.
@@ -79,11 +80,16 @@ def _commit(ch: dict, changed: list[str], author: str, note: str | None) -> dict
 
 
 def _apply(ch: dict, description: str | None = None, palette: list[str] | None = None,
-           refs: dict | None = None, drop_refs: list[str] | None = None) -> list[str]:
+           refs: dict | None = None, drop_refs: list[str] | None = None, stage: str | None = None) -> list[str]:
     """Change ch["state"] in place; returns the state keys that actually changed.
     refs is {name: path or {"path", "role"}}; a None/"" path removes that ref."""
+    import stages
     st = ch["state"]
     before = json.loads(json.dumps(st))
+    if stage is not None:
+        if stage not in stages.STAGES:
+            raise ValueError(f"unknown stage '{stage}' (stages: {', '.join(stages.STAGES)})")
+        st["stage"] = stage  # a character from before #68 gets the key even for "explore" (a real change)
     if description is not None:
         st["description"] = description.strip()
     if palette is not None:
@@ -120,7 +126,7 @@ def new(name: str, title: str | None = None, author: str = "human", note: str | 
         if exists(name):
             raise ValueError(f"character '{name}' already exists")
         ch = {"schema": 1, "name": name, "title": title or name, "created": _now(), "version": 0,
-              "state": {"description": "", "palette": [], "refs": {}}, "versions": []}
+              "state": {"description": "", "palette": [], "refs": {}, "stage": "explore"}, "versions": []}
         _apply(ch, **state)
         _commit(ch, ["created"], author, note or "created")
         save(ch)
@@ -134,6 +140,8 @@ def set_state(name: str, note: str | None = None, author: str = "human", **chang
         changed = _apply(ch, **changes)
         if not changed:
             raise ValueError("nothing changed")
+        if not note and "stage" in changed:
+            note = f"stage: {ch['state']['stage']}"
         v = _commit(ch, changed, author, note)
         save(ch)
     import boards
@@ -189,11 +197,12 @@ def used_by(name: str) -> dict:
 
 
 def summary(name: str, history: int = 5) -> dict:
+    import stages
     ch = load(name)
     d = char_dir(name)
     st = ch["state"]
     return {"name": name, "title": ch["title"], "dir": str(d), "dir_windows": imagegen.to_windows_path(d),
-            "version": ch["version"],
+            "version": ch["version"], "stage": stages.character_stage(ch),
             "state": {**st, "refs": {n: {**r, "path": str(d / r["file"])} for n, r in st["refs"].items()}},
             "used_by": used_by(name),
             "recent_versions": [{k: v[k] for k in ("version", "at", "author", "note", "changed")}
@@ -234,19 +243,22 @@ def from_project(slug: str, name: str | None = None, author: str = "human", titl
 # ---------------------------------------------------------------- CLI
 
 USAGE = """usage: gen char COMMAND ...
-  new NAME [--title T] [--desc TEXT] [--palette '#hex,...'] [--ref NAME=PATH]
+  new NAME [--title T] [--desc TEXT] [--palette '#hex,...'] [--ref NAME=PATH] [--stage S]
                                      create a character (v1)
   new NAME --from-project SLUG       move a project's prompt/refs/palette into a character it casts
   list                               list characters
   status NAME                        state, refs, which projects cast it, history
   set NAME [--desc ...] [--palette ...] [--ref NAME=PATH] [--drop-ref NAME] [--note N]
                                      change it -> new version; assets that show it go stale
+  set NAME --stage explore|converge|polish
+                                     move it to a stage (#68): what the board's Generate runs;
+                                     stales nothing (docs/character-stages.md)
 Cast it in a project: gen project set SLUG --cast NAME"""
 
 
 def _print(s: dict) -> None:
     st = s["state"]
-    print(f"{s['title']} ({s['name']})  v{s['version']}")
+    print(f"{s['title']} ({s['name']})  v{s['version']}  stage: {s['stage']}")
     print(f"  folder:  {s['dir_windows'] or s['dir']}")
     print(f"  desc:    {st['description'] or '(none yet)'}")
     if st["palette"]:
@@ -284,6 +296,9 @@ def main(argv: list[str]) -> int:
         ap.add_argument("--desc", dest="description")
         ap.add_argument("--palette", help="comma-separated hex colours, replaces the palette")
         ap.add_argument("--ref", action="append", metavar="NAME=PATH", help="NAME= removes it (repeatable)")
+        import stages
+        ap.add_argument("--stage", choices=stages.STAGES,
+                        help="explore / converge / polish (#68; default for a new character: explore)")
         ap.add_argument("--author", default="human")
         if cmd == "new":
             ap.add_argument("--title")
@@ -293,7 +308,8 @@ def main(argv: list[str]) -> int:
             ap.add_argument("--note")
         a = ap.parse_args(rest)
         kw = {"description": a.description, "refs": projects._kv(a.ref, "--ref") or None,
-              "palette": [c.strip() for c in a.palette.split(",") if c.strip()] if a.palette is not None else None}
+              "palette": [c.strip() for c in a.palette.split(",") if c.strip()] if a.palette is not None else None,
+              "stage": a.stage}
         kw = {k: v for k, v in kw.items() if v is not None}
         if cmd == "new":
             if a.from_project:
