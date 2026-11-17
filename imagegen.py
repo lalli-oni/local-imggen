@@ -889,11 +889,26 @@ def _finish_job(comfy: "Comfy", events: "Events", pid: str, side_nodes: frozense
     return entry, outs, datas, [is_blank(d["png"]) for d in datas], side
 
 
+def _upstream(wf: dict, ids) -> set:
+    """The nodes the given ones depend on (themselves included)."""
+    seen, todo = set(), list(ids)
+    while todo:
+        nid = todo.pop()
+        if nid in seen or nid not in wf:
+            continue
+        seen.add(nid)
+        todo += [v[0] for v in wf[nid].get("inputs", {}).values() if isinstance(v, list) and v and v[0] in wf]
+    return seen
+
+
 def _uncached(wf: dict, n: int) -> dict:
     """The same graph with an extra input on its seed node(s), which ComfyUI ignores when running the node but
-    counts in its cache key: re-queued as it was, every node would be a cache hit and give the black image back."""
+    counts in its cache key: re-queued as it was, every node would be a cache hit and give the black image back.
+    A cast graph's scene pass (#52) stays cached: only the edit is redrawn."""
     wf = json.loads(json.dumps(wf))
-    nodes = [nd for nd in wf.values() if {"seed", "noise_seed"} & set(nd.get("inputs", {}))] or list(wf.values())
+    keep = _upstream(wf, scene_nodes(wf))
+    nodes = [nd for nid, nd in wf.items() if {"seed", "noise_seed"} & set(nd.get("inputs", {})) and nid not in keep] \
+        or list(wf.values())
     for nd in nodes:
         nd.setdefault("inputs", {})["imagegen_retry"] = n
     return wf
@@ -911,6 +926,14 @@ _IMAGE_SLOT = re.compile(r"images\.image_(\d+)")
 
 def takes_refs(workflow_text: str) -> bool:
     return REF_PLACEHOLDER in workflow_text
+
+
+def is_cast_preset(p: dict) -> bool:
+    """A preset whose text workflow takes ref images (wallpaper_cast); a missing workflow file is not one."""
+    try:
+        return bool(p.get("workflow")) and takes_refs((ROOT / "workflows" / p["workflow"]).read_text())
+    except OSError:
+        return False
 
 
 def scene_nodes(wf: dict) -> frozenset:
@@ -1038,8 +1061,7 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
         template = expand_refs(template, len(ref_paths))
     elif refs or cast_prompt:
         raise ValueError(f"preset '{preset}' takes no refs; cast presets: "
-                         + (", ".join(n for n, q in presets.items() if q.get("workflow") and
-                                       takes_refs((ROOT / "workflows" / q["workflow"]).read_text())) or "none"))
+                         + (", ".join(n for n, q in presets.items() if is_cast_preset(q)) or "none"))
     unused = [k for k, v in (("steps", steps), ("cfg", cfg), ("guidance", guidance), ("negative", negative))
               if v is not None and "{{" + k + "}}" not in template_text]
     if unused:  # e.g. -g on klein, or a project's cfg after switching it to klein: say so, then go on
@@ -1159,13 +1181,13 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
                     jt = {}
                 job_timings.append(jt)
                 scene = None
-                for j, (_, png) in enumerate(side):  # the scene before the cast went in (#52)
-                    scene = run_dir / (f"{i:02d}-seed{s}-scene" + (f"-{j}" if len(side) > 1 else "") + ".png")
+                for j, (_, png) in enumerate(side):  # the scene before the cast went in (#52); the first one counts
+                    f = run_dir / (f"{i:02d}-seed{s}-scene" + (f"-{j}" if len(side) > 1 else "") + ".png")
                     try:
-                        scene.write_bytes(png)
+                        f.write_bytes(png)
+                        scene = scene or f
                     except OSError as e:
-                        log(f"note: could not save {scene.name}: {e}")
-                        scene = None
+                        log(f"note: could not save {f.name}: {e}")
                 for j, data in enumerate(datas):
                     name = f"{i:02d}-seed{s}" + (f"-{j}" if len(outs) > 1 else "") + ".png"
                     path = run_dir / name
@@ -1305,7 +1327,8 @@ def write_contact_sheet(run_dir: Path, run: dict) -> Path:
         entry.update({k: im[k] for k in ("tag", "seconds") if im.get(k) is not None})  # tag: gen bakeoff
         if im.get("scene") and (run_dir / Path(im["scene"]).name).is_file():  # a cast run's scene (#52)
             entry["scene"] = Path(im["scene"]).name
-            scenes.append({"file": entry["scene"], "caption": f"scene · seed {im['seed']}"})
+            if entry["scene"] not in [x["file"] for x in scenes]:  # a job with 2 outputs shares one scene
+                scenes.append({"file": entry["scene"], "caption": f"scene · seed {im['seed']}"})
         params = meta.get("params") or {}
         entry.update({k: params[k] for k in SHEET_PARAMS if k in params})
         images.append(entry)

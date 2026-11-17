@@ -335,3 +335,18 @@ def test_gen_cli_ref_flags(comfy, make_image):
     assert imagegen.main(["a beach", "-p", "wallpaper_cast", "--ref", ref, "--ref", ref, "--cast-prompt", "x {images}"]) == 0
     cast_enc = [n["inputs"] for n in comfy.workflows()[0].values() if n["class_type"] == "TextEncodeQwenImage21"][1]
     assert cast_enc["prompt"] == "x images 2 and 3"
+
+
+def test_cast_blank_retry_redraws_only_the_edit(comfy, make_image):
+    comfy.blank_jobs = 1
+    imagegen.generate("a beach", "wallpaper_cast", refs=[str(make_image("t.png"))], seed=3)
+    retry = comfy.workflows()[1]
+    samplers = [(nid, "imagegen_retry" in n["inputs"]) for nid, n in retry.items() if n["class_type"] == "KSampler"]
+    assert dict(samplers) == {"7": False, "13": True}  # the scene (7) comes from ComfyUI's cache
+
+
+def test_sheet_lists_a_shared_scene_once(comfy, make_image):
+    comfy.outputs_per_job = 2
+    run = imagegen.generate("a beach", "wallpaper_cast", refs=[str(make_image("t.png"))], seed=3)
+    assert len(run["images"]) == 2 and run["images"][0]["scene"] == run["images"][1]["scene"]
+    assert (Path(run["run_dir"]) / "index.html").read_text().count('"caption": "scene · seed 3"') == 1

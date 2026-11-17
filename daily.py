@@ -67,7 +67,7 @@ def settings(conf: dict | None = None) -> dict:
     if "workflow" not in p and "edit_workflow" not in p:
         raise ValueError(f"[daily] preset '{d['preset']}' has no workflow")
     d["refs"] = _pool(d["ref"])
-    d["casting"] = "workflow" in p and imagegen.takes_refs((imagegen.ROOT / "workflows" / p["workflow"]).read_text())
+    d["casting"] = imagegen.is_cast_preset(p)
     if d["refs"] and "edit_workflow" not in p and not d["casting"]:
         raise ValueError(f"[daily] ref is set, but preset '{d['preset']}' can't use a ref (no edit_workflow)")
     if len(d["refs"]) > 1 and not d["casting"]:
@@ -100,9 +100,10 @@ def find_ref(d: dict) -> Path:
 def find_refs(d: dict) -> list[tuple[str | None, Path]]:
     """A cast preset's ref images as (character or None, path): [daily] ref's entries, else each cast
     character's first ref."""
-    if d["refs"]:
-        return [_resolve_ref(r) for r in d["refs"]]
     cast = _pool(d["cast"])
+    if d["refs"]:  # a plain path is the cast character in the same place, for the edit's wording
+        found = [_resolve_ref(r) for r in d["refs"]]
+        return [(name or (cast[k] if k < len(cast) else None), path) for k, (name, path) in enumerate(found)]
     if not cast:
         raise ValueError(f"[daily] preset '{d['preset']}' needs the cast's ref images: set cast or ref")
     return [(name, _char_ref(name)) for name in cast]
@@ -228,7 +229,7 @@ PLACES = ("on the left", "on the right", "in the middle", "in the foreground", "
 SCENE_PROMPT = ("A wide, finished wallpaper image that fills the whole frame: {stand_ins}, {scene}. The only text "
                 "in the image is the sign text named in the scene, spelled exactly as given; no other signs, labels "
                 "or writing. Detailed background, scenery and lighting everywhere, no white or empty background, "
-                "no border.")
+                "no border")  # no full stop: generate() adds the preset's suffix and the style after it
 CAST_PROMPT = ("{replace} Each character takes over the place, pose, size and action of the one it replaces and is "
                "lit like the rest of the scene, with exactly the same design, colours and proportions as in its "
                "reference image. Keep everything else in image 1 exactly the same: layout, background, lighting, "
@@ -250,7 +251,8 @@ def cast_prompts(d: dict, theme: str, names: list[str | None]) -> tuple[str, str
     places = [""] if n == 1 else [f" {PLACES[k]}" if k < len(PLACES) else f" number {k + 1}" for k in range(n)]
     if stand_in:
         stand_ins = f"{stand_in}{places[0]}" + "".join(f", another one{pl}" for pl in places[1:])
-        replace = " ".join(f"Replace the {stand_in.removeprefix('a ').removeprefix('an ')}{places[k]} in image 1 "
+        bare = re.sub(r"^(an?|the)\s+", "", stand_in, flags=re.IGNORECASE)
+        replace = " ".join(f"Replace the {bare}{places[k]} in image 1 "
                            f"with {_name(nm)}, the character from image {k + 2}." for k, nm in enumerate(names))
     else:
         stand_ins = "nobody in it yet"

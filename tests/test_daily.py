@@ -470,3 +470,10 @@ def test_blank_image_never_becomes_the_wallpaper(tulu, comfy, on_c_drive, stub_c
     assert imagegen.main(["daily", "--wait", "5"]) == 1
     assert _wallpaper_calls(stub_calls) == []
     assert "every image came out blank" in _log_lines(out_dir)[0]
+
+
+def test_cast_ref_paths_take_the_cast_names(tulu, daily_conf, make_image):
+    daily_conf(ref=[str(make_image("t2.png"))], stand_in="A small fox", themes=["on a beach"], months={}, weekdays={})
+    p = daily.plan(date(2026, 11, 12))
+    assert p["cast_prompt"].startswith("Replace the small fox in image 1 with lil tulu, the character from image 2.")
+    assert "A small fox, on a beach" in p["prompt"] and not p["prompt"].endswith(".")
