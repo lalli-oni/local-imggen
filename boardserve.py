@@ -3,7 +3,9 @@
 The static <project>/index.html can only copy `gen project` commands. Served, the same template
 (templates/board.html) gets "live": true in its data and then:
   - rates and notes with a click or a key (1/2/3, 0 clears, n notes) through POST /api/...,
-  - runs "generate 4 more" (projects.run_pass, one job at a time: there is one GPU),
+  - runs "generate 4 more" (projects.run_pass, one job at a time: there is one GPU), or, for a project
+    that casts a character, the stage buttons (#68, stages.run_stage: explore / converge from the
+    selected image / polish with a typed fix) and the stage switch (characters.set_state),
   - refreshes itself when project.json or board.json change (a rating from the CLI or Claude,
     a pass that finished), by polling GET /api/projects/<slug>/stamp.
 
@@ -29,6 +31,7 @@ from urllib.parse import quote, unquote, urlsplit
 import boards
 import imagegen
 import projects
+import stages
 
 DEFAULT_PORT = 8190
 FILE_EXTS = projects.IMAGE_EXTS | {".html"}
@@ -49,15 +52,17 @@ class Jobs:
         with self._lock:
             return dict(self.current) if self.current else None
 
-    def start(self, slug: str, count: int, run=None) -> dict:
-        """run(slug, count) does the work (default projects.run_pass); raises RuntimeError while one runs."""
+    def start(self, slug: str, count: int, run=None, stage: str | None = None) -> dict:
+        """run(slug, count) does the work (default projects.run_pass); raises RuntimeError while one runs.
+        stage: shown on the page ("Generating 4 (converge)")."""
         run = run or (lambda s, n: projects.run_pass(s, n, author="human"))
         with self._lock:
             if self.current and self.current["state"] == "running":
                 c = self.current
                 raise RuntimeError(f"already generating {c['count']} for {c['slug']}; wait for it to finish")
             self._seq += 1
-            job = {"id": self._seq, "slug": slug, "count": count, "state": "running", "started": time.time()}
+            job = {"id": self._seq, "slug": slug, "count": count, "state": "running", "started": time.time(),
+                   **({"stage": stage} if stage else {})}
             self.current = job
 
         def work():
@@ -257,6 +262,9 @@ class Handler(BaseHTTPRequestHandler):
                 image = body.get("image")
                 result = boards.note(slug, str(body.get("text") or ""), str(image) if image else None, "human")
             elif action == "gen":
+                stage = body.get("stage")
+                if stage is not None:
+                    return self._gen_stage(slug, body)
                 count = body.get("count", 4)
                 if not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= GEN_MAX:
                     raise ValueError(f"count: a whole number from 1 to {GEN_MAX}")
@@ -268,6 +276,24 @@ class Handler(BaseHTTPRequestHandler):
                 except RuntimeError as e:
                     return self._err(409, str(e))
                 return self._json(202, {"result": result, **self._state(slug)})
+            elif action == "ref":
+                result = make_ref(slug, str(body.get("image") or ""))
+                return self._json(200, {"result": result, **self._state(slug, data=True)})
+            elif action == "stage":
+                import characters
+                stage = body.get("stage")
+                if stage not in stages.STAGES:
+                    raise ValueError(f"stage: one of {', '.join(stages.STAGES)}")
+                cur = stages.of_project(projects.load(slug)["state"])
+                if cur is None:
+                    raise ValueError(f"project '{slug}' casts no character, so it has no stage")
+                if cur["stage"] == stage:
+                    result = cur
+                else:
+                    v = characters.set_state(cur["character"], None, "human", stage=stage)
+                    result = {**cur, "stage": stage, "character_version": v["version"]}
+                # set_state rebuilt the page of every project that casts it: the stamp moves, the page re-fetches
+                return self._json(200, {"result": result, **self._state(slug, data=True)})
             else:
                 return self._err(404, "unknown endpoint")
         except FileNotFoundError as e:
@@ -278,6 +304,51 @@ class Handler(BaseHTTPRequestHandler):
             imagegen.log(f"board serve: {action} on {slug} failed: {type(e).__name__}: {e}")
             return self._err(500, f"{type(e).__name__}: {e}")
         return self._json(200, {"result": result, **self._state(slug, data=True, fresh=boards.last_data(slug))})
+
+
+    def _gen_stage(self, slug: str, body: dict) -> None:
+        """POST gen with a stage: a pass the way that stage generates (stages.run_stage)."""
+        stage = body.get("stage")
+        if stage not in stages.STAGES:
+            raise ValueError(f"stage: one of {', '.join(stages.STAGES)}")
+        s = stages.settings(stage)
+        count = body.get("count", int(s["count"]))
+        if not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= GEN_MAX:
+            raise ValueError(f"count: a whole number from 1 to {GEN_MAX}")
+        source, text = body.get("source"), body.get("text")
+        if source is not None and not isinstance(source, str) or text is not None and not isinstance(text, str):
+            raise ValueError("source and text: strings")
+        text = (text or "").strip() or None
+        if s.get("needs_text") and not text:
+            raise ValueError(f"{stage} needs an instruction: type the one thing to fix")
+        if stages.of_project(projects.load(slug)["state"]) is None:
+            raise ValueError(f"project '{slug}' casts no character, so it has no stages: "
+                             f"gen project set {slug} --cast NAME")
+        run = lambda sl, n: stages.run_stage(sl, stage, n, source, text, author="human")  # noqa: E731
+        try:
+            result = self.jobs.start(slug, count, run, stage=stage)
+        except RuntimeError as e:
+            return self._err(409, str(e))
+        return self._json(202, {"result": result, **self._state(slug)})
+
+
+def make_ref(slug: str, image: str, author: str = "human") -> dict:
+    """A board image (P:N or a path) becomes the stage character's first ref (#68: promote the best of a
+    converge or polish pass). A new character version; the old ref file stays in its history."""
+    import characters
+    if not image:
+        raise ValueError("image: a P:N id or a path")
+    proj = projects.load(slug)
+    cur = stages.of_project(proj["state"])
+    if cur is None:
+        raise ValueError(f"project '{slug}' casts no character")
+    key, pid = boards.resolve(proj, image)
+    name = cur["character"]
+    refs = characters.load(name)["state"]["refs"]
+    ref = next(iter(refs), "main")
+    v = characters.set_state(name, f"{ref} ref from {slug} {pid or image}", author,
+                             refs={ref: {"path": str(boards._abs(key)), "role": refs.get(ref, {}).get("role", "")}})
+    return {"character": name, "ref": ref, "version": v["version"], "image": pid or image}
 
 
 def make_server(port: int = DEFAULT_PORT, host: str = "127.0.0.1", jobs: Jobs | None = None) -> ThreadingHTTPServer:
@@ -293,7 +364,8 @@ USAGE = """usage: gen board serve [SLUG] [--port N] [--open]
   serve the project boards on http://127.0.0.1:PORT (default {port}) until Ctrl+C:
   click an image to select it; keys: arrows move, 1 pick, 2 maybe, 3 reject,
   0 clear, n note, o open full size,
-  "generate 4 more", and the page refreshes itself when the project or board changes.
+  "generate 4 more" (or, for a character project, the explore / converge / polish buttons: #68),
+  and the page refreshes itself when the project or board changes.
   SLUG: the board to open with --open (default: the list of projects)."""
 
 

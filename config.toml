@@ -334,3 +334,30 @@ height = 1024
 resolution = 1024
 steps = 25
 cfg = 1.0
+
+# Character stages (#68, first iteration; docs/character-stages.md). A character is in one stage at a time
+# (gen char set NAME --stage converge); its projects' boards get one Generate button per stage, and
+# `gen project gen SLUG --stage [S]` runs one. Stage passes use the stage's preset (not the project's preset/params).
+# mode: text = cast descriptions + project prompt; edit = an edit preset changes one image (the selected board
+# image, else the character's first ref); img2img = like edit but with `strength` (needs an img2img preset).
+# instruction: the edit prompt; {text} = what you type on the board, else one of `ideas` per image
+# (each new pass moves on along the list). needs_text: the stage won't run without typed text.
+[stages.explore]
+mode = "text"
+preset = "draft"              # cheap and fast; off-model is fine here, you're after a direction
+count = 8
+
+[stages.converge]
+mode = "edit"
+preset = "klein"
+count = 4
+instruction = "The same character with the same design, proportions and colours, {text}. Plain light background, only this one character."
+ideas = ["sitting down", "waving hello", "seen from the side", "a three-quarter view",
+         "jumping happily", "looking surprised", "walking towards the viewer", "sleeping"]
+
+[stages.polish]
+mode = "edit"
+preset = "klein"
+count = 2
+needs_text = true             # one targeted fix per pass, typed on the board
+instruction = "{text}. Keep everything else exactly the same: the same character, pose, colours and background."

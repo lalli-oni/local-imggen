@@ -298,3 +298,96 @@ def test_slider_keeps_its_arrows(board):
     assert page.locator("#size").input_value() != before
     assert selected(page) is None
     assert not errors, errors
+
+
+# ---------------------------------------------------------------- character stages (#68)
+
+@pytest.fixture
+def staged(browser, out_dir, comfy, make_image):  # noqa: F811
+    """Project tulu casting character tulu (explore, with a ref), one explore pass of 2, served."""
+    import threading
+
+    import boardserve
+    import characters
+    import stages
+    characters.new("tulu", description="chibi green cthulhu", refs={"main": str(make_image("ref.png"))})
+    projects.new("tulu", cast={"tulu": None})
+    stages.run_stage("tulu", "explore", count=2, seed=1)
+    jobs = boardserve.Jobs()
+    srv = boardserve.make_server(0, jobs=jobs)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    page = browser.new_page(viewport={"width": 1280, "height": 800})
+    errors = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+    page.goto(f"http://127.0.0.1:{srv.server_port}/projects/tulu/")
+    yield page, errors, jobs
+    page.close()
+    srv.shutdown()
+    srv.server_close()
+
+
+def test_stage_row_and_converge_from_the_selected_image(staged):
+    import characters
+    page, errors, jobs = staged
+    assert page.locator("#stagebar").is_visible() and not page.locator("#gen-more").is_visible()
+    assert page.locator("#stage-select").input_value() == "explore"
+    assert page.locator(".stage-btn.current").inner_text() == "Explore ×8"
+    assert page.locator(".pass h3").first.inner_text().startswith("Pass 1 · explore")
+    assert "tulu's ref" in page.locator("#stage-src").inner_text()
+    page.locator(".card img").nth(1).click()  # select 1:2: converge edits it
+    assert "edit 1:2 (selected)" in page.locator("#stage-src").inner_text()
+    page.get_by_role("button", name="Converge ×4").click()
+    page.wait_for_function("document.querySelectorAll('.pass').length === 2", timeout=20000)
+    p = projects.load("tulu")["passes"][-1]
+    assert p["stage"] == "converge" and p["source"] == "1:2"
+    assert "converge" in page.locator(".pass h3").first.inner_text()
+    assert "sitting down" in page.locator(".card .idea").first.inner_text()
+    page.wait_for_function("document.querySelector('.stage-btn[data-stage=converge]').textContent === 'Converge ×4'")
+    # the stage menu moves the character; polish then needs the fix in the text field
+    page.locator("#stage-select").select_option("polish")
+    page.wait_for_function("document.querySelector('.stage-btn.current').dataset.stage === 'polish'")
+    assert characters.load("tulu")["state"]["stage"] == "polish"
+    page.get_by_role("button", name="Polish ×2").click()
+    page.wait_for_selector(".toast.show")
+    assert "type the one thing to fix" in page.locator("#toast").inner_text()
+    assert jobs.get()["stage"] == "converge"  # nothing new started
+    page.locator("#stage-text").fill("remove the bump on the elbow")
+    page.keyboard.press("Enter")  # runs the current stage
+    page.wait_for_function("document.querySelectorAll('.pass').length === 3", timeout=20000)
+    p = projects.load("tulu")["passes"][-1]
+    assert p["stage"] == "polish" and p["text"] == "remove the bump on the elbow"
+    assert not errors, errors
+
+
+def test_make_ref_button(staged):
+    import characters
+    page, errors, _ = staged
+    page.on("dialog", lambda d: d.accept())
+    page.locator(".card", has_text="1:1").get_by_role("button", name="ref").click()
+    page.wait_for_selector(".toast.show")
+    assert "1:1 is now tulu's main ref (v2)" in page.locator("#toast").inner_text()
+    assert characters.load("tulu")["versions"][-1]["note"] == "main ref from tulu 1:1"
+    assert not errors, errors
+
+
+def test_static_stage_buttons_copy_commands(browser, out_dir, comfy, make_image):  # noqa: F811
+    import characters
+    import stages
+    characters.new("tulu", description="chibi green cthulhu", refs={"main": str(make_image("ref.png"))})
+    projects.new("tulu", cast={"tulu": None})
+    stages.run_stage("tulu", "explore", count=2, seed=1)
+    page = browser.new_page(viewport={"width": 1280, "height": 800})
+    page.goto(boards.page_file("tulu").as_uri())
+    page.evaluate("() => { window.__copied = []; navigator.clipboard.writeText = (t) => { window.__copied.push(t); return Promise.resolve(); }; }")
+    assert page.locator("#stage-select").is_disabled()
+    page.locator(".card img").first.click()
+    page.get_by_role("button", name="Converge ×4").click()
+    page.locator("#stage-text").fill("it's waving")
+    page.get_by_role("button", name="Polish ×2").click()
+    page.locator(".card", has_text="1:2").get_by_role("button", name="ref").click()
+    copied = page.evaluate("window.__copied")
+    assert copied[0] == "gen project gen tulu --stage converge --from 1:1"
+    assert copied[1] == "gen project gen tulu --stage polish --from 1:1 --text 'it'\\''s waving'"
+    assert copied[2].startswith("gen char set tulu --ref main='") and copied[2].endswith("--note 'ref from tulu 1:2'")
+    page.close()

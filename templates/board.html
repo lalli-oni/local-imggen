@@ -13,6 +13,10 @@
   project or board changes (polling /api/projects/SLUG/stamp).
   Clicking an image selects its card; double-click, o or Enter opens it full size in a new tab.
   Keys: arrows (up/down by row) or j/k move, 1 pick, 2 maybe, 3 reject, 0 clear, n note, o open, Esc deselect, h history.
+  Character stages (#68): a project that casts a character gets a stage row: the character's stage
+  (a select; served, it moves the character to another stage) and one Generate button per stage
+  (explore = text, converge = edits of the selected image or the character's ref, polish = edits with
+  the fix typed in the text field). Unserved, those buttons copy the `gen project gen --stage` command.
   Passes are grouped by the project version they were made from, newest first. The History button (h)
   lists every version, including the ones without a pass.
 -->
@@ -95,6 +99,15 @@ dialog.history::backdrop { background: rgba(0, 0, 0, .6); }
 .card:focus { outline: none; }
 .card:focus-visible, .card:focus-within { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent); }
 .live-status { color: var(--muted); font-size: 12px; }
+.stagebar { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.stagebar select, .stagebar input { font: inherit; color: inherit; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; }
+.stagebar input { flex: 1 1 220px; min-width: 0; }
+.stagebar button.current { background: #23304d; border-color: var(--accent); }
+.stagebar .src { color: var(--muted); font-size: 12px; }
+.stagebar .src button { padding: 0 5px; font-size: 11px; margin-left: 2px; }
+.stage-tag { color: var(--accent); }
+.card figcaption .idea { flex-basis: 100%; font-size: 11px; overflow-wrap: anywhere; }
 .live-status.off { color: var(--reject); }
 dialog.note { width: min(520px, calc(100% - 32px)); padding: var(--pad); background: var(--panel); color: var(--text);
   border: 1px solid var(--line); border-radius: 10px; }
@@ -132,6 +145,12 @@ dialog.note .row { display: flex; flex-wrap: wrap; justify-content: space-betwee
   <span class="keys" title="Click an image to select it. Arrows (up/down by row) or j/k move, 1 pick, 2 maybe, 3 reject, 0 clear, n note, o or double-click opens full size, Esc deselects, h history">keys: ←↑↓→ 1 2 3 0 n o</span>
   <span class="live-status" id="live-status"></span>
   <button id="history-open" title="Every project version, including the ones without a pass (h)">History</button>
+  <div class="stagebar" id="stagebar" hidden>
+    <label>stage <select id="stage-select" aria-label="the character's stage"></select></label>
+    <span id="stage-gen"></span>
+    <span class="src" id="stage-src"></span>
+    <input id="stage-text" type="text" aria-label="instruction for converge or polish">
+  </div>
 </div>
 
 <main id="main"></main>
@@ -213,6 +232,17 @@ async function rate(c, r) {
     toast(`${label}: ${rating === "clear" ? "unrated" : rating}`);
   } catch (e) { toast(`could not rate ${label}: ${e.message}`, 5000); }
 }
+async function makeRef(c) {
+  const ch = B.stage.character;
+  const { target, label, path } = c.dataset;
+  if (!LIVE) return copy(`gen char set ${ch} --ref ${B.stage.ref || "main"}=${shq(path)} --note ${shq(`ref from ${B.slug} ${label}`)}`, "ref command copied");
+  if (!confirm(`Make ${label} ${ch}'s ref? That makes a new ${ch} version, and the assets that show ${ch} go stale.`)) return;
+  try {
+    const j = await api("ref", { image: target });
+    update(j);
+    toast(`${label} is now ${ch}'s ${j.result.ref} ref (v${j.result.version})`, 4000);
+  } catch (e) { toast(`could not make it the ref: ${e.message}`, 6000); }
+}
 let noteFor = null;  // the card the note dialog is for (null = the board)
 function openNote(c) {
   noteFor = c;
@@ -251,10 +281,22 @@ const img = (src, props) => {
   if (old) { oldImgs.delete(src); return old; }
   return el("img", { src, loading: "lazy", decoding: "async", ...props });
 };
-function card(im) {
+function ideas(images) {
+  /* a converge pass gives each image its own instruction from one template: show only the part that differs */
+  const ps = images.map((im) => im.prompt || "");
+  if (new Set(ps).size < 2) return ps;
+  let a = 0, z = 0;
+  const min = Math.min(...ps.map((p) => p.length));
+  while (a < min && ps.every((p) => p[a] === ps[0][a])) a++;
+  while (z < min - a && ps.every((p) => p[p.length - 1 - z] === ps[0][ps[0].length - 1 - z])) z++;
+  a = ps[0].lastIndexOf(" ", a) + 1;  // whole words
+  const cut = (p) => { const e = p.length - z; const sp = p.indexOf(" ", e); return p.slice(a, sp < 0 ? p.length : sp).replace(/[\s,.;:]+$/, ""); };
+  return ps.map(cut);
+}
+function card(im, idea) {
   const label = im.id || im.path.split("/").pop();
   const fig = el("figure", { className: "card" + (im.rating ? " " + im.rating : ""), tabIndex: 0 });
-  Object.assign(fig.dataset, { target: im.id || im.path, label, rating: im.rating || "unrated", key: im.id || im.path });
+  Object.assign(fig.dataset, { target: im.id || im.path, label, rating: im.rating || "unrated", key: im.id || im.path, path: im.path });
   const acts = el("span", { className: "acts" });
   ["pick", "maybe", "reject"].forEach((r, i) => {
     const b = el("button", { textContent: r, title: LIVE ? `${r} (${i + 1})` : `copy: gen project rate ... ${r} (${i + 1})` });
@@ -265,12 +307,20 @@ function card(im) {
   const nb = el("button", { textContent: "note", title: LIVE ? "note (n)" : "copy: gen project note ... (n)" });
   nb.addEventListener("click", () => openNote(fig));
   acts.append(nb);
+  if (B.stage) {  // #68: promote the best of a pass to the character's ref
+    const ch = B.stage.character;
+    const rb = el("button", { textContent: "ref", className: "make-ref",
+      title: LIVE ? `make this ${ch}'s ref (a new character version; assets that show ${ch} go stale)` : `copy: gen char set ${ch} --ref ...` });
+    rb.addEventListener("click", () => makeRef(fig));
+    acts.append(rb);
+  }
   fig.append(...[
     img(im.src, { alt: label, title: "click selects · double-click or o opens full size" }),
     el("figcaption", {}, el("span", { className: "id", textContent: label }),
       el("a", { href: im.src, target: "_blank", className: "open", tabIndex: -1, title: "open full size (o)", textContent: "↗" }),
       im.seed != null ? `seed ${im.seed}` : null,
-      im.rating ? el("span", { className: "badge " + im.rating, textContent: im.rating }) : null, acts),
+      im.rating ? el("span", { className: "badge " + im.rating, textContent: im.rating }) : null, acts,
+      im.prompt ? el("span", { className: "idea", textContent: idea || im.prompt, title: im.prompt }) : null),
     noteList(im.notes)].filter(Boolean));
   fig.addEventListener("dblclick", (e) => { if (e.target.tagName === "IMG") openFull(fig); });
   cards.push(fig);
@@ -320,18 +370,22 @@ function renderPasses() {
       const bits = [`${p.images.length} image(s)`, p.author, when(p.at)];
       if (p.extra) bits.push(`extra: ${p.extra}`);
       if (p.ref) bits.push(`from ref ${p.ref}`);
-      const h = el("h3", {}, el("b", { textContent: `Pass ${p.n}` }), " · " + bits.join(" · ") + " · ",
+      if (p.source) bits.push(`from ${p.source}`);
+      if (p.text && p.stage !== "explore") bits.push(`“${p.text}”`);
+      const h = el("h3", {}, el("b", { textContent: `Pass ${p.n}` }),
+        p.stage ? el("span", { className: "stage-tag", textContent: ` · ${p.stage}` }) : null,
+        " · " + bits.join(" · ") + " · ",
         el("a", { href: p.sheet, target: "_blank", textContent: "contact sheet" }));
       const pass = el("div", { className: "pass" }, h);
       if (p.missing) pass.append(el("p", { className: "muted", textContent: "run folder is gone" }));
-      else pass.append(el("div", { className: "grid" }, ...p.images.map(card)));
+      else { const short = ideas(p.images); pass.append(el("div", { className: "grid" }, ...p.images.map((im, i) => card(im, short[i])))); }
       sec.append(pass);
     }
     out.push(sec);
   }
   if (B.others.length) {
     out.push(el("section", { className: "version" }, el("h2", { textContent: "Other rated images" }),
-      el("div", { className: "grid", style: "margin-top:8px" }, ...B.others.map(card))));
+      el("div", { className: "grid", style: "margin-top:8px" }, ...B.others.map((im) => card(im)))));
   }
   if (!B.passes.length && !B.others.length) {
     out.push(el("p", { className: "empty", textContent: LIVE ? "No passes yet: press Generate 4 more." : `No passes yet. Run one with: gen project gen ${B.slug}` }));
@@ -353,6 +407,7 @@ function render() {
   renderPasses();
   oldImgs = new Map();
   renderHistory();
+  renderStage();
   const c = B.counts;  // the same numbers gen project status and project_get report
   $("counts").textContent = `${c.pick} pick · ${c.maybe} maybe · ${c.reject} reject · ${c.unrated} unrated`;
   apply();
@@ -362,6 +417,75 @@ function render() {
     if (next) next.focus({ preventScroll: true });
   }
 }
+
+/* ---------- character stages (#68) ---------- */
+const STAGE_NAMES = ["explore", "converge", "polish"];
+let source = null;  // the last selected card ("P:N"): what converge/polish edit; null = the character's ref
+document.addEventListener("focusin", (e) => {
+  const c = e.target.closest && e.target.closest(".card");
+  if (c && c.dataset.target && /^\d+:\d+$/.test(c.dataset.target)) { source = c.dataset.target; renderSource(); }
+});
+function renderSource() {
+  const S = B.stage;
+  if (!S) return;
+  const span = $("stage-src");
+  if (source) {
+    const x = el("button", { textContent: "×", title: "use the character's ref instead" });
+    x.addEventListener("click", () => { source = null; renderSource(); });
+    span.replaceChildren(`converge/polish edit ${source} (selected)`, x);
+  } else span.replaceChildren(`converge/polish edit ${S.character}'s ref (select an image to use it instead)`);
+}
+function stageCmd(stage, text) {
+  return `gen project gen ${B.slug} --stage ${stage}` + (stage !== "explore" && source ? ` --from ${source}` : "")
+    + (text ? ` --text ${shq(text)}` : "");
+}
+async function genStage(stage) {
+  const S = B.stage.stages[stage];
+  const text = $("stage-text").value.trim();
+  if (S.needs_text && !text) {
+    $("stage-text").focus();
+    return toast(`${stage}: type the one thing to fix first`, 4000);
+  }
+  if (!LIVE) return copy(stageCmd(stage, text), `${stage} command copied`);
+  try {
+    update(await api("gen", { stage, text, ...(S.needs_source && source ? { source } : {}) }));
+    toast(`generating ${S.count} (${stage})`);
+  } catch (e) { toast(`could not start: ${e.message}`, 6000); }
+}
+function renderStage() {
+  const S = B.stage;
+  $("stagebar").hidden = !S;
+  $("gen-more").hidden = !LIVE || !!S;  // a character project generates through its stage buttons
+  if (!S) return;
+  if (source && !cards.some((c) => c.dataset.target === source)) source = null;  // its pass is gone
+  const sel = $("stage-select");
+  sel.replaceChildren(...STAGE_NAMES.map((n) => el("option", { value: n, textContent: n, selected: n === S.stage })));
+  sel.title = `${S.character}'s stage` + (LIVE ? " (changing it makes a character version; nothing goes stale)" : ` (set it with: gen char set ${S.character} --stage ...)`);
+  sel.disabled = !LIVE;
+  if (S.error || !S.stages) {
+    $("stage-gen").replaceChildren(el("span", { className: "stale", textContent: S.error || "no stage settings" }));
+  } else {
+    $("stage-gen").replaceChildren(...STAGE_NAMES.map((n) => {
+      const st = S.stages[n];
+      const b = el("button", { className: "stage-btn" + (n === S.stage ? " current" : ""), textContent: `${n[0].toUpperCase()}${n.slice(1)} ×${st.count}` });
+      b.dataset.stage = n;
+      b.title = `${st.mode === "text" ? "text only" : st.mode === "edit" ? "edit the image" : "img2img"} · ${st.preset}`
+        + (st.needs_text ? " · needs the fix typed in the field" : "") + (LIVE ? "" : " (copies the command)");
+      b.addEventListener("click", () => genStage(n));
+      return b;
+    }));
+  }
+  $("stage-text").placeholder = S.stage === "polish" ? "the one thing to fix (polish needs it)" : "converge: one idea for all (optional) · polish: the fix";
+  renderSource();
+  setJob(job);
+}
+$("stage-select").addEventListener("change", async (e) => {
+  try { update(await api("stage", { stage: e.target.value })); toast(`${B.stage.character}: ${e.target.value}`); }
+  catch (err) { toast(`could not change the stage: ${err.message}`, 5000); e.target.value = B.stage.stage; }
+});
+$("stage-text").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.isComposing && B.stage) { e.preventDefault(); genStage(B.stage.stage); }
+});
 
 /* ---------- history popup ---------- */
 $("history-open").addEventListener("click", () => $("history").showModal());
@@ -458,15 +582,25 @@ function setJob(jb) {
   const btn = $("gen-more");
   const running = jb && jb.state === "running";
   btn.disabled = !!running;
-  btn.textContent = running
-    ? (jb.slug === B.slug ? `Generating ${jb.count}… ${Math.round(Date.now() / 1000 - jb.started)}s` : `GPU busy (${jb.slug})`)
-    : "Generate 4 more";
+  const busy = running
+    ? (jb.slug === B.slug ? `Generating ${jb.count}${jb.stage ? ` (${jb.stage})` : ""}… ${Math.round(Date.now() / 1000 - jb.started)}s` : `GPU busy (${jb.slug})`)
+    : "";
+  btn.textContent = busy || "Generate 4 more";
+  for (const b of document.querySelectorAll(".stage-btn")) {
+    b.disabled = !!running || !online;
+    const st = B.stage && B.stage.stages && B.stage.stages[b.dataset.stage];
+    b.textContent = running && jb.stage === b.dataset.stage && jb.slug === B.slug ? busy
+      : `${b.dataset.stage[0].toUpperCase()}${b.dataset.stage.slice(1)} ×${st ? st.count : "?"}`;
+  }
   if (jb && jb.state === "failed" && jb.slug === B.slug && !shownFail.has(jb.id) && jb.finished > loadedAt) {
     shownFail.add(jb.id);
     toast(`generate failed: ${jb.error}`, 8000);
   }
 }
+let online = true;
 function setOnline(ok) {
+  online = ok;
+  if (LIVE) for (const b of document.querySelectorAll(".stage-btn")) b.disabled = !ok || !!(job && job.state === "running");
   const s = $("live-status");
   s.classList.toggle("off", !ok);
   s.textContent = ok ? "live" : "server stopped: run gen board serve";
@@ -482,7 +616,6 @@ async function poll() {
   } catch { setOnline(false); }
 }
 if (LIVE) {
-  $("gen-more").hidden = false;
   $("gen-more").addEventListener("click", async () => {
     try { update(await api("gen", { count: 4 })); toast("generating 4 more"); }
     catch (e) { toast(`could not start: ${e.message}`, 6000); }
