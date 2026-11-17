@@ -419,7 +419,6 @@ function render() {
 }
 
 /* ---------- character stages (#68) ---------- */
-const STAGE_NAMES = ["explore", "converge", "polish"];
 let source = null;  // the last selected card ("P:N"): what converge/polish edit; null = the character's ref
 document.addEventListener("focusin", (e) => {
   const c = e.target.closest && e.target.closest(".card");
@@ -435,13 +434,14 @@ function renderSource() {
     span.replaceChildren(`converge/polish edit ${source} (selected)`, x);
   } else span.replaceChildren(`converge/polish edit ${S.character}'s ref (select an image to use it instead)`);
 }
+const stageNames = () => Object.keys((B.stage && B.stage.stages) || {});
 function stageCmd(stage, text) {
   return `gen project gen ${B.slug} --stage ${stage}` + (stage !== "explore" && source ? ` --from ${source}` : "")
     + (text ? ` --text ${shq(text)}` : "");
 }
 async function genStage(stage) {
   const S = B.stage.stages[stage];
-  const text = $("stage-text").value.trim();
+  const text = S.mode === "text" ? "" : $("stage-text").value.trim();  // the field is for converge/polish
   if (S.needs_text && !text) {
     $("stage-text").focus();
     return toast(`${stage}: type the one thing to fix first`, 4000);
@@ -459,13 +459,13 @@ function renderStage() {
   if (!S) return;
   if (source && !cards.some((c) => c.dataset.target === source)) source = null;  // its pass is gone
   const sel = $("stage-select");
-  sel.replaceChildren(...STAGE_NAMES.map((n) => el("option", { value: n, textContent: n, selected: n === S.stage })));
+  sel.replaceChildren(...["explore", "converge", "polish"].map((n) => el("option", { value: n, textContent: n, selected: n === S.stage })));
   sel.title = `${S.character}'s stage` + (LIVE ? " (changing it makes a character version; nothing goes stale)" : ` (set it with: gen char set ${S.character} --stage ...)`);
   sel.disabled = !LIVE;
   if (S.error || !S.stages) {
     $("stage-gen").replaceChildren(el("span", { className: "stale", textContent: S.error || "no stage settings" }));
   } else {
-    $("stage-gen").replaceChildren(...STAGE_NAMES.map((n) => {
+    $("stage-gen").replaceChildren(...stageNames().map((n) => {
       const st = S.stages[n];
       const b = el("button", { className: "stage-btn" + (n === S.stage ? " current" : ""), textContent: `${n[0].toUpperCase()}${n.slice(1)} ×${st.count}` });
       b.dataset.stage = n;

@@ -307,12 +307,13 @@ class Handler(BaseHTTPRequestHandler):
 
 
     def _gen_stage(self, slug: str, body: dict) -> None:
-        """POST gen with a stage: a pass the way that stage generates (stages.run_stage)."""
+        """POST gen with a stage: a pass the way that stage generates (stages.run_stage). Its checks run here
+        too, so a bad request gets a 400 now instead of a failed job a moment later."""
         stage = body.get("stage")
         if stage not in stages.STAGES:
             raise ValueError(f"stage: one of {', '.join(stages.STAGES)}")
         s = stages.settings(stage)
-        count = body.get("count", int(s["count"]))
+        count = body.get("count", min(int(s["count"]), GEN_MAX))
         if not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= GEN_MAX:
             raise ValueError(f"count: a whole number from 1 to {GEN_MAX}")
         source, text = body.get("source"), body.get("text")

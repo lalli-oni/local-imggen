@@ -286,13 +286,16 @@ def project_generate(slug: str, count: int | None = None, extra: str | None = No
         import stages
         if extra or ref or strength is not None or chars is not None:
             raise ValueError("a stage pass takes source, text, count and seed (the stage settings decide the rest)")
-        kwargs = dict(slug=slug, stage=None if stage == "current" else stage,
-                      count=None if count is None else min(max(1, count), MAX_COUNT),
+        name = None if stage == "current" else stage
+        if count is None:  # the stage's count, within the same limit as any other pass
+            cur = stages.of_project(projects.load(slug)["state"])
+            count = int(stages.settings(name or (cur or {}).get("stage") or "explore")["count"])
+        kwargs = dict(slug=slug, stage=name, count=min(max(1, count), MAX_COUNT),
                       source=source, text=text, seed=seed, author="claude")
         return _start(stages.run_stage, kwargs, preview)
     if source or text:
         raise ValueError("source and text need a stage")
-    kwargs = dict(slug=slug, count=min(max(1, count or 4), MAX_COUNT), extra=extra, seed=seed, ref=ref,
+    kwargs = dict(slug=slug, count=min(max(1, 4 if count is None else count), MAX_COUNT), extra=extra, seed=seed, ref=ref,
                   strength=strength, author="claude", chars=chars)
     return _start(projects.run_pass, kwargs, preview)
 

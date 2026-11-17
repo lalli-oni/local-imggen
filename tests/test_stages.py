@@ -262,3 +262,36 @@ def test_job_shows_the_stage():
     assert j["stage"] == "polish"
     jobs.thread.join(5)
     assert "stage" not in jobs.start("tulu", 2, run=lambda s, n: {})
+
+
+# ---------------------------------------------------------------- review fixes
+
+def test_source_checks_and_the_latest_ref(tulu, comfy, make_image, tmp_path):
+    secret = tmp_path / "id_rsa"
+    secret.write_text("not an image")
+    with pytest.raises(ValueError, match="id_rsa: not an image"):
+        stages.run_stage("tulu", "converge", count=1, source=str(secret))
+    # a project that pins tulu still edits tulu's newest ref (what the board's ref button set)
+    projects.set_state("tulu", cast={"tulu": 1})
+    characters.set_state("tulu", refs={"main": str(make_image("new.png", color=(1, 2, 3)))})
+    stages.run_stage("tulu", "converge", count=1)
+    run = json.loads((Path(_pass("tulu")["run_dir"]) / "run.json").read_text())
+    assert run["source_image"].endswith("main-v2.png")
+
+
+def test_ideas_offset_and_run_prompt(tulu, comfy):
+    ideas = stages.DEFAULTS["converge"]["ideas"]
+    run = stages.run_stage("tulu", "converge", count=2)
+    assert "[one idea per image]" in run["prompt"]  # run.json and the contact sheet: the template
+    stages.run_stage("tulu", "converge", count=3, text="dancing")  # a typed idea takes nothing from the list
+    stages.run_stage("tulu", "converge", count=1)
+    assert ideas[2] in _texts(comfy.workflows()[-1])
+    assert [p.get("ideas") for p in projects.load("tulu")["passes"]] == [2, None, 1]
+
+
+def test_counts(tulu, comfy):
+    assert len(stages.run_stage("tulu", "explore", count=0)["images"]) == 1
+    out = mcp_server.project_generate("tulu", stage="explore", preview=False)[0]
+    assert len(out["images"]) == min(8, mcp_server.MAX_COUNT)
+    out = mcp_server.project_generate("tulu", count=0, preview=False)[0]
+    assert len(out["images"]) == 1

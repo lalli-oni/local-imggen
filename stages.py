@@ -14,7 +14,6 @@ ref is still `gen char set NAME --ref main=PATH` (a new character version).
 """
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import imagegen
@@ -35,14 +34,13 @@ DEFAULTS = {
                "instruction": "{text}. Keep everything else exactly the same: the same character, pose, "
                               "colours and background."},
 }
-_PASS_ID = re.compile(r"^\s*\d+\s*:\s*\d+\s*$")
 
 
-def settings(stage: str) -> dict:
-    """One stage's settings: config.toml [stages.STAGE] over DEFAULTS."""
+def settings(stage: str, conf: dict | None = None) -> dict:
+    """One stage's settings: config.toml [stages.STAGE] over DEFAULTS (conf: a loaded config)."""
     if stage not in STAGES:
         raise ValueError(f"unknown stage '{stage}' (stages: {', '.join(STAGES)})")
-    conf = imagegen.load_config().get("stages", {}).get(stage, {})
+    conf = (conf if conf is not None else imagegen.load_config()).get("stages", {}).get(stage, {})
     s = {**DEFAULTS[stage], **conf}
     if s["mode"] not in MODES:
         raise ValueError(f"[stages.{stage}] mode = '{s['mode']}': use one of {', '.join(MODES)}")
@@ -51,9 +49,9 @@ def settings(stage: str) -> dict:
 
 def all_settings() -> dict:
     """{stage: what its generate does}, for the board's buttons and project_get."""
-    out = {}
+    out, conf = {}, imagegen.load_config()
     for st in STAGES:
-        s = settings(st)
+        s = settings(st, conf)
         out[st] = {"mode": s["mode"], "preset": s["preset"], "count": int(s["count"]),
                    "needs_text": bool(s.get("needs_text")), "needs_source": s["mode"] != "text"}
     return out
@@ -83,26 +81,28 @@ def first_ref(name: str) -> str | None:
 
 
 def _source(slug: str, proj: dict, source: str | None, char: str | None) -> tuple[Path, str]:
-    """(image path, how the pass records it) for P:N, an image path, CHAR:REF, or None (the character's
-    first ref, at the version the project uses)."""
+    """(image path, how the pass records it) for P:N, an image path, CHARACTER:REF, or None: the character's
+    first ref at its latest version (what the board's ref button just set, even in a project that pins it)."""
     import boards
     import characters
     st = proj["state"]
     if source is None or not source.strip():
         if char is None:
             raise ValueError("this stage edits an image: pick one on the board (or pass --from P:N or a path)")
-        used = projects.cast_versions(st)
-        refs = characters.state_at(characters.load(char), used[char])["refs"]
-        if not refs:
+        ch = characters.load(char)
+        ref = next(iter(ch["state"]["refs"]), None)
+        if ref is None:
             raise ValueError(f"character '{char}' has no ref yet: pick an image on the board "
                              f"(or gen char set {char} --ref main=PATH)")
-        source = f"{char}:{next(iter(refs))}"
+        return characters.char_dir(char) / ch["state"]["refs"][ref]["file"], f"{char}:{ref}"
     source = source.strip()
-    if _PASS_ID.match(source):
+    if boards._PASS_ID.match(source):
         key, pid = boards.resolve(proj, source)
         return boards._abs(key), pid
     path = imagegen.to_linux_path(source)
     if path.is_file():
+        if path.suffix.lower() not in projects.IMAGE_EXTS:
+            raise ValueError(f"{path.name}: not an image ({', '.join(sorted(projects.IMAGE_EXTS))})")
         return path, str(path)
     name, sep, _ = source.partition(":")
     if sep and name in st.get("cast", {}):
@@ -111,8 +111,8 @@ def _source(slug: str, proj: dict, source: str | None, char: str | None) -> tupl
 
 
 def _offset(proj: dict, stage: str) -> int:
-    """How many images earlier passes of this stage drew from the idea list, so "generate more" moves on."""
-    return sum(p.get("count", 0) for p in proj["passes"] if p.get("stage") == stage and not p.get("text"))
+    """How many ideas earlier passes of this stage took from the list, so "generate more" moves on."""
+    return sum(p.get("ideas", 0) for p in proj["passes"] if p.get("stage") == stage)
 
 
 def run_stage(slug: str, stage: str | None = None, count: int | None = None, source: str | None = None,
@@ -120,7 +120,7 @@ def run_stage(slug: str, stage: str | None = None, count: int | None = None, sou
     """A pass the way a stage generates (stage None = the project's current stage).
 
     source: the image converge/polish start from (P:N, a path, or CHARACTER:REF; default the character's
-    first ref). text: explore = extra prompt text; converge = one idea for every image (instead of the
+    first ref). text: explore = extra prompt text (CLI/MCP; the board leaves it out); converge = one idea for every image (instead of the
     idea list); polish = the fix (required)."""
     import characters
     proj = projects.load(slug)
@@ -131,7 +131,7 @@ def run_stage(slug: str, stage: str | None = None, count: int | None = None, sou
         raise ValueError(f"project '{slug}' casts no character, so it has no stage: "
                          f"gen project set {slug} --cast NAME (or pass --stage)")
     s = settings(stage)
-    count = int(count or s["count"])
+    count = max(1, int(s["count"] if count is None else count))
     text = (text or "").strip() or None
     if s.get("needs_text") and not text:
         raise ValueError(f"{stage} needs an instruction: the one thing to fix")
@@ -170,7 +170,10 @@ def run_stage(slug: str, stage: str | None = None, count: int | None = None, sou
                     raise ValueError(f"{stage} needs an instruction ([stages.{stage}] has no ideas list)")
                 off = _offset(proj, stage)
                 prompts = [tmpl.replace("{text}", ideas[(off + i) % len(ideas)]) for i in range(count)]
-            kwargs.update(prompt=prompts[0], prompts=prompts, edit=True)
+                record["ideas"] = count
+            # the run's own prompt (run.json, contact sheet): the template, when each image has its own idea
+            kwargs.update(prompt=prompts[0] if text else tmpl.replace("{text}", "[one idea per image]"),
+                          prompts=prompts, edit=True)
     run = imagegen.generate(**kwargs)
     return projects.record_pass(slug, run, proj["version"], used, author, extra=extra,
                                 **{k: v for k, v in record.items() if v is not None})

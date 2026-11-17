@@ -89,8 +89,7 @@ def _apply(ch: dict, description: str | None = None, palette: list[str] | None =
     if stage is not None:
         if stage not in stages.STAGES:
             raise ValueError(f"unknown stage '{stage}' (stages: {', '.join(stages.STAGES)})")
-        if stages.character_stage(ch) != stage or "stage" not in st:
-            st["stage"] = stage
+        st["stage"] = stage  # a character from before #68 gets the key even for "explore" (a real change)
     if description is not None:
         st["description"] = description.strip()
     if palette is not None:
@@ -297,7 +296,8 @@ def main(argv: list[str]) -> int:
         ap.add_argument("--desc", dest="description")
         ap.add_argument("--palette", help="comma-separated hex colours, replaces the palette")
         ap.add_argument("--ref", action="append", metavar="NAME=PATH", help="NAME= removes it (repeatable)")
-        ap.add_argument("--stage", choices=["explore", "converge", "polish"],
+        import stages
+        ap.add_argument("--stage", choices=stages.STAGES,
                         help="explore / converge / polish (#68; default for a new character: explore)")
         ap.add_argument("--author", default="human")
         if cmd == "new":

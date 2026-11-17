@@ -917,7 +917,8 @@ def main(argv: list[str]) -> int:
         ap.add_argument("--seed", type=int)
         ap.add_argument("--author", default="human")
         ap.add_argument("--open", action="store_true", help="open contact sheet in Windows browser")
-        ap.add_argument("--stage", nargs="?", const="", choices=["", "explore", "converge", "polish"],
+        import stages
+        ap.add_argument("--stage", nargs="?", const="", choices=["", *stages.STAGES],
                         help="generate the way this stage does ([stages.*] in config.toml); "
                              "--stage alone = the character's current stage")
         ap.add_argument("--from", dest="source", help="with --stage: the image to edit (P:N, a path or CHAR:REF)")
@@ -927,7 +928,6 @@ def main(argv: list[str]) -> int:
         if a.stage is not None:
             if a.extra or a.ref or a.chars or a.no_chars or a.strength is not None:
                 ap.error("--stage takes --from, --text, -n and --seed (the stage's settings decide the rest)")
-            import stages
             run = stages.run_stage(a.slug, a.stage or None, a.count,
                                    a.source, a.text, a.seed, a.author)
             imagegen._print_run(run, a.open)
@@ -939,7 +939,7 @@ def main(argv: list[str]) -> int:
         if a.no_chars and a.chars:
             ap.error("--char and --no-chars together")
         chars = [] if a.no_chars else _csv(a.chars)
-        run = run_pass(a.slug, a.count or 4, a.extra, a.seed, a.ref, a.strength, a.author, chars)
+        run = run_pass(a.slug, 4 if a.count is None else a.count, a.extra, a.seed, a.ref, a.strength, a.author, chars)
         imagegen._print_run(run, a.open)
         return 0
     if cmd == "promote":

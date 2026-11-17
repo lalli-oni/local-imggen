@@ -28,7 +28,7 @@ Converge and polish edit the **selected image** on the board (click it), else th
    `gen board serve tulu --open`
 2. Pick the stage in the board's **stage** menu, or `gen char set tulu --stage explore`.
 3. Press the stage's button (the current stage's button is highlighted). The text field:
-   - explore: extra prompt text for this pass (optional)
+   - explore: not used (for extra prompt text, use `gen project gen tulu --stage explore --text "..."`)
    - converge: one idea for all images (optional; empty = the next ideas from the list)
    - polish: the fix (required)
 4. Rate with 1 / 2 / 3, note with n. Notes on parts ("keep these wings") steer the next prompt.
