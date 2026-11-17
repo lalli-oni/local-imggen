@@ -294,3 +294,44 @@ def test_forgotten_job_is_not_a_finished_image():
     pr.forget("a")  # came out black: rendered again as "b"
     play(pr, "b", 6.0, "3")
     assert pr._finished() == 0 and "image 1/1" in text(pr, 7.0) and "saving" not in text(pr, 7.0)
+
+
+CAST_WF = {"1": {"class_type": "UNETLoader", "inputs": {}},
+           "6": {"class_type": "TextEncodeQwenImage21", "inputs": {}},
+           "7": {"class_type": "KSampler", "inputs": {"steps": 20}},
+           "8": {"class_type": "VAEDecode", "inputs": {}},
+           "12": {"class_type": "TextEncodeQwenImage21", "inputs": {}},
+           "13": {"class_type": "KSampler", "inputs": {"steps": 10}},
+           "14": {"class_type": "VAEDecode", "inputs": {}},
+           "9": {"class_type": "SaveImage", "inputs": {}}}
+
+
+def _cast_progress():
+    import io
+    pr = progress.Progress(CAST_WF, 1, imagegen.stage_of, imagegen.STAGE_ORDER, "http://127.0.0.1:9", None,
+                           stream=io.StringIO(), color=False)
+    pr.t0 = 0.0
+    return pr
+
+
+def test_eta_counts_the_second_sampler_of_a_cast_graph():
+    """#52: scene + cast in one job: while the scene sampler runs, the cast sampler's steps are still to come."""
+    pr = _cast_progress()
+    t = play(pr, "a", 0.0, "1", "6", "7")
+    pr.on_event("a", "progress", {"value": 1, "max": 20}, t)
+    pr.on_event("a", "progress", {"value": 11, "max": 20}, t + 10)  # 1 s/step
+    assert pr.eta(t + 10) == pytest.approx(9 + 10)  # 9 scene steps + the cast sampler's 10
+
+
+def test_bar_moves_without_an_eta():
+    """No history yet (a new preset): the bar follows nodes and sampler steps instead of sitting at 0%."""
+    pr = _cast_progress()
+    play(pr, "a", 0.0, "1", "6")
+    assert pr.eta(2.0) is None
+    early = pr._job_frac(pr.jobs["a"])
+    assert 0 < early < 0.1  # loaders and the encoder: a few nodes, no steps yet
+    t = play(pr, "a", 2.0, "7")
+    pr.on_event("a", "progress", {"value": 10, "max": 20}, t)
+    mid = pr._job_frac(pr.jobs["a"])
+    assert 0.3 < mid < 0.5
+    assert " 0%" not in text(pr, t)

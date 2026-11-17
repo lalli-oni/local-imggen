@@ -934,6 +934,14 @@ def to_linux_path(p: str) -> Path:
 
 # ---------------------------------------------------------------- main API
 
+def _filled_or(template: dict, params: dict) -> dict:
+    """The workflow as the first job gets it (so the live view knows each sampler's steps), else the template."""
+    try:
+        return fill(template, params)
+    except Exception:
+        return template
+
+
 @contextlib.contextmanager
 def _progress(template: dict, params: dict, preset: str, count: int, comfy: "Comfy", events: "Events",
               run_dir: Path, mode: str):
@@ -949,7 +957,7 @@ def _progress(template: dict, params: dict, preset: str, count: int, comfy: "Com
     if progress.enabled() and events.ok and _LIVE is None:  # without the websocket there is nothing to show
         try:
             est = progress.history_estimate(run_dir.parent.parent, preset, mode, COMFY_STAGES)
-            live = progress.Progress(template, count, stage_of, STAGE_ORDER, comfy.url, est)
+            live = progress.Progress(_filled_or(template, params), count, stage_of, STAGE_ORDER, comfy.url, est)
         except Exception as e:  # the view must never stop a run
             log(f"note: no live progress ({type(e).__name__}: {e})")
     if live is None:
