@@ -1012,12 +1012,15 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
              steps: int | None = None, cfg: float | None = None, label: str | None = None,
              source_image: str | None = None, mask: str | None = None,
              denoise: float | None = None, edit: bool = False, guidance: float | None = None,
-             styles: list[str] | None = None, post: list[str] | None = None) -> dict:
+             styles: list[str] | None = None, post: list[str] | None = None,
+             prompts: list[str] | None = None) -> dict:
     """txt2img by default. With source_image: img2img (denoise = how much may change, 0-1).
     With source_image + mask: inpaint, only the white part of the mask is repainted.
     With source_image + edit=True: the prompt is an edit instruction for the preset's edit_workflow.
     styles: [styles.NAME] looks added after the preset suffix (None = the preset's `styles`, [] = none);
-    a style's `post` steps run after the preset's. post: more steps after those (gen daily: its styles' posts)."""
+    a style's `post` steps run after the preset's. post: more steps after those (gen daily: its styles' posts).
+    prompts: one prompt per image instead (image i gets prompts[i % len]; a converge pass gives each
+    image its own idea, #68); `prompt` stays the run's label prompt."""
     t_start = time.time()
     conf = load_config()
     presets = conf["presets"]
@@ -1079,9 +1082,16 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
     if unused:  # e.g. -g on klein, or a project's cfg after switching it to klein: say so, then go on
         log(f"note: {workflow} has no {', '.join(unused)}, ignoring {'it' if len(unused) == 1 else 'them'}")
     base_seed = seed if seed is not None else random.randrange(MAX_SEED)
-    full_prompt = prompt + p.get("suffix", "")
-    if look := style_text(styles, conf):
-        full_prompt = f"{full_prompt.rstrip().rstrip(',')}, {look}"
+    look = style_text(styles, conf)
+
+    def dress(q: str) -> str:  # the preset suffix, then the styles
+        full = q + p.get("suffix", "")
+        return f"{full.rstrip().rstrip(',')}, {look}" if look else full
+    full_prompt = dress(prompt)
+    per_image = [q for q in (prompts or []) if q and q.strip()]
+    if prompts is not None and not per_image:
+        raise ValueError("prompts: give at least one non-empty prompt")
+    per_image = [per_image[i % len(per_image)] for i in range(count)] if per_image else [prompt] * count
     full_negative = "" if edit else (negative if negative is not None else conf.get("default_negative", "")) \
         + p.get("negative_extra", "")  # edit workflows (Kontext, cfg 1) have no negative
     if not edit and (style_neg := style_text(styles, conf, "negative_extra")):
@@ -1136,7 +1146,7 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
             t_queue = time.time()
             for i in range(count):
                 s = (base_seed + i) % MAX_SEED
-                wf = fill(template, {**params, "seed": s})
+                wf = fill(template, {**params, "seed": s, "prompt": dress(per_image[i])})
                 jobs.append((s, comfy.queue(wf), time.time(), wf))
             log(f"queued {count} x {preset} (seeds {base_seed}..) -> {run_dir}")
 
@@ -1187,7 +1197,8 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
                     # this image's own time: ComfyUI's work (counted on a job's first image only) + fetch + post
                     own = [v for k, v in timing.items() if k not in ("queue_s", "comfy_s") + COMFY_STAGES]
                     timing["total_s"] = round(sum(own) + (jt.get("comfy_s", 0) if j == 0 else 0), 2)
-                    meta = {"prompt": prompt, "full_prompt": full_prompt, "negative": full_negative,
+                    meta = {"prompt": per_image[i - 1], "full_prompt": dress(per_image[i - 1]),
+                            "negative": full_negative,
                             "user_negative": negative,
                             "preset": preset, "styles": styles, "seed": s, "params": {k: v for k, v in params.items()
                                                                     if k not in ("prompt", "negative")},
@@ -1197,7 +1208,8 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
                     path.with_suffix(".json").write_text(json.dumps(meta, indent=2))
                     images.append({"path": str(final), "windows_path": to_windows_path(final), "seed": s,
                                    "seconds": secs if j == 0 else None,  # per job, not per output (gen bakeoff)
-                                   "timing": timing, **flag})
+                                   "timing": timing, **flag,
+                                   **({"prompt": per_image[i - 1]} if prompts else {})})
                 parts = _stage_parts(images[-1]["timing"] if outs else jt)
                 log(f"  [{i}/{count}] seed {s} done in {secs:.1f}s"
                     + (f" ({', '.join(parts)})" if parts else ""))

@@ -236,6 +236,8 @@ def project_get(slug: str, preview: bool = False, history: int = 5) -> list:
     new_since_last_look: what changed since your previous project_get (versions, passes, and the
     ratings/notes on the board). board: rating counts, every rated or noted image (picks first, with
     its pass id "P:N" and project version) and the board notes; board.page is the user's board page.
+    stage (#68): the first cast character's stage and what each stage's generate runs
+    (project_generate stage=...; docs/character-stages.md).
     preview=True adds thumbnails of the refs, current asset versions and up to 8 picks.
     Read docs with project_doc. Use this to summarise a project or to decide the next pass: base the
     next prompt version on what the user picked and rejected, and on their notes."""
@@ -282,17 +284,36 @@ def project_update(slug: str, note: str, prompt: str | None = None, negative: st
 
 
 @mcp.tool()
-def project_generate(slug: str, count: int = 4, extra: str | None = None, seed: int | None = None,
+def project_generate(slug: str, count: int | None = None, extra: str | None = None, seed: int | None = None,
                      ref: str | None = None, strength: float | None = None, preview: bool = True,
-                     chars: list[str] | None = None) -> list:
+                     chars: list[str] | None = None, stage: str | None = None, source: str | None = None,
+                     text: str | None = None) -> list:
     """A pass: generate from the project's current state (cast descriptions + prompt + snippets,
     preset, params). chars: which cast characters to draw (default all, [] = none).
     extra is appended to the prompt for this pass only. ref = img2img from one of the project's refs,
     or "character:ref" for a cast character's ref (strength defaults to the project's strength param,
     else 0.4). The images record the project and character versions.
+    stage ("explore" / "converge" / "polish", or "current" for the character's stage; see
+    docs/character-stages.md): generate the way that stage does instead, with its preset and count
+    (count: default the stage's); source = the image converge/polish edit ("P:N",
+    a path or "character:ref"; default the character's first ref); text = explore: extra prompt,
+    converge: one idea for every image (default: the stage's idea list), polish: the fix (required).
     Same waiting/job_id behaviour as generate."""
     import projects
-    kwargs = dict(slug=slug, count=min(max(1, count), MAX_COUNT), extra=extra, seed=seed, ref=ref,
+    if stage is not None:
+        import stages
+        if extra or ref or strength is not None or chars is not None:
+            raise ValueError("a stage pass takes source, text, count and seed (the stage settings decide the rest)")
+        name = None if stage == "current" else stage
+        if count is None:  # the stage's count, within the same limit as any other pass
+            cur = stages.of_project(projects.load(slug)["state"])
+            count = int(stages.settings(name or (cur or {}).get("stage") or "explore")["count"])
+        kwargs = dict(slug=slug, stage=name, count=min(max(1, count), MAX_COUNT),
+                      source=source, text=text, seed=seed, author="claude")
+        return _start(stages.run_stage, kwargs, preview)
+    if source or text:
+        raise ValueError("source and text need a stage")
+    kwargs = dict(slug=slug, count=min(max(1, 4 if count is None else count), MAX_COUNT), extra=extra, seed=seed, ref=ref,
                   strength=strength, author="claude", chars=chars)
     return _start(projects.run_pass, kwargs, preview)
 
@@ -388,12 +409,13 @@ def character_new(name: str, description: str, title: str | None = None,
 @mcp.tool()
 def character_update(name: str, note: str, description: str | None = None,
                      palette: list[str] | None = None, refs: dict | None = None,
-                     drop_refs: list[str] | None = None) -> dict:
+                     drop_refs: list[str] | None = None, stage: str | None = None) -> dict:
     """Change a character; creates a new character version with your note. Every asset that shows it,
-    in every project that casts it (unless pinned), goes stale. Only on the user's request."""
+    in every project that casts it (unless pinned), goes stale. Only on the user's request.
+    stage: explore / converge / polish (docs/character-stages.md); a stage change alone stales nothing."""
     import characters
     kw = {k: v for k, v in dict(description=description, palette=palette, refs=refs,
-                                drop_refs=drop_refs).items() if v is not None}
+                                drop_refs=drop_refs, stage=stage).items() if v is not None}
     return characters.set_state(name, note, "claude", **kw)
 
 

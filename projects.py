@@ -398,9 +398,18 @@ def run_pass(slug: str, count: int = 4, extra: str | None = None, seed: int | No
         kwargs.update(source_image=str(_ref_path(slug, st, ref)),
                       denoise=strength if strength is not None else p.get("strength"))
     run = imagegen.generate(**kwargs)
+    return record_pass(slug, run, v, used, author, extra=extra, ref=ref)
 
+
+def record_pass(slug: str, run: dict, version: int, used: dict, author: str = "human", **info) -> dict:
+    """Tag a finished generate() run with the project and list it in the passes.
+
+    used: {character: version} the images show. info: what else the pass records (extra, ref, and for a
+    stage pass (stages.py) stage, source and text); None values are left out of the tag."""
+    info = {k: v for k, v in info.items() if v is not None}
     # tagged afterwards rather than inside generate(), so generate() needs no project knowledge
-    tag = {"slug": slug, "version": v, **({"chars": used} if used else {}), **({"ref": ref} if ref else {})}
+    tag = {"slug": slug, "version": version, **({"chars": used} if used else {}),
+           **{k: info[k] for k in ("ref", "stage", "source") if k in info}}
     for im in run["images"]:
         img = Path(im["path"])
         for f in imagegen.sidecar_paths(img):
@@ -417,9 +426,10 @@ def run_pass(slug: str, count: int = 4, extra: str | None = None, seed: int | No
 
     with locked(slug):
         proj = load(slug)  # re-read: other changes may have landed during the run
-        proj["passes"].append({"run_dir": run["run_dir"], "version": v, "at": _now(), "author": author,
-                               "count": len(run["images"]), "extra": extra, "ref": ref,
-                               "base_seed": run["base_seed"], **({"chars": used} if used else {})})
+        proj["passes"].append({"run_dir": run["run_dir"], "version": version, "at": _now(), "author": author,
+                               "count": len(run["images"]), "extra": info.pop("extra", None),
+                               "ref": info.pop("ref", None), "base_seed": run["base_seed"],
+                               **({"chars": used} if used else {}), **info})
         save(proj)
     return run
 
@@ -656,6 +666,8 @@ def summary(slug: str, mark_seen: str | None = None, history: int = 5, board: bo
                   "cast": cast,
                   "docs": {n: {**doc, "path": str(d / doc["file"])} for n, doc in st["docs"].items()}},
         "assets": assets,
+        # #68: the stage of its first cast character, and what each stage's generate runs
+        "stage": _stage_summary(st),
         "recent_versions": [{k: v[k] for k in ("version", "at", "author", "note", "changed")}
                             for v in proj["versions"][-history:]],
         "recent_passes": [{"n": i, **p} for i, p in enumerate(proj["passes"], 1)][-history:],
@@ -683,6 +695,17 @@ def summary(slug: str, mark_seen: str | None = None, history: int = 5, board: bo
                 # ratings and notes since then; seen.json from before boards has no "board" count
                 "board": log[seen.get("board", 0):]}
     return out
+
+
+def _stage_summary(st: dict) -> dict | None:
+    import stages
+    cur = stages.of_project(st)
+    if cur is None:
+        return None
+    try:
+        return {**cur, "ref": stages.first_ref(cur["character"]), "stages": stages.all_settings()}
+    except ValueError as e:  # a bad [stages.*] in config.toml: still show the project
+        return {**cur, "error": str(e)}
 
 
 # ---------------------------------------------------------------- CLI
@@ -752,6 +775,9 @@ def _print_status(s: dict) -> None:
         print(f"  brief:    {s['brief']}")
     print(f"  folder:   {s['dir_windows'] or s['dir']}")
     print(f"  preset:   {st['preset']}  {' '.join(f'{k}={v}' for k, v in st['params'].items())}")
+    if s.get("stage"):
+        print(f"  stage:    {s['stage']['stage']} (character {s['stage']['character']}; "
+              f"gen project gen {s['slug']} --stage ... runs it, docs/character-stages.md)")
     print(f"  prompt:   {st['full_prompt'] or '(none yet)'}")
     if st["negative"]:
         print(f"  negative: {st['negative']}")
@@ -782,7 +808,9 @@ def _print_status(s: dict) -> None:
     if s["recent_passes"]:
         print("passes (P = pass number, rate its images as P:1, P:2, ...):")
         for p in s["recent_passes"]:
-            print(f"  P{p['n']:<3} v{p['version']:<3} {p['count']}x  {p['run_dir']}")
+            how = f"  {p['stage']}" + (f" from {p['source']}" if p.get("source") else "") \
+                + (f": {p['text']}" if p.get("text") else "") if p.get("stage") else ""
+            print(f"  P{p['n']:<3} v{p['version']:<3} {p['count']}x  {p['run_dir']}{how}")
     b = s["board"]
     c = b["counts"]
     print(f"board: {c['pick']} pick, {c['maybe']} maybe, {c['reject']} reject, {c['unrated']} unrated  {b['page']}")
@@ -821,6 +849,10 @@ USAGE = """usage: gen project COMMAND ...
   gen SLUG [-n 4] [--extra TEXT] [--char C ... | --no-chars] [--ref NAME|CHAR:REF -s 0.4] [--seed S] [--open]
                                                       a pass: generate from the project state
                                                       (cast characters' descriptions go first)
+  gen SLUG --stage [explore|converge|polish] [--from IMAGE] [--text T] [-n N]
+                                                      a pass the way the stage generates (#68): explore =
+                                                      text, converge = edits of IMAGE (P:N, path, CHAR:REF;
+                                                      default the character's ref), polish = --text fix
   promote SLUG IMAGE --asset NAME [--as-ref REF] [--shows C,C] [--note N]
                                                       image -> next asset version -> new project version
   keep SLUG ASSET [--note N]                          mark a stale asset as fine as-is
@@ -882,7 +914,7 @@ def main(argv: list[str]) -> int:
         return 0
     if cmd == "gen":
         ap.add_argument("slug")
-        ap.add_argument("-n", "--count", type=int, default=4)
+        ap.add_argument("-n", "--count", type=int, help="images (default 4; with --stage: the stage's count)")
         ap.add_argument("--extra", help="appended to the project prompt for this pass only")
         ap.add_argument("--ref", help="img2img from this project ref, or CHAR:REF for a character's ref")
         ap.add_argument("--char", action="append", dest="chars",
@@ -892,13 +924,29 @@ def main(argv: list[str]) -> int:
         ap.add_argument("--seed", type=int)
         ap.add_argument("--author", default="human")
         ap.add_argument("--open", action="store_true", help="open contact sheet in Windows browser")
+        import stages
+        ap.add_argument("--stage", nargs="?", const="", choices=["", *stages.STAGES],
+                        help="generate the way this stage does ([stages.*] in config.toml); "
+                             "--stage alone = the character's current stage")
+        ap.add_argument("--from", dest="source", help="with --stage: the image to edit (P:N, a path or CHAR:REF)")
+        ap.add_argument("--text", help="with --stage: explore = extra prompt, converge = one idea for all, "
+                                       "polish = the fix")
         a = ap.parse_args(rest)
+        if a.stage is not None:
+            if a.extra or a.ref or a.chars or a.no_chars or a.strength is not None:
+                ap.error("--stage takes --from, --text, -n and --seed (the stage's settings decide the rest)")
+            run = stages.run_stage(a.slug, a.stage or None, a.count,
+                                   a.source, a.text, a.seed, a.author)
+            imagegen._print_run(run, a.open)
+            return 0
+        if a.source or a.text:
+            ap.error("--from and --text need --stage")
         if a.strength is not None and a.ref is None:
             ap.error("--strength needs --ref")
         if a.no_chars and a.chars:
             ap.error("--char and --no-chars together")
         chars = [] if a.no_chars else _csv(a.chars)
-        run = run_pass(a.slug, a.count, a.extra, a.seed, a.ref, a.strength, a.author, chars)
+        run = run_pass(a.slug, 4 if a.count is None else a.count, a.extra, a.seed, a.ref, a.strength, a.author, chars)
         imagegen._print_run(run, a.open)
         return 0
     if cmd == "promote":
