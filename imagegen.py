@@ -24,6 +24,7 @@ Usage:
   gen project new|list|status|set|gen|promote|keep|import|doc ...  # creative projects (see projects.py)
   gen board serve [SLUG] [--open]               # the clickable project board on http://127.0.0.1:8190
   gen char new|list|status|set ...              # shared characters projects cast (see characters.py)
+  gen tunnel [--idle-min 120]                   # the MCP tools for project threads, until Ctrl-C (tunnel.py)
 """
 from __future__ import annotations
 
@@ -1489,6 +1490,9 @@ def main(argv: list[str]) -> int:
     if argv and argv[0] == "board":
         import boardserve
         return boardserve.main(argv[1:])
+    if argv and argv[0] == "tunnel":
+        import tunnel
+        return tunnel.main(argv[1:])
     if argv and argv[0] in ("char", "character"):
         import characters
         return characters.main(argv[1:])
