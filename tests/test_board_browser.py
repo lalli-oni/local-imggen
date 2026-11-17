@@ -235,3 +235,66 @@ def test_live_old_failure_not_toasted_again(live):
     page.reload()
     page.wait_for_timeout(2600)  # one poll
     assert "old" not in page.locator("#toast").inner_text()
+
+
+def selected(page):
+    return page.evaluate("document.activeElement.closest('.card')?.dataset.label ?? null")
+
+
+def test_click_selects_and_arrows_start_without_focus(board):
+    """Feedback from tulu: keys only worked once a card had focus, and clicking an image opened a tab."""
+    page, errors = board
+    page.locator("#size").fill("400")  # 3 per row at 1280px
+    page.locator("#hide-rejects").uncheck()
+    page.locator("body").click(position={"x": 5, "y": 5})
+    assert selected(page) is None
+    page.keyboard.press("ArrowRight")  # no selection yet: the first card in view
+    assert selected(page) == "2:1"
+    pages_before = len(page.context.pages)
+    page.locator(".card", has_text="1:2").locator("img").click()
+    assert selected(page) == "1:2"
+    assert len(page.context.pages) == pages_before  # a click no longer opens a tab
+    page.keyboard.press("1")  # rates the clicked card (static page: copies the command)
+    page.wait_for_selector(".toast.show")
+    assert "1:2" in page.locator("#toast").inner_text()
+    page.keyboard.press("Escape")
+    assert selected(page) is None
+    assert not errors, errors
+
+
+def test_up_down_move_by_row(board):
+    page, errors = board
+    page.locator("#hide-rejects").uncheck()
+    page.set_viewport_size({"width": 1000, "height": 800})
+    page.locator("#size").fill("200")  # pass 1 (3 images) wraps into rows of 4 at most
+    page.locator(".card", has_text="2:2").locator("img").click()
+    page.keyboard.press("ArrowDown")  # from v2's pass to the row below: pass 1, nearest column
+    assert selected(page) == "1:2"
+    page.keyboard.press("ArrowUp")
+    assert selected(page) == "2:2"
+    page.keyboard.press("ArrowUp")  # nothing above: stays
+    assert selected(page) == "2:2"
+    assert not errors, errors
+
+
+def test_open_full_size(board):
+    page, errors = board
+    page.locator(".card", has_text="2:1").locator("img").click()
+    with page.context.expect_page() as tab:
+        page.keyboard.press("o")
+    assert tab.value.url.endswith(".png")
+    tab.value.close()
+    with page.context.expect_page() as tab:
+        page.locator(".card", has_text="2:1").locator("img").dblclick()
+    tab.value.close()
+    assert not errors, errors
+
+
+def test_slider_keeps_its_arrows(board):
+    page, errors = board
+    page.locator("#size").focus()
+    before = page.locator("#size").input_value()
+    page.keyboard.press("ArrowRight")
+    assert page.locator("#size").input_value() != before
+    assert selected(page) is None
+    assert not errors, errors
