@@ -117,7 +117,7 @@ post = ["remove_bg", "keep_largest", "trim"]
 # doesn't silently change a project. Qwen runs at cfg 1, so negative_extra only reaches the SDXL presets.
 [styles.synthwave]
 description = "The house look: synthwave/vaporwave magical realism, realistic yet outrageous and funny"
-suffix = "synthwave vaporwave magical realism, a detailed realistic digital painting of an outrageous, over-the-top and funny scene, like a still from an 80s action movie, believable everyday materials like concrete, brick, tiles, wood and carpet, lit by glowing pink, magenta and cyan neon accents from signs and lamps, retro 80s sunset colours, chrome and wet reflective surfaces, several funny sight gags spread through the scene with room to breathe between them, cinematic lighting, rich saturated colours"
+suffix = "synthwave vaporwave magical realism, a detailed realistic digital painting of an outrageous, over-the-top and funny scene, like a still from an 80s action movie, set in the 1980s, indoor rooms with 80s interiors like shag pile carpet, wood-panelled walls, waterbeds and rattan furniture, glowing pink, magenta and cyan neon accents from signs and lamps, retro 80s sunset colours, chrome and wet reflective surfaces, several funny sight gags spread through the scene with room to breathe between them, cinematic lighting, rich saturated colours"
 negative_extra = "flat cartoon, childish storybook, washed out colours, dull grey lighting"
 
 # Þór's first direction to explore (2026-11-17): 80s/90s digital artefacts as a playful mood, a digital world
@@ -205,7 +205,8 @@ vehicles = ["a silver DeLorean with gull-wing doors open", "a white Lamborghini 
 scifi = ["a robot butler with a tray", "a flickering blue hologram", "a chrome laser pistol",
          "a flying saucer-shaped lamp", "a giant computer with blinking lights and tape reels", "a teleporter booth"]
 setting = ["a glowing wireframe grid floor stretching to the horizon", "palm trees", "Memphis-pattern walls in pastel squiggles",
-           "a lava lamp", "a mall fountain with pennies", "a checkerboard floor", "a mirror ball", "a pink flamingo lawn ornament"]
+           "a lava lamp", "a mall fountain with pennies", "a checkerboard floor", "a mirror ball", "a pink flamingo lawn ornament",
+           "a heart-shaped waterbed", "a shag pile carpet", "wood-panelled walls"]
 
 # Optional: replaces `themes` on a day. The most specific entry wins: "YYYY-MM-DD", "MM-DD", month, weekday.
 # Movable feasts (Easter-based, Þorri) change date every year: add them as "YYYY-MM-DD", one year at a time.
