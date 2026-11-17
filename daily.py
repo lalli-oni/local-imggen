@@ -15,7 +15,9 @@ Settings live in config.toml under [daily]:
   scene_prompt, stand_in, cast_prompt  for a cast preset (wallpaper_cast): the scene pass draws {stand_ins}
            (one stand_in per character, "on the left", ...) doing the theme, then the cast pass replaces each with
            its character ({replace}: "Replace the ... in image 1 with tulu, the character from image 2."). With
-           stand_in = "" the scene has nobody in it and the cast pass adds the characters instead
+           stand_in = "" the scene has nobody in it and the cast pass adds the characters instead.
+           [daily.stand_ins] CHARACTER = "a rough look-alike": that character's stand-in instead of stand_in
+           (ignored when stand_in = "")
   props, props_per_day  [daily.props] category = [items]: each day props_per_day items, from as many different
            categories, picked by the date, are added to the theme ("..., with a boombox and a DeLorean")
   themes   the scene for the day, picked at random (by the date: a re-run that day gets the same theme,
@@ -55,7 +57,7 @@ def settings(conf: dict | None = None) -> dict:
     conf = conf or imagegen.load_config()
     d = {"preset": "wallpaper_cast", "count": 1, "cast": [], "style": "", "no_repeat_days": 7, "themes": [],
          "dates": {}, "months": {}, "weekdays": {}, "ref": "", "ref_prompt": "", "scene_prompt": "",
-         "stand_in": STAND_IN, "cast_prompt": "", "props": {}, "props_per_day": 0, **conf.get("daily", {})}
+         "stand_in": STAND_IN, "stand_ins": {}, "cast_prompt": "", "props": {}, "props_per_day": 0, **conf.get("daily", {})}
     if not isinstance(d["props"], dict) or not all(isinstance(v, list) for v in d["props"].values()):
         raise ValueError("[daily.props]: use category = [\"item\", ...]")
     for key, names in (("months", MONTHS), ("weekdays", DAYS)):
@@ -249,10 +251,9 @@ SCENE_PROMPT = ("A wide, finished wallpaper image that fills the whole frame: {s
                 "in the image is the sign text named in the scene, spelled exactly as given; no other signs, labels "
                 "or writing. Detailed background, scenery and lighting everywhere, no white or empty background, "
                 "no border")  # no full stop: generate() adds the preset's suffix and the style after it
-CAST_PROMPT = ("{replace} Each character takes over the place, pose, size and action of the one it replaces and is "
-               "lit like the rest of the scene, with exactly the same design, colours and proportions as in its "
-               "reference image. Keep everything else in image 1 exactly the same: layout, background, lighting, "
-               "colours and text.")
+CAST_PROMPT = ("{replace} Each character keeps the place, pose, size and action of the creature it replaces, and "
+               "anything it wears or holds, and is lit like the rest of the scene; its body, face, colours and "
+               "proportions match its reference image exactly. Keep everything else in image 1 the same.")
 
 
 def _name(name: str | None) -> str:
@@ -266,12 +267,20 @@ def cast_prompts(d: dict, theme: str, names: list[str | None]) -> tuple[str, str
     a literal style (named styles come from generate())."""
     scene = ", ".join(t.strip().strip(",") for t in (theme, "" if d["styles"] else d["style"]) if t and t.strip())
     stand_in = str(d["stand_in"] or "").strip()
+    own = d.get("stand_ins") or {}
+    if not isinstance(own, dict):
+        raise ValueError("[daily.stand_ins]: use CHARACTER = \"a look-alike to draw in the scene\"")
     n = len(names)
     places = [""] if n == 1 else [f" {PLACES[k]}" if k < len(PLACES) else f" number {k + 1}" for k in range(n)]
-    if stand_in:
-        stand_ins = f"{stand_in}{places[0]}" + "".join(f", another one{pl}" for pl in places[1:])
-        bare = re.sub(r"^(an?|the)\s+", "", stand_in, flags=re.IGNORECASE)
-        replace = " ".join(f"Replace the {bare}{places[k]} in image 1 "
+    # per character: its own look-alike ([daily.stand_ins], #52: the edit then only fixes the details), else stand_in
+    looks = [str(own.get(nm) or stand_in).strip() if nm else stand_in for nm in names]
+    if stand_in:  # "" = nobody in the scene, the edit adds them (stand_ins too are then unused)
+        if all(lk == looks[0] for lk in looks):
+            stand_ins = f"{looks[0]}{places[0]}" + "".join(f", another one{pl}" for pl in places[1:])
+        else:
+            stand_ins = ", ".join(f"{lk}{pl}" for lk, pl in zip(looks, places))
+        bare = [re.sub(r"^(an?|the)\s+", "", lk, flags=re.IGNORECASE) for lk in looks]
+        replace = " ".join(f"Replace the {bare[k]}{places[k]} in image 1 "
                            f"with {_name(nm)}, the character from image {k + 2}." for k, nm in enumerate(names))
     else:
         stand_ins = "nobody in it yet"

@@ -240,14 +240,15 @@ def test_default_preset_puts_the_cast_into_a_scene(tulu, comfy, on_c_drive, stub
     [wf] = comfy.workflows()
     scene_enc, cast_enc = (n["inputs"] for n in wf.values() if n["class_type"] == "TextEncodeQwenImage21")
     scene = scene_enc["prompt"]
-    assert scene.startswith("A wide, finished wallpaper image that fills the whole frame: a small cute cartoon "
-                            "creature, ") and "no white or empty background" in scene
+    look = daily.settings()["stand_ins"]["tulu"]  # her own look-alike, so the edit only fixes details
+    assert scene.startswith(f"A wide, finished wallpaper image that fills the whole frame: {look}, ")
+    assert "no white or empty background" in scene
     assert scene.count(imagegen.style_text(["synthwave"])) == 1  # named styles: from generate(), once
     assert imagegen.style_text(["retro_digital"]) in scene
-    assert TULU not in scene and "tulu" not in scene  # the scene only has the stand-in
+    assert TULU not in scene and "tulu" not in scene.lower()  # the scene only has the stand-in
     cast = cast_enc["prompt"]
-    assert cast.startswith("Replace the small cute cartoon creature in image 1 with lil tulu, the character from "
-                           "image 2.") and "Keep everything else in image 1" in cast
+    assert cast.startswith(f"Replace the {look.removeprefix('a ')} in image 1 with lil tulu, the character from "
+                           "image 2.") and "Keep everything else in image 1" in cast and "wears or holds" in cast
     scene_img = wf[cast_enc["images.image_1"][0]]  # image 1 = the scene pass's decoded image
     assert scene_img["class_type"] == "VAEDecode"
     assert wf[wf[scene_img["inputs"]["samples"][0]]["inputs"]["latent_image"][0]]["class_type"] == "EmptyLatentImage"
@@ -270,7 +271,7 @@ def test_default_preset_puts_the_cast_into_a_scene(tulu, comfy, on_c_drive, stub
 
 def test_cast_with_two_characters(tulu, comfy, daily_conf, make_image, out_dir):
     characters.new("mitts", "Mitts the cat", description="orange cat", refs={"a": str(make_image("cat.png"))})
-    daily_conf(cast=["tulu", "mitts"], themes=["on a beach"], months={}, weekdays={})
+    daily_conf(cast=["tulu", "mitts"], themes=["on a beach"], months={}, weekdays={}, stand_ins={})
     p = daily.plan(date(2026, 11, 12))
     assert [Path(r).name for r in p["refs"]] == ["v1-v1.png", "a-v1.png"]
     assert "a small cute cartoon creature on the left, another one on the right, on a beach" in p["prompt"]
@@ -293,7 +294,7 @@ def test_cast_prompt_templates(tulu, daily_conf):
     assert "nobody in it yet, on a beach, soft light" in p["prompt"]
     assert p["cast_prompt"].startswith("Add lil tulu, the character from image 2, into the scene from image 1")
     daily_conf(themes=["on a beach"], months={}, weekdays={}, scene_prompt="{scene} with {stand_ins}",
-               cast_prompt="{replace} ({scene})", style="")
+               cast_prompt="{replace} ({scene})", style="", stand_ins={})
     p = daily.plan(date(2026, 11, 12))
     assert p["prompt"] == "on a beach with a small cute cartoon creature"
     assert p["cast_prompt"].endswith("image 2. (on a beach)")
@@ -473,7 +474,21 @@ def test_blank_image_never_becomes_the_wallpaper(tulu, comfy, on_c_drive, stub_c
 
 
 def test_cast_ref_paths_take_the_cast_names(tulu, daily_conf, make_image):
-    daily_conf(ref=[str(make_image("t2.png"))], stand_in="A small fox", themes=["on a beach"], months={}, weekdays={})
+    daily_conf(ref=[str(make_image("t2.png"))], stand_in="A small fox", themes=["on a beach"], months={}, weekdays={},
+               stand_ins={})
     p = daily.plan(date(2026, 11, 12))
     assert p["cast_prompt"].startswith("Replace the small fox in image 1 with lil tulu, the character from image 2.")
     assert "A small fox, on a beach" in p["prompt"] and not p["prompt"].endswith(".")
+
+
+def test_own_stand_ins(tulu, daily_conf, make_image):
+    characters.new("mitts", "Mitts the cat", description="orange cat", refs={"a": str(make_image("cat.png"))})
+    daily_conf(cast=["tulu", "mitts"], themes=["on a beach"], months={}, weekdays={}, stand_ins={"tulu": "a green blob"})
+    p = daily.plan(date(2026, 11, 12))
+    assert "frame: a green blob on the left, a small cute cartoon creature on the right, on a beach" in p["prompt"]
+    assert p["cast_prompt"].startswith("Replace the green blob on the left in image 1 with lil tulu, the character "
+                                       "from image 2. Replace the small cute cartoon creature on the right in image 1 "
+                                       "with Mitts the cat")
+    daily_conf(stand_ins="nope")
+    with pytest.raises(ValueError, match="daily.stand_ins"):
+        daily.plan(date(2026, 11, 12))
