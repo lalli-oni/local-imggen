@@ -353,3 +353,79 @@ def test_daily_run_records_props(tulu, comfy, daily_conf):
     run = daily.run(date(2026, 11, 10), wait=1, set_wallpaper=False)
     meta = json.loads((Path(run["run_dir"]) / "run.json").read_text())
     assert len(meta["daily"]["props"]) == 1 and meta["daily"]["theme"] == "on a beach"  # theme without props
+
+
+def test_crt_images_find_their_sidecar(comfy):
+    run = imagegen.generate("fjord", "wallpaper_sdxl", seed=1, styles=["storybook", "retro_digital"])
+    img = Path(run["images"][0]["path"])
+    assert img.name.endswith("-crt.png") and imagegen.find_sidecar(img)["styles"] == ["storybook", "retro_digital"]
+    imagegen.vary(str(img), count=1)  # the sidecar's prompt, preset and styles
+    assert _prompt(comfy.workflows()[1]).startswith("fjord")
+    assert imagegen.sidecar_paths(Path("x/a-transparent-crt.png"))[-1] == Path("x/a.json")
+
+
+def test_project_pass_with_crt_is_tagged(proj, comfy, monkeypatch):
+    real = imagegen.load_config
+    monkeypatch.setattr(imagegen, "load_config",
+                        lambda: {**(c := real()), "presets": {**c["presets"], "wallpaper_sdxl": {
+                            **c["presets"]["wallpaper_sdxl"], "post": ["crt"]}}})
+    run = projects.run_pass(proj, count=1)
+    img = Path(run["images"][0]["path"])
+    assert img.name.endswith("-crt.png") and imagegen.find_sidecar(img)["project"]["slug"] == proj
+
+
+def test_crt_bleed_does_not_wrap(tmp_path):
+    from PIL import Image
+    im = Image.new("RGB", (100, 50), (0, 0, 0))
+    im.paste((255, 255, 255), (90, 0, 100, 50))  # a bright right edge
+    out = imagegen.crt_image(im, {**{k: 0 for k in imagegen.CRT_DEFAULTS}, "bleed": 10})
+    assert out.getpixel((0, 25)) == (0, 0, 0)  # nothing from the right edge shows up on the left
+
+
+def test_crt_source_of_a_jpg(tmp_path):
+    from PIL import Image
+    Image.new("RGB", (64, 36), (10, 20, 30)).save(tmp_path / "p.jpg")
+    out = imagegen.crt(tmp_path / "p.jpg")
+    assert out.name == "p-crt.png" and imagegen.crt_source(out) == tmp_path / "p.jpg"
+    assert imagegen.crt(out) == out  # not p-crt-crt.png
+
+
+@pytest.mark.parametrize("size", [(4096, 24), (24, 4096), (1, 1)])
+def test_crt_odd_sizes(size):
+    from PIL import Image
+    assert imagegen.crt_image(Image.new("RGB", size), imagegen.crt_settings()).size == size
+
+
+def test_crt_keeps_highlights(tmp_path):
+    from PIL import Image
+    im = Image.new("RGB", (64, 36), (240, 240, 240))
+    s = {**{k: 0 for k in imagegen.CRT_DEFAULTS}, "lines": 6, "scanline": 0.5}
+    out = imagegen.crt_image(im, s)
+    assert max(out.getdata())[0] <= 252  # not clipped to flat white
+
+
+def test_style_post_order(monkeypatch):
+    real = imagegen.load_config
+
+    def load():
+        conf = real()
+        conf["styles"]["cut"] = {"suffix": "x", "post": ["crt", "remove_bg"]}
+        return conf
+    monkeypatch.setattr(imagegen, "load_config", load)
+    assert imagegen.style_post(["cut"], before=["trim"]) == ["remove_bg", "trim", "crt"]
+
+
+def test_bad_crt_knob_fails_before_queueing(comfy, monkeypatch):
+    real = imagegen.load_config
+    monkeypatch.setattr(imagegen, "load_config", lambda: {**real(), "crt": {"scanlines": 0.3}})
+    with pytest.raises(ValueError, match="unknown scanlines"):
+        imagegen.generate("x", styles=["retro_digital"])
+    assert comfy.workflows() == []
+    import doctor
+    check = doctor.check_styles(imagegen.load_config())
+    assert check["status"] == "fail" and "scanlines" in check["detail"]
+
+
+def test_doctor_styles_ok():
+    import doctor
+    assert doctor.check_styles(imagegen.load_config())["status"] == "ok"

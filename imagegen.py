@@ -13,6 +13,8 @@ Usage:
   gen bakeoff --t2i "prompt"... [--ref IMG --ref-prompt "scene"]  # compare text-to-image models (#51)
   gen cutout PATH [--clean]                     # remove the background -> PATH-transparent.png
                                                 #   --clean: also drop stray shapes, centre on a square
+  gen crt PATH... [--lines 360 --scanline 0.22] # CRT/VHS look on finished images -> PATH-crt.png
+  gen styles                                    # list the [styles] looks (gen "..." --style NAME|none)
   gen presets                                   # list presets
   gen recent [N]                                # last N runs
   gen set-wallpaper PATH                        # set Windows desktop wallpaper
@@ -132,7 +134,7 @@ def style_post(names, conf: dict | None = None, before: list[str] = ()) -> list[
     bad = [s for s in out if s not in POST]
     if bad:
         raise ValueError(f"unknown post step {', '.join(bad)} (known: {', '.join(POST)})")
-    return out
+    return sorted(out, key=list(POST).index)  # the order they must run in: remove_bg before trim, crt last
 
 
 def style_text(names, conf: dict | None = None, key: str = "suffix") -> str:
@@ -732,8 +734,8 @@ def crt_settings(conf: dict | None = None, **overrides) -> dict:
 
 
 def crt_image(im, s: dict):
-    """The CRT/VHS look on a PIL image (RGB or RGBA; alpha is kept): bleed, blur, glow, warmth, scanlines,
-    vignette, in that order. Pillow only (no numpy), fast enough for 4K."""
+    """The CRT/VHS look on a PIL image (RGB or RGBA; alpha is kept): bleed, blur, glow, warmth, then one mask for
+    scanlines and vignette. Pillow only (no numpy), a few seconds for 4K."""
     import math
     from PIL import Image, ImageChops, ImageFilter
     alpha = im.getchannel("A") if im.mode == "RGBA" else None
@@ -741,8 +743,14 @@ def crt_image(im, s: dict):
     w, h = im.size
     k = h / 1080
     r, g, b = im.split()
-    if (shift := round(s["bleed"] * k)):
-        r, b = ImageChops.offset(r, shift, 0), ImageChops.offset(b, -shift, 0)
+    if (shift := min(round(s["bleed"] * k), w - 1)) > 0:  # red right, blue left; the edge columns stay put
+        r2, b2 = r.copy(), b.copy()
+        r2.paste(r.crop((0, 0, w - shift, h)), (shift, 0))
+        b2.paste(b.crop((shift, 0, w, h)), (0, 0))
+        r, b = r2, b2
+    if s["warmth"] > 0:
+        r = r.point(lambda v: min(255, round(v * (1 + s["warmth"]))))
+        b = b.point(lambda v: round(v * (1 - s["warmth"])))
     im = Image.merge("RGB", (r, g, b))
     if s["blur"] > 0:
         im = im.filter(ImageFilter.GaussianBlur(s["blur"] * k))
@@ -750,25 +758,23 @@ def crt_image(im, s: dict):
         bright = im.point(lambda v: max(0, v - 160) * 255 // 95)  # only the bright parts glow
         halo = bright.filter(ImageFilter.GaussianBlur(12 * k)).point(lambda v: round(v * s["glow"]))
         im = ImageChops.screen(im, halo)
-    if s["warmth"] > 0:
-        r, g, b = im.split()
-        r = r.point(lambda v: min(255, round(v * (1 + s["warmth"]))))
-        b = b.point(lambda v: round(v * (1 - s["warmth"])))
-        im = Image.merge("RGB", (r, g, b))
+    mask = None
     if s["scanline"] > 0 and s["lines"] > 0:
-        period = h / s["lines"]
-        # a soft wave, not hard black lines; brightness is lifted a little so the image stays as bright
+        period = h / s["lines"]  # a soft wave, not hard black lines
         col = bytes(round(255 * (1 - s["scanline"] * (0.5 - 0.5 * math.cos(2 * math.pi * y / period))))
                     for y in range(h))
         mask = Image.frombytes("L", (1, h), col).resize((w, h), Image.NEAREST)
-        im = ImageChops.multiply(im, Image.merge("RGB", (mask, mask, mask)))
-        lift = 1 / (1 - s["scanline"] / 2)
-        im = im.point(lambda v: min(255, round(v * lift)))
+        # the lines darken by scanline/2 on average: lift the mid-tones back with a gamma curve, which
+        # (unlike a gain) never clips the highlights
+        gamma = 1 - s["scanline"] / 2
+        im = im.point(lambda v: round(255 * (v / 255) ** gamma))
     if s["vignette"] > 0:
-        gw, gh = 64, max(1, round(64 * h / w))
+        gw, gh = 64, max(2, round(64 * h / w))
         grid = bytes(round(255 * (1 - s["vignette"] * min(1.0, ((x / (gw - 1) - 0.5) ** 2 + (y / (gh - 1) - 0.5) ** 2) * 2) ** 1.5))
                      for y in range(gh) for x in range(gw))
-        mask = Image.frombytes("L", (gw, gh), grid).resize((w, h), Image.BILINEAR)
+        vig = Image.frombytes("L", (gw, gh), grid).resize((w, h), Image.BILINEAR)
+        mask = vig if mask is None else ImageChops.multiply(mask, vig)
+    if mask is not None:
         im = ImageChops.multiply(im, Image.merge("RGB", (mask, mask, mask)))
     if alpha is not None:
         im.putalpha(alpha)
@@ -778,9 +784,10 @@ def crt_image(im, s: dict):
 def crt_source(path: Path) -> Path:
     """The clean image a -crt.png was made from (so re-running crt never stacks the effect)."""
     if path.stem.endswith("-crt"):
-        raw = path.with_name(path.stem.removesuffix("-crt") + path.suffix)
-        if raw.is_file():
-            return raw
+        for ext in (".png", ".jpg", ".jpeg", ".webp"):
+            raw = path.with_name(path.stem.removesuffix("-crt") + ext)
+            if raw.is_file():
+                return raw
     return path
 
 
@@ -876,10 +883,22 @@ def prepare_source(path: Path, mask: Path | None = None, size_fn=None,
     return src, m, size
 
 
+POST_SUFFIXES = ("-crt", "-transparent")  # what post steps add to an image's name, outermost first
+
+
+def sidecar_paths(path: Path) -> list[Path]:
+    """Where an image's sidecar may be: next to it, or next to the raw image a post step made it from
+    (NAME-transparent.png, NAME-crt.png, NAME-transparent-crt.png -> NAME.json)."""
+    stem, out = path.stem, [path.with_suffix(".json")]
+    for suffix in POST_SUFFIXES:
+        stem = stem.removesuffix(suffix)
+        out.append(path.with_name(stem + ".json"))
+    return list(dict.fromkeys(out))
+
+
 def find_sidecar(path: Path) -> dict | None:
-    """The JSON sidecar written next to a generated image (also for -transparent.png files)."""
-    for cand in (path.with_suffix(".json"),
-                 path.with_name(path.stem.removesuffix("-transparent") + ".json")):
+    """The JSON sidecar written next to a generated image (also for -transparent.png / -crt.png files)."""
+    for cand in sidecar_paths(path):
         if cand.is_file():
             try:
                 meta = json.loads(cand.read_text())
@@ -1008,6 +1027,8 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
     count = max(1, int(count))
     styles = check_styles(p.get("styles", []) if styles is None else styles, conf)
     post = style_post(styles, conf, p.get("post", []) + list(post or []))
+    if "crt" in post:
+        crt_settings(conf)  # a bad [crt] knob fails now, not after ComfyUI's work
     if mask is not None and source_image is None:
         raise ValueError("a mask needs a source image")
     if edit:
