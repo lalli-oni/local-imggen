@@ -44,7 +44,9 @@ def list_presets() -> dict:
     out = {}
     for name, p in imagegen.list_presets().items():
         if "workflow" not in p:  # edit-only (e.g. kontext): use the edit tool
-            out[name] = {"description": p.get("description", ""), "mode": "edit only", "size": "~1 MP, source aspect",
+            size = ("~1 MP, source aspect" if "target_width" not in p
+                    else f"{p['target_width']}x{p['target_height']} (upscaled)")
+            out[name] = {"description": p.get("description", ""), "mode": "edit only", "size": size,
                          **({"styles": p["styles"]} if p.get("styles") else {})}
             continue
         out[name] = {"description": p.get("description", ""), "size": f"{p['width']}x{p['height']}",

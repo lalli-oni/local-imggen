@@ -171,3 +171,9 @@ def test_board_tools(comfy):
     assert len(mcp_server.project_get("fox", preview=True)) == 1  # a pick whose file is gone is skipped
     with pytest.raises(ValueError, match="rating must be"):
         mcp_server.project_rate("fox", ["1:1"], "great")
+
+
+def test_list_presets_edit_only_size():
+    presets = mcp_server.list_presets()
+    assert presets["wallpaper_ref"]["size"].startswith("3840x2160")
+    assert presets["kontext"]["size"] == "~1 MP, source aspect"

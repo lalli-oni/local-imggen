@@ -155,19 +155,27 @@ def _pool(value) -> list[str]:
 
 
 def recent_themes(conf: dict, day: date, days: int) -> dict[str, date]:
-    """{theme: the last day it was used} over the `days` days before `day`, from past daily runs' run.json."""
-    out: dict[str, date] = {}
+    """{theme: the last day it was used} over the `days` days before `day`, from past daily runs' run.json.
+
+    A run's day is its `daily.date` (`gen daily --date D` saves into today's folder but is for D); runs made
+    before that was recorded fall back to the folder's date."""
     root = Path(conf["output_dir"]).expanduser()
-    for back in range(days, 0, -1):  # oldest first, so a later use overwrites an earlier one
-        d = day - timedelta(days=back)
-        for f in sorted((root / d.isoformat()).glob("*/run.json")):
+    lo, hi = day - timedelta(days=days), day - timedelta(days=1)
+    seen: list[tuple[date, str]] = []
+    # folders are keyed by the day the run happened: a run for `day` can sit in any folder up to today
+    for n in range((max(hi, date.today()) - min(lo, date.today())).days + 1):
+        folder = min(lo, date.today()) + timedelta(days=n)
+        for f in sorted((root / folder.isoformat()).glob("*/run.json")):
             try:
-                theme = (json.loads(f.read_text()).get("daily") or {}).get("theme")
+                meta = (json.loads(f.read_text()).get("daily") or {})
+                theme, used = meta.get("theme"), folder
+                if isinstance(meta.get("date"), str):
+                    used = date.fromisoformat(meta["date"])
             except (OSError, ValueError, AttributeError):
                 continue
-            if isinstance(theme, str):
-                out[theme] = d
-    return out
+            if isinstance(theme, str) and lo <= used <= hi:
+                seen.append((used, theme))
+    return {theme: used for used, theme in sorted(seen)}  # oldest first, so a later use wins
 
 
 def pick_theme(d: dict, day: date, recent: dict[str, date] | None = None) -> tuple[str, str]:
@@ -308,23 +316,25 @@ def cast_prompts(d: dict, theme: str, names: list[str | None]) -> tuple[str, str
 
 def plan(day: date | None = None, conf: dict | None = None) -> dict:
     day = day or date.today()
-    d = settings(conf)
     conf = conf or imagegen.load_config()
+    d = settings(conf)
     theme, where = pick_theme(d, day, recent_themes(conf, day, max(1, int(d["no_repeat_days"])) - 1))
     props = pick_props(d, day)
     scene = with_props(theme, props)
     ref, refs, cast_prompt = None, [], None
+    import characters
     if d["casting"]:  # the refs are the cast: no descriptions needed, and only the characters with a ref show
-        import characters
         found = find_refs(d)
         used = {name: characters.load(name)["version"] for name, _ in found if name}
         refs = [str(path) for _, path in found]
         prompt, cast_prompt = cast_prompts(d, scene, [name for name, _ in found])
     else:
-        prompt, used = compose(d, scene)
-        if d["uses_ref"]:
+        if d["uses_ref"]:  # the ref shows the character: no description needed (compose would insist on one)
             ref = str(find_ref(d))
+            used = {n: characters.load(n)["version"] for n in _pool(d["cast"])}
             prompt = ref_prompt(d, scene, used)
+        else:
+            prompt, used = compose(d, scene)
     return {"date": day.isoformat(), "theme": theme, "from": where, "props": props, "prompt": prompt, "cast": used,
             "styles": d["styles"], "gen_styles": [] if ref else d["styles"],  # with a ref: in the prompt
             "post": imagegen.style_post(d["styles"], conf) if ref else [],  # ...so their post steps come from here
