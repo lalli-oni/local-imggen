@@ -56,6 +56,12 @@ ROOT = Path(__file__).resolve().parent
 MAX_SEED = 2**32
 
 
+def cast_seed(seed: int) -> int:
+    """The seed of a cast preset's second sampler (#52): with the scene's own seed, and a latent of the same size
+    (cast_resolution 1152^2 = 1536x864), the edit started from the scene's noise and gave the scene back unchanged."""
+    return seed ^ 0x9E3779B9
+
+
 _LIVE = None  # the live progress block (progress.Progress) while a gen run draws one; log() prints above it
 
 
@@ -1243,7 +1249,7 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
     comfy = Comfy(conf["comfy_url"])
     comfy.wait_ready()
     mode = "edit" if edit else "inpaint" if mask_path else "img2img" if src_path else ""
-    first = {**params, "seed": base_seed}
+    first = {**params, "seed": base_seed, "cast_seed": cast_seed(base_seed)}
     if src_path is not None:  # what the uploads will fill in (the header only reads sizes and model names)
         # (keep in step with the uploads below; a missing key only costs the header line)
         first.update(image=src_path.name, mask=mask_path.name if mask_path else "",
@@ -1290,7 +1296,7 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
             t_queue = time.time()
             for i in range(count):
                 s = (base_seed + i) % MAX_SEED
-                wf = fill(template, {**params, "seed": s, "prompt": dress(per_image[i])})
+                wf = fill(template, {**params, "seed": s, "cast_seed": cast_seed(s), "prompt": dress(per_image[i])})
                 jobs.append((s, comfy.queue(wf), time.time(), wf))
             log(f"queued {count} x {preset} (seeds {base_seed}..) -> {run_dir}")
 

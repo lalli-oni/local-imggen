@@ -94,7 +94,7 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   it holds AMD's ROCm wheels and a generic torch would replace them.
 - Models: `~/comfyui/models/{checkpoints,upscale_models,...}`.
 - Adding a preset = new `[presets.x]` table in config.toml (+ a workflow JSON if the graph differs).
-  Every `{{key}}` in the workflow must be a preset key, or one of: seed, prompt, negative, checkpoint,
+  Every `{{key}}` in the workflow must be a preset key, or one of: seed, cast_seed (a second sampler's seed, `cast_seed()`), prompt, negative, checkpoint,
   and for img2img/inpaint workflows also image, mask, denoise (width/height then come from the source).
   A preset picks those graphs with `img2img_workflow` / `inpaint_workflow` (defaults: sdxl_img2img.json, sdxl_inpaint.json).
   Post steps (`post = [...]`, see `POST` in imagegen.py) run on each output in order: `remove_bg`, then the

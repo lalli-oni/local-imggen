@@ -23,7 +23,7 @@ EXPECTED_TORCH = "2.9.1+rocm7.2.0"
 LIMITS_DROPIN = Path("/etc/systemd/system/comfyui.service.d/zz-imagegen-limits.conf")
 # Keys generate() drops from a preset before filling the workflow, plus the ones it always adds.
 NOT_PARAMS = imagegen.NOT_PARAMS
-STANDARD_PARAMS = {"seed", "prompt", "negative", "checkpoint"}
+STANDARD_PARAMS = {"seed", "cast_seed", "prompt", "negative", "checkpoint"}
 # Each mode a preset can run in: (preset key, extra params generate() adds).
 MODES = [("workflow", {"ref"}),  # ref: a cast workflow's ref images (#52), one per --ref
          ("img2img_workflow", {"image", "denoise"}),

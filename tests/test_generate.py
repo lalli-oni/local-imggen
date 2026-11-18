@@ -276,7 +276,7 @@ def test_cast_preset_runs_scene_then_cast_in_one_job(comfy, make_image, out_dir)
     assert len(set(ups)) == 2 and set(ups) == set(comfy.uploads)
     assert Image.open(io.BytesIO(comfy.uploads[ups[0]])).size == imagegen.kontext_size(600, 800)
     samplers = [n["inputs"] for n in wf.values() if n["class_type"] == "KSampler"]
-    assert [s["seed"] for s in samplers] == [5, 5] and samplers[1]["steps"] == 25
+    assert [s["seed"] for s in samplers] == [5, imagegen.cast_seed(5)] and samplers[1]["steps"] == 25
     rd = Path(run["run_dir"])
     assert {p.name for p in rd.glob("*.png")} == {"01-seed5.png", "01-seed5-scene.png", "02-seed6.png",
                                                   "02-seed6-scene.png", "ref-1.png", "ref-2.png"}
@@ -376,3 +376,11 @@ def test_cast_pass_has_its_own_qwen_cache():
     wf = json.loads((imagegen.ROOT / "workflows" / "qwen_image_21_scene_cast_upscale.json").read_text())
     scene, cast = wf["7"]["inputs"]["model"][0], wf["13"]["inputs"]["model"][0]
     assert scene != cast and wf[cast]["class_type"] == wf[scene]["class_type"] == "QwenImage21Cache"
+
+
+def test_cast_pass_does_not_reuse_the_scene_seed():
+    # #52: same seed + same latent size = the scene's noise, and the edit gave the scene back unchanged
+    wf = json.loads((imagegen.ROOT / "workflows" / "qwen_image_21_scene_cast_upscale.json").read_text())
+    assert wf["7"]["inputs"]["seed"] == "{{seed}}" and wf["13"]["inputs"]["seed"] == "{{cast_seed}}"
+    assert imagegen.cast_seed(5) != 5
+    assert 0 <= imagegen.cast_seed(imagegen.MAX_SEED - 1) < imagegen.MAX_SEED
