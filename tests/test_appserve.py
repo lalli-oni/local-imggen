@@ -208,3 +208,31 @@ def test_cli_help(capsys):
     assert imagegen.main(["app", "--help"]) == 0
     assert "gen app serve" in capsys.readouterr().out
     assert imagegen.main(["app", "nope"]) == 2
+
+
+def test_review_fixes(world, server, out_dir, make_run):
+    # the fallback cover is the newest pass's first image
+    projects.new("bare", "Bare", prompt="a fjord")
+    projects.run_pass("bare", count=2, seed=1)
+    projects.run_pass("bare", count=3, seed=5)
+    card = appserve.project_card("bare", appserve.Paths(out_dir))
+    assert card["cover"].endswith("01-seed5.png")
+    # a run's contact sheet written after its summary was cached still shows up in the detail
+    make_run(n=1, prompt="late sheet", date="2026-11-02", time="080000")
+    rid = "2026-11-02/080000-draft-late-sheet"
+    assert get(server, f"/api/runs/{rid}")[2]["sheet"] is None
+    imagegen.write_contact_sheet(out_dir / rid, json.loads((out_dir / rid / "run.json").read_text()))
+    fetch_ok(server, get(server, f"/api/runs/{rid}")[2]["sheet"])
+    # a deleted run leaves the cache
+    import shutil
+    shutil.rmtree(out_dir / rid)
+    assert get(server, "/api/runs?q=late")[2]["total"] == 0
+    # a broken project.json is a server error, not a bad request
+    (projects.project_dir("bare") / "project.json").write_text("{")
+    assert get(server, "/api/projects/bare")[0] == 500
+
+
+def test_routes_with_dots_get_the_app(server):
+    _, body = fetch_ok(server, "/runs/2026-11-18/101500-draft-v1.5-test")
+    assert b"<title>app</title>" in body
+    assert get(server, "/missing.png")[0] == 404

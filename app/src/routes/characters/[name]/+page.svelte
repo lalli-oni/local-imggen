@@ -10,11 +10,11 @@
 	const STAGES: StageName[] = ['explore', 'converge', 'polish'];
 	const at = $derived(STAGES.indexOf(c.stage));
 
-	function show(refs: Ref[], i: number, v?: number) {
+	function show(refs: Ref[], ref: Ref, v?: number) {
 		const items = refs
 			.filter((r) => r.url)
 			.map((r) => ({ url: r.url!, title: `${r.name}${v ? ` · v${v}` : ''}`, caption: r.role }));
-		lightbox.open(items, i);
+		lightbox.open(items, Math.max(0, items.findIndex((x) => x.url === ref.url)));
 	}
 </script>
 
@@ -28,9 +28,9 @@
 
 	<div class="layout">
 		<div class="refs">
-			{#each c.refs as r, i (r.name)}
+			{#each c.refs as r (r.name)}
 				<figure>
-					<Thumb url={r.url} alt={r.name} onclick={() => show(c.refs, i)} />
+					<Thumb url={r.url} alt={r.name} onclick={() => show(c.refs, r)} />
 					<figcaption class="small">{r.name}{#if r.role}<span class="muted"> · {r.role}</span>{/if}</figcaption>
 				</figure>
 			{:else}
@@ -86,8 +86,8 @@
 					<p class="small">{v.note || v.changed.join(', ') || 'created'}</p>
 					{#if v.refs.length}
 						<div class="vrefs">
-							{#each v.refs as r, i (r.name)}
-								<Thumb url={r.url} alt="{r.name} v{v.version}" onclick={() => show(v.refs, i, v.version)} />
+							{#each v.refs as r (r.name)}
+								<Thumb url={r.url} alt="{r.name} v{v.version}" onclick={() => show(v.refs, r, v.version)} />
 							{/each}
 						</div>
 					{/if}

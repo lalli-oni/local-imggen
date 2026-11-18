@@ -42,6 +42,10 @@ STATIC_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; ch
                 ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8",
                 ".webmanifest": "application/manifest+json", ".svg": "image/svg+xml", ".png": "image/png",
                 ".ico": "image/x-icon", ".txt": "text/plain; charset=utf-8", ".woff2": "font/woff2"}
+class BadRequest(ValueError):
+    """A bad query from the client (400). Any other error, such as a broken json on disk, is a 500."""
+
+
 _RUN_NAME = re.compile(r"^(\d{6})-(.+)$")
 _LOG_LINE = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) (ok|FAILED)\b[:,]?\s*(.*)$")
 
@@ -101,7 +105,11 @@ class RunIndex:
         return s
 
     def all(self) -> list[dict]:
-        return [s for f in self.files() if (s := self.get(f))]
+        files = self.files()
+        with self._lock:  # forget runs that were deleted or moved
+            for gone in set(self._cache) - set(files):
+                del self._cache[gone]
+        return [s for f in files if (s := self.get(f))]
 
 
 def is_wallpaper(run: dict) -> bool:
@@ -120,13 +128,14 @@ def run_summary(f: Path, paths: Paths) -> dict:
                        **({"blank": True} if im.get("blank") else {}),
                        **({"scene": paths.url(d / Path(im["scene"]).name)} if im.get("scene") else {}),
                        **({"prompt": im["prompt"]} if im.get("prompt") else {})})
-    sheet = d / "index.html"
     daily = r.get("daily") if isinstance(r.get("daily"), dict) else None
     return {"id": f"{d.parent.name}/{d.name}", "date": d.parent.name,
             "time": f"{hhmmss[:2]}:{hhmmss[2:4]}:{hhmmss[4:]}" if hhmmss else "",
             "label": label, "preset": r.get("preset"), "styles": r.get("styles") or [], "prompt": r.get("prompt"),
             "count": len(images), "images": images, "transparent": bool(r.get("transparent")),
-            "sheet": paths.url(sheet) if sheet.is_file() else None,
+            # not checked here: the summary is cached per run.json, and the sheet is written after it
+            # (and rebuilt by gen sheet); run_detail checks it
+            "sheet": paths.url(d / "index.html"),
             "timing": (r.get("timing") or {}).get("summary"),
             "seconds": (r.get("timing") or {}).get("total_s"),
             "source": paths.url(r["source_image"]) if r.get("source_image") else None,
@@ -155,7 +164,8 @@ def run_detail(index: RunIndex, run_id: str) -> dict | None:
         images.append({**im, "full_prompt": meta.get("full_prompt"), "negative": meta.get("negative"),
                        "params": meta.get("params"), "created": meta.get("created"),
                        "timing": (meta.get("timing") or {}).get("total_s")})
-    return {**s, "images": images}
+    sheet = f.parent / "index.html"
+    return {**s, "images": images, "sheet": index.paths.url(sheet) if sheet.is_file() else None}
 
 
 def runs_page(index: RunIndex, q: dict) -> dict:
@@ -165,7 +175,7 @@ def runs_page(index: RunIndex, q: dict) -> dict:
         offset = max(0, int(arg("offset", "0")))
         limit = min(MAX_LIMIT, max(1, int(arg("limit", "50"))))
     except ValueError:
-        raise ValueError("offset and limit: whole numbers")
+        raise BadRequest("offset and limit: whole numbers")
     runs = index.all()
     presets = sorted({r["preset"] for r in runs if r["preset"]})
     if preset := arg("preset"):
@@ -221,7 +231,10 @@ def project_card(slug: str, paths: Paths) -> dict:
         a = list(proj["assets"].values())[-1]
         cover = paths.url(projects.project_dir(slug) / a["versions"][a["current"] - 1]["file"])
     if not cover:
-        for k, pid in sorted(ids.items(), key=lambda kv: tuple(map(int, kv[1].split(":"))), reverse=True):
+        def newest_pass_first(kv):
+            p, n = map(int, kv[1].split(":"))
+            return -p, n
+        for k, _ in sorted(ids.items(), key=newest_pass_first):
             cover = paths.url(boards._abs(k))
             break
     times = [v["at"] for v in proj["versions"]] + [p["at"] for p in proj["passes"]] + \
@@ -320,7 +333,7 @@ class Handler(boardserve.Handler):
         if parts[:1] == ["api"]:
             try:
                 data = self._api(parts[1:], parse_qs(u.query))
-            except ValueError as e:
+            except BadRequest as e:
                 return self._err(400, str(e))
             except Exception as e:  # noqa: BLE001 - a broken json on /mnt/c: say so, keep serving
                 imagegen.log(f"app serve: {u.path} failed: {type(e).__name__}: {e}")
@@ -367,7 +380,8 @@ class Handler(boardserve.Handler):
         except (ValueError, OSError):
             return self._err(404, "not found")
         if not f.is_file():
-            if Path(path).suffix:  # a missing asset is a 404, not the app
+            # a missing build file is a 404; anything else is a client-side route (names may contain dots)
+            if path.startswith("/_app/") or Path(path).suffix.lower() in STATIC_TYPES:
                 return self._err(404, "not found")
             f = self.app_dir / "index.html"  # a client-side route
         cache = "public, max-age=31536000, immutable" if "/_app/immutable/" in path else "no-cache"
