@@ -155,8 +155,8 @@ preset = "wallpaper_cast"
 ref = ""                      # CHARACTER:REF or an image path (relative = under output_dir), or a list of them (one per
                               # character, wallpaper_cast); "" = each cast character's first ref
 # wallpaper_cast: the scene pass's prompt ({stand_ins}, {scene} = theme + a literal style; named styles are added
-# by the preset) and the cast pass's edit ({replace} = "Replace the small cute cartoon creature in image 1 with lil
-# tulu, the character from image 2."). "" = the built-in ones in daily.py. stand_in = "" draws the scene empty and
+# by the preset) and the cast pass's edit ({replace} = "Replace the main character in image 1 with the
+# character from image 2."). "" = the built-in ones in daily.py. stand_in = "" draws the scene empty and
 # the edit adds the characters instead.
 scene_prompt = ""
 stand_in = "a small cute cartoon creature"

@@ -247,8 +247,8 @@ def test_default_preset_puts_the_cast_into_a_scene(tulu, comfy, on_c_drive, stub
     assert imagegen.style_text(["retro_digital"]) in scene
     assert TULU not in scene and "tulu" not in scene.lower()  # the scene only has the stand-in
     cast = cast_enc["prompt"]
-    assert cast.startswith("Replace the small cute cartoon creature in image 1 with the character from image 2. ")
-    assert "Keep everything else in image 1" in cast and "wears or holds" in cast
+    assert cast.startswith("Replace the main character in image 1 with the character from image 2. ")
+    assert "Keep everything else in image 1" in cast and "from head to feet" in cast
     scene_img = wf[cast_enc["images.image_1"][0]]  # image 1 = the scene pass's decoded image
     assert scene_img["class_type"] == "VAEDecode"
     assert wf[wf[scene_img["inputs"]["samples"][0]]["inputs"]["latent_image"][0]]["class_type"] == "EmptyLatentImage"
@@ -275,8 +275,8 @@ def test_cast_with_two_characters(tulu, comfy, daily_conf, make_image, out_dir):
     p = daily.plan(date(2026, 11, 12))
     assert [Path(r).name for r in p["refs"]] == ["v1-v1.png", "a-v1.png"]
     assert "a small cute cartoon creature on the left, another one on the right, on a beach" in p["prompt"]
-    assert ("Replace the small cute cartoon creature on the left in image 1 with the character from image 2. "
-            "Replace the small cute cartoon creature on the right in image 1 with the character from image 3.") \
+    assert ("Replace the character on the left in image 1 with the character from image 2. "
+            "Replace the character on the right in image 1 with the character from image 3.") \
         in p["cast_prompt"]
     assert p["cast"] == {"tulu": 1, "mitts": 1}
     run = imagegen.generate(p["prompt"], p["preset"], refs=p["refs"], cast_prompt=p["cast_prompt"])
@@ -319,7 +319,7 @@ def test_cast_refs_from_config(tulu, daily_conf, make_image, out_dir):
 def test_show_prints_scene_and_cast(tulu, capsys):
     assert imagegen.main(["daily", "--show", "--date", "2026-11-12"]) == 0
     out = capsys.readouterr().out
-    assert "scene:   A wide, finished" in out and "then:    Replace the small" in out and "ref:     " in out
+    assert "scene:   A wide, finished" in out and "then:    Replace the main" in out and "ref:     " in out
 
 
 def test_ref_preset_draws_from_the_cast_ref(tulu, comfy, on_c_drive, stub_calls, out_dir, daily_conf):
@@ -477,7 +477,7 @@ def test_cast_ref_paths_take_the_cast_names(tulu, daily_conf, make_image):
     daily_conf(ref=[str(make_image("t2.png"))], stand_in="A small fox", themes=["on a beach"], months={}, weekdays={},
                stand_ins={})
     p = daily.plan(date(2026, 11, 12))
-    assert p["cast_prompt"].startswith("Replace the small fox in image 1 with the character from image 2.")
+    assert p["cast_prompt"].startswith("Replace the main character in image 1 with the character from image 2.")
     assert "A small fox, on a beach" in p["prompt"] and not p["prompt"].endswith(".")
 
 
@@ -486,9 +486,9 @@ def test_own_stand_ins(tulu, daily_conf, make_image):
     daily_conf(cast=["tulu", "mitts"], themes=["on a beach"], months={}, weekdays={}, stand_ins={"tulu": "a green blob"})
     p = daily.plan(date(2026, 11, 12))
     assert "frame: a green blob on the left, a small cute cartoon creature on the right, on a beach" in p["prompt"]
-    assert p["cast_prompt"].startswith("Replace the green blob on the left in image 1 with the character from "
-                                       "image 2. Replace the small cute cartoon creature on the right in image 1 "
-                                       "with the character from image 3.")
+    assert p["cast_prompt"].startswith("Replace the character on the left in image 1 with the character from "
+                                       "image 2. Replace the character on the right in image 1 with the character "
+                                       "from image 3.")
     daily_conf(stand_ins="nope")
     with pytest.raises(ValueError, match="daily.stand_ins"):
         daily.plan(date(2026, 11, 12))

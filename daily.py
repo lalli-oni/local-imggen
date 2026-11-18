@@ -251,11 +251,12 @@ SCENE_PROMPT = ("A wide, finished wallpaper image that fills the whole frame: {s
                 "in the image is the sign text named in the scene, spelled exactly as given; no other signs, labels "
                 "or writing. Detailed background, scenery and lighting everywhere, no white or empty background, "
                 "no border")  # no full stop: generate() adds the preset's suffix and the style after it
-# The wording of the cast-only retry that put tulu in on-model, 2 of 2 (#52); a longer one about light and
-# shading, with a look-alike stand-in, left a creepy realistic Cthulhu as it was.
-CAST_PROMPT = ("{replace} Each one keeps the same place, pose and action, and the hat, glasses, clothes or anything "
-               "else it wears or holds, but its body, head, face, colours and wings look exactly like its reference "
-               "image. Keep everything else in image 1 the same.")
+# The wording of the cast-only retry that put tulu in on-model (#52), but the whole body: "keep the clothes" kept
+# the stand-in's jeans and sneakers. A longer one about light and shading, with a look-alike stand-in, left a
+# creepy realistic Cthulhu as it was.
+CAST_PROMPT = ("{replace} Each one keeps the same place, pose and action and anything it holds, but its whole body "
+               "from head to feet, face, colours and wings look exactly like its reference image, with no clothes, "
+               "legs or shoes left over from image 1. Keep everything else in image 1 the same.")
 
 
 def _name(name: str | None) -> str:
@@ -281,11 +282,11 @@ def cast_prompts(d: dict, theme: str, names: list[str | None]) -> tuple[str, str
             stand_ins = f"{looks[0]}{places[0]}" + "".join(f", another one{pl}" for pl in places[1:])
         else:
             stand_ins = ", ".join(f"{lk}{pl}" for lk, pl in zip(looks, places))
-        bare = [re.sub(r"^(an?|the)\s+", "", lk, flags=re.IGNORECASE) for lk in looks]
-        # no character names here: "the character from image 2" is what worked on tulu (#52); a name the model
-        # doesn't know (lil tulu) gave it nothing to go on
-        replace = " ".join(f"Replace the {bare[k]}{places[k]} in image 1 with the character from image {k + 2}."
-                           for k in range(n))
+        # by role, not looks: the scene never draws exactly the stand-in asked for (a man in a mascot head), and an
+        # edit told to replace "the small cute cartoon creature" then changed nothing; naming what is really there
+        # worked (#52). No character names either: a name the model doesn't know (lil tulu) gives it nothing.
+        who = ["the main character"] if n == 1 else [f"the character{places[k]}" for k in range(n)]
+        replace = " ".join(f"Replace {who[k]} in image 1 with the character from image {k + 2}." for k in range(n))
     else:
         stand_ins = "nobody in it yet"
         replace = " ".join(f"Add {_name(nm)}, the character from image {k + 2}, into the scene from image 1, "
