@@ -444,3 +444,44 @@ def test_bad_crt_knob_fails_before_queueing(comfy, monkeypatch):
 def test_doctor_styles_ok():
     import doctor
     assert doctor.check_styles(imagegen.load_config())["status"] == "ok"
+
+
+def test_crt_new_knobs_change_the_image_and_repeat(tmp_path):
+    from PIL import Image, ImageChops
+    src = Image.new("RGB", (320, 180))
+    src.putdata([(255, 200, 40) if (x // 8 + y // 8) % 2 else (20, 30, 90) for y in range(180) for x in range(320)])
+    off = {k: 0.0 for k in imagegen.CRT_DEFAULTS}
+    for knob, v in {"wobble": 4, "roll": 0.3, "noise": 0.5, "edge_blur": 3}.items():
+        a = imagegen.crt_image(src, {**off, knob: v})
+        assert a.size == src.size and ImageChops.difference(a, src).getbbox(), knob
+        assert not ImageChops.difference(a, imagegen.crt_image(src, {**off, knob: v})).getbbox(), knob  # seeded
+
+
+def test_crt_beam_spares_the_dark(tmp_path):
+    from PIL import Image
+    im = Image.new("RGB", (40, 60), (40, 40, 40))
+    im.paste((230, 230, 230), (20, 0, 40, 60))  # dark left half, bright right half
+    off = {k: 0.0 for k in imagegen.CRT_DEFAULTS}
+    lines = {**off, "lines": 6, "scanline": 0.6}
+
+    def depth(out, x):
+        col = [out.getpixel((x, y))[0] for y in range(60)]
+        return (max(col) - min(col)) / max(col)
+    flat, beam = imagegen.crt_image(im, lines), imagegen.crt_image(im, {**lines, "beam": 1})
+    assert depth(beam, 5) < depth(flat, 5) / 3  # lines fade in the dark
+    assert depth(beam, 35) > depth(flat, 35) * 0.7  # and stay in the bright
+
+
+def test_crt_curve_and_edge_bend_only_the_lines():
+    from PIL import Image, ImageChops
+    im = Image.new("RGB", (320, 180), (200, 200, 200))
+    off = {k: 0.0 for k in imagegen.CRT_DEFAULTS}
+    for knob in ("curve", "edge"):  # without scanlines there is nothing to bend: the picture stays as it was
+        assert not ImageChops.difference(imagegen.crt_image(im, {**off, knob: 0.5}), im).getbbox(), knob
+    lines = {**off, "lines": 18, "scanline": 0.5}
+    col = lambda out, x: [out.getpixel((x, y))[0] for y in range(180)]
+    flat, bent = imagegen.crt_image(im, lines), imagegen.crt_image(im, {**lines, "curve": 0.15})
+    assert col(bent, 160) != col(bent, 2) and col(flat, 160) == col(flat, 2)  # the lines bow towards the sides
+    edged = imagegen.crt_image(im, {**lines, "edge": 1})
+    depth = lambda out, x: max(col(out, x)) - min(col(out, x))
+    assert depth(edged, 2) > depth(flat, 2) > depth(edged, 160)  # stronger at the edges, weaker in the centre

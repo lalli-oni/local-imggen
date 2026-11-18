@@ -13,7 +13,7 @@ Usage:
   gen bakeoff --t2i "prompt"... [--ref IMG --ref-prompt "scene"]  # compare text-to-image models (#51)
   gen cutout PATH [--clean]                     # remove the background -> PATH-transparent.png
                                                 #   --clean: also drop stray shapes, centre on a square
-  gen crt PATH... [--lines 360 --scanline 0.22] # CRT/VHS look on finished images -> PATH-crt.png
+  gen crt PATH... [--lines 120 --scanline 0.22] # CRT/VHS look on finished images -> PATH-crt.png
   gen styles                                    # list the [styles] looks (gen "..." --style NAME|none)
   gen presets                                   # list presets
   gen recent [N]                                # last N runs
@@ -721,13 +721,20 @@ def trim(path: Path) -> Path:
 # crt: the warm look of an old CRT/VHS screen, added to a finished image (no model, no GPU). The knobs live in
 # [crt] in config.toml; CRT_DEFAULTS fills any that are missing. Sizes are for a 1080-line image and scale with it.
 CRT_DEFAULTS = {
-    "lines": 360,      # scanlines over the image height (fewer = thicker, further apart)
+    "lines": 120,      # scanlines over the image height (fewer = thicker, further apart)
     "scanline": 0.22,  # how dark the gaps between lines get, 0-1 (0 = no lines)
-    "blur": 0.6,       # softness, in px at 1080 lines (old screens were never sharp)
-    "bleed": 1.0,      # red/blue fringes, px at 1080 lines (colour bleeding sideways, like VHS)
+    "blur": 1.0,       # softness, in px at 1080 lines (old screens were never sharp)
+    "bleed": 2.0,      # red/blue fringes, px at 1080 lines (colour bleeding sideways, like VHS)
     "glow": 0.2,       # bright parts bloom into their surroundings, 0-1
     "warmth": 0.04,    # warmer colours (a bit more red, less blue), 0-0.2
     "vignette": 0.18,  # darker corners, 0-1
+    "beam": 0.7,       # lines follow brightness: 0 = even everywhere, 1 = strong in bright parts, gone in the dark
+    "wobble": 2.0,     # VHS tracking: rows drift sideways by up to this many px at 1080 lines, in slow bands
+    "roll": 0.12,      # slow brighter/darker horizontal bands, 0-1 (like a picture that never quite settles)
+    "noise": 0.25,     # tape grain, 0-1
+    "curve": 0.12,     # scanlines bow outwards like on a curved tube, 0-0.2 (the picture itself stays flat)
+    "edge": 0.8,       # lines stronger towards the edges, weaker in the centre, 0-1
+    "edge_blur": 2.5,  # the edges go soft, px of blur at 1080 lines in the corners (none in the centre)
 }
 
 
@@ -759,6 +766,8 @@ def crt_image(im, s: dict):
         r = r.point(lambda v: min(255, round(v * (1 + s["warmth"]))))
         b = b.point(lambda v: round(v * (1 - s["warmth"])))
     im = Image.merge("RGB", (r, g, b))
+    if s["wobble"] > 0:
+        im = _crt_wobble(im, s["wobble"] * k)
     if s["blur"] > 0:
         im = im.filter(ImageFilter.GaussianBlur(s["blur"] * k))
     if s["glow"] > 0:
@@ -771,10 +780,26 @@ def crt_image(im, s: dict):
         col = bytes(round(255 * (1 - s["scanline"] * (0.5 - 0.5 * math.cos(2 * math.pi * y / period))))
                     for y in range(h))
         mask = Image.frombytes("L", (1, h), col).resize((w, h), Image.NEAREST)
+        if s["curve"] > 0:
+            mask = _crt_curve(mask, s["curve"])
+        if s["edge"] > 0:  # gap depth x (1 - edge) in the centre, up to x (1 + edge) in the corners
+            e = min(1.0, s["edge"])
+            depth = _crt_radial(w, h, lambda d: (1 - e + 4 * e * min(d, 0.5)) / (1 + e))
+            mask = ImageChops.invert(ImageChops.multiply(ImageChops.invert(_crt_deepen(mask, 1 + e)), depth))
+        if s["beam"] > 0:  # gap depth scaled by brightness: (255 - mask) * ((1 - beam) + beam * luma)
+            luma = im.convert("L").point(lambda v: round(255 * (1 - s["beam"] + s["beam"] * v / 255)))
+            mask = ImageChops.invert(ImageChops.multiply(ImageChops.invert(mask), luma))
         # the lines darken by scanline/2 on average: lift the mid-tones back with a gamma curve, which
         # (unlike a gain) never clips the highlights
         gamma = 1 - s["scanline"] / 2
         im = im.point(lambda v: round(255 * (v / 255) ** gamma))
+    if s["roll"] > 0:  # two slow waves of brightness down the screen
+        col = bytes(round(255 * (1 - s["roll"] * (0.5 + 0.25 * math.sin(2 * math.pi * (y / h * 1.3 + 0.2))
+                                                  + 0.25 * math.sin(2 * math.pi * (y / h * 3.7 + 0.6)))))
+                    for y in range(h))
+        roll = Image.frombytes("L", (1, h), col).resize((w, h), Image.NEAREST)
+        mask = roll if mask is None else ImageChops.multiply(mask, roll)
+        im = im.point(lambda v: min(255, round(v * (1 + s["roll"] / 2))))  # lift back what the bands take on average
     if s["vignette"] > 0:
         gw, gh = 64, max(2, round(64 * h / w))
         grid = bytes(round(255 * (1 - s["vignette"] * min(1.0, ((x / (gw - 1) - 0.5) ** 2 + (y / (gh - 1) - 0.5) ** 2) * 2) ** 1.5))
@@ -783,9 +808,68 @@ def crt_image(im, s: dict):
         mask = vig if mask is None else ImageChops.multiply(mask, vig)
     if mask is not None:
         im = ImageChops.multiply(im, Image.merge("RGB", (mask, mask, mask)))
+    if s["noise"] > 0:  # grey grain, overlaid (mid-grey leaves a pixel as it was); seeded so a re-run matches
+        import random
+        gw, gh = max(1, w // 2), max(1, h // 2)
+        grain = Image.frombytes("L", (gw, gh), random.Random(f"crt{w}x{h}").randbytes(gw * gh))
+        grain = grain.point(lambda v: 128 + (v - 128) // 3).resize((w, h), Image.NEAREST).convert("RGB")
+        im = Image.blend(im, ImageChops.overlay(im, grain), min(1.0, s["noise"]))
+    if s["edge_blur"] > 0:
+        im = Image.composite(im.filter(ImageFilter.GaussianBlur(s["edge_blur"] * k)), im,
+                             _crt_radial(w, h, lambda d: min(1.0, d * 2) ** 2))
     if alpha is not None:
         im.putalpha(alpha)
     return im
+
+
+def _crt_radial(w: int, h: int, f):
+    """An L mask of f(d), d = squared distance from the centre (0 at the centre, 0.5 in the corners), f in 0..1."""
+    from PIL import Image
+    gw, gh = 64, max(2, round(64 * h / w))
+    grid = bytes(round(255 * f((x / (gw - 1) - 0.5) ** 2 + (y / (gh - 1) - 0.5) ** 2)) for y in range(gh) for x in range(gw))
+    return Image.frombytes("L", (gw, gh), grid).resize((w, h), Image.BILINEAR)
+
+
+def _crt_deepen(mask, f: float):
+    """The scanline mask with its gaps f times as deep (255 - (255 - v) * f, floored at 0)."""
+    return mask.point(lambda v: max(0, round(255 - (255 - v) * f)))
+
+
+def _crt_curve(im, curve: float):
+    """Barrel curve of a scanline mask: each output point (centred u, v in -1..1) samples it at
+    (u, v) * (1 + curve * r^2) / (1 + curve), so the lines bow outwards towards the edges. Outside = white (no line)."""
+    from PIL import Image
+    w, h = im.size
+    nx, ny = min(32, w), min(18, h)  # no empty cells on tiny images
+    src = lambda u, v: ((u * (f := (1 + curve * (u * u + v * v)) / (1 + curve)) + 1) * w / 2, (v * f + 1) * h / 2)
+    mesh = []
+    for j in range(ny):
+        for i in range(nx):
+            x0, x1, y0, y1 = w * i // nx, w * (i + 1) // nx, h * j // ny, h * (j + 1) // ny
+            pts = [src(2 * x / w - 1, 2 * y / h - 1) for x, y in ((x0, y0), (x0, y1), (x1, y1), (x1, y0))]
+            mesh.append(((x0, y0, x1, y1), tuple(c for p in pts for c in p)))
+    return im.transform((w, h), Image.MESH, mesh, Image.BICUBIC, fillcolor=255)
+
+
+def _crt_wobble(im, amp: float):
+    """VHS tracking: shifts each thin band of rows sideways, by up to amp px, along slow waves plus a little jitter
+    (seeded by the size, so the same image always wobbles the same way). The edges repeat the edge pixels."""
+    import math
+    import random
+    w, h = im.size
+    rng = random.Random(f"wobble{w}x{h}")
+    band = max(1, round(h / 540))
+    out = im.copy()
+    for y in range(0, h, band):
+        t = y / h
+        dx = round(amp * (0.6 * math.sin(2 * math.pi * (t * 2.3 + 0.1)) + 0.25 * math.sin(2 * math.pi * t * 11)
+                          + 0.15 * rng.uniform(-1, 1)))
+        if dx:
+            strip = im.crop((0, y, w, min(h, y + band)))
+            out.paste(strip, (dx, y))
+            edge = strip.crop((0, 0, 1, strip.height) if dx > 0 else (w - 1, 0, w, strip.height))
+            out.paste(edge.resize((abs(dx), strip.height)), (0 if dx > 0 else w + dx, y))
+    return out
 
 
 def crt_source(path: Path) -> Path:
