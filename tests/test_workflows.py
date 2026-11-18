@@ -76,3 +76,8 @@ def test_qwen_workflows_decode_tiled():
         for n in nodes:
             if n["class_type"] == "VAEDecodeTiled":
                 assert {"tile_size", "overlap", "temporal_size", "temporal_overlap"} <= set(n["inputs"]), f.name
+
+
+def test_tiled_decode_still_counts_as_decode_stage():
+    # #83: stage_of matches by substring; keep VAEDecodeTiled in the "decode" stage for timing and progress
+    assert imagegen.stage_of("VAEDecodeTiled") == "decode"
