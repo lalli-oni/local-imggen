@@ -154,7 +154,7 @@ MAX_EDITS = 4
 @mcp.tool()
 def edit(path: str, instruction: str, count: int = 1, seed: int | None = None, steps: int | None = None,
          guidance: float | None = None, preview: bool = True, preset: str = imagegen.EDIT_PRESET,
-         styles: list[str] | None = None) -> list:
+         styles: list[str] | None = None, refs: list[str] | None = None) -> list:
     """Edit an image by plain-language instruction (default FLUX.2 klein). path: Linux or Windows path.
 
     Write the instruction as what to change plus what to keep, e.g. "Make the character wave with one
@@ -169,9 +169,12 @@ def edit(path: str, instruction: str, count: int = 1, seed: int | None = None, s
     Needs the preset's opt-in models (doctor shows them as warn if missing).
     styles: list_styles() looks added to the instruction (default: the preset's own, e.g. synthwave on
     wallpaper_ref; [] = none).
+    refs: with preset "wallpaper_cast", redo only the cast pass on a saved scene (NN-seedS-scene.png): ref
+    images of the characters, as image 2, 3...; e.g. "Replace the main character in image 1 with the character
+    from image 2." ({images} = "image 2" / "images 2 and 3").
     """
     kwargs = dict(path=path, instruction=instruction, count=min(max(1, count), MAX_EDITS), seed=seed,
-                  steps=steps, guidance=guidance, preset=preset, styles=styles)
+                  steps=steps, guidance=guidance, preset=preset, styles=styles, refs=refs)
     return _start(imagegen.edit, kwargs, preview)
 
 

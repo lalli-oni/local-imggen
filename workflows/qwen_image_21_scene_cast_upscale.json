@@ -9,7 +9,7 @@
   "8": {"class_type": "VAEDecode", "inputs": {"samples": ["7", 0], "vae": ["4", 0]}},
   "15": {"class_type": "SaveImage", "inputs": {"filename_prefix": "imagegen-scene", "images": ["8", 0]}},
   "11": {"class_type": "LoadImage", "inputs": {"image": "{{ref}}"}},
-  "16": {"class_type": "QwenImage21Cache", "inputs": {"model": ["1", 0], "device": "auto", "dtype": "default"}, "_meta": {"title": "the cast pass's own KV cache: sharing node 2's with the scene pass left the scene unchanged (#52)"}},
+  "16": {"class_type": "QwenImage21Cache", "inputs": {"model": ["1", 0], "device": "auto", "dtype": "default"}, "_meta": {"title": "the cast pass's own KV cache, kept apart from the scene pass's (#52)"}},
   "12": {"class_type": "TextEncodeQwenImage21", "inputs": {"clip": ["3", 0], "vae": ["4", 0], "prompt": "{{cast_prompt}}", "negative_prompt": "", "resolution": "{{cast_resolution}}", "images.image_1": ["8", 0], "images.image_2": ["11", 0]}},
   "13": {"class_type": "KSampler", "inputs": {"seed": "{{cast_seed}}", "steps": "{{cast_steps}}", "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0, "model": ["16", 0], "positive": ["12", 0], "negative": ["12", 1], "latent_image": ["12", 2]}},
   "14": {"class_type": "VAEDecode", "inputs": {"samples": ["13", 0], "vae": ["4", 0]}},

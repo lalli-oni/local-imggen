@@ -107,9 +107,10 @@ def find_refs(d: dict) -> list[tuple[str | None, Path]]:
     """A cast preset's ref images as (character or None, path): [daily] ref's entries, else each cast
     character's first ref."""
     cast = _pool(d["cast"])
-    if d["refs"]:  # a plain path is the cast character in the same place, for the edit's wording
+    if d["refs"]:  # a plain path is the next cast character no CHARACTER:REF entry names, for the edit's wording
         found = [_resolve_ref(r) for r in d["refs"]]
-        return [(name or (cast[k] if k < len(cast) else None), path) for k, (name, path) in enumerate(found)]
+        free = iter([c for c in cast if c not in {name for name, _ in found if name}])
+        return [(name or next(free, None), path) for name, path in found]
     if not cast:
         raise ValueError(f"[daily] preset '{d['preset']}' needs the cast's ref images: set cast or ref")
     return [(name, _char_ref(name)) for name in cast]
@@ -294,7 +295,8 @@ def cast_prompts(d: dict, theme: str, names: list[str | None]) -> tuple[str, str
                            f"busy with what happens there." for k, nm in enumerate(names))
     out = []
     for key, default, fills in (("scene_prompt", SCENE_PROMPT, {"scene": scene, "stand_ins": stand_ins}),
-                                ("cast_prompt", CAST_PROMPT, {"replace": replace, "scene": scene})):
+                                ("cast_prompt", CAST_PROMPT, {"replace": replace, "scene": scene,
+                                                                "images": imagegen.image_list(n)})):
         tmpl = str(d[key] or "").strip() or default
         try:
             out.append(tmpl.format(**fills))
@@ -311,19 +313,18 @@ def plan(day: date | None = None, conf: dict | None = None) -> dict:
     theme, where = pick_theme(d, day, recent_themes(conf, day, max(1, int(d["no_repeat_days"])) - 1))
     props = pick_props(d, day)
     scene = with_props(theme, props)
-    prompt, used = compose(d, scene)
     ref, refs, cast_prompt = None, [], None
-    if d["uses_ref"]:
-        ref = str(find_ref(d))
-        prompt = ref_prompt(d, scene, used)
-    elif d["casting"]:
+    if d["casting"]:  # the refs are the cast: no descriptions needed, and only the characters with a ref show
+        import characters
         found = find_refs(d)
-        for name, _ in found:  # a CHAR:REF entry for a character outside the cast still shows it
-            if name and name not in used:
-                import characters
-                used[name] = characters.load(name)["version"]
+        used = {name: characters.load(name)["version"] for name, _ in found if name}
         refs = [str(path) for _, path in found]
         prompt, cast_prompt = cast_prompts(d, scene, [name for name, _ in found])
+    else:
+        prompt, used = compose(d, scene)
+        if d["uses_ref"]:
+            ref = str(find_ref(d))
+            prompt = ref_prompt(d, scene, used)
     return {"date": day.isoformat(), "theme": theme, "from": where, "props": props, "prompt": prompt, "cast": used,
             "styles": d["styles"], "gen_styles": [] if ref else d["styles"],  # with a ref: in the prompt
             "post": imagegen.style_post(d["styles"], conf) if ref else [],  # ...so their post steps come from here

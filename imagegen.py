@@ -1033,12 +1033,12 @@ def _upstream(wf: dict, ids) -> set:
     return seen
 
 
-def _uncached(wf: dict, n: int) -> dict:
+def _uncached(wf: dict, n: int, scene_too: bool = False) -> dict:
     """The same graph with an extra input on its seed node(s), which ComfyUI ignores when running the node but
     counts in its cache key: re-queued as it was, every node would be a cache hit and give the black image back.
-    A cast graph's scene pass (#52) stays cached: only the edit is redrawn."""
+    A cast graph's scene pass (#52) stays cached, so only the edit is redrawn, unless the scene is black too."""
     wf = json.loads(json.dumps(wf))
-    keep = _upstream(wf, scene_nodes(wf))
+    keep = set() if scene_too else _upstream(wf, scene_nodes(wf))
     nodes = [nd for nid, nd in wf.items() if {"seed", "noise_seed"} & set(nd.get("inputs", {})) and nid not in keep] \
         or list(wf.values())
     for nd in nodes:
@@ -1134,6 +1134,8 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
     p = dict(presets[preset])
     count = max(1, int(count))
     styles_arg = styles
+    if styles is None and edit and refs:
+        styles = []  # gen edit SCENE "Replace ..." --ref (#52): an instruction, not a scene: no look, no style post
     styles = check_styles(p.get("styles", []) if styles is None else styles, conf)
     post = style_post(styles, conf, p.get("post", []) + list(post or []))
     if "crt" in post:
@@ -1150,7 +1152,7 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
         if ignored:  # the Kontext graph has none of these (cfg is fixed at 1, size follows the source)
             raise ValueError(f"edit does not take {', '.join(ignored)}")
         if "edit_workflow" not in p:
-            edit_presets = [n for n, q in presets.items() if "edit_workflow" in q]
+            edit_presets = [n for n, q in presets.items() if "edit_workflow" in q and not is_cast_preset(q)]
             raise ValueError(f"preset '{preset}' can't edit; edit presets: {', '.join(edit_presets) or 'none'}")
     elif "workflow" not in p:
         raise ValueError(f"preset '{preset}' is edit-only: use gen edit IMAGE \"instruction\"")
@@ -1209,9 +1211,7 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
     base_seed = seed if seed is not None else random.randrange(MAX_SEED)
     cast_edit = edit and bool(ref_paths)  # gen edit SCENE "Replace ..." --ref: only the cast pass (#52)
     if cast_edit:
-        prompt = prompt.replace("{images}", image_list(len(ref_paths)))
-        if styles_arg is None:
-            styles = []  # an instruction, not a scene: the preset's look and suffix stay out unless asked for
+        prompt = prompt.replace("{images}", image_list(len(ref_paths)))  # (styles: [] already, unless given)
     look = style_text(styles, conf)
 
     def dress(q: str) -> str:  # the preset suffix, then the styles
@@ -1311,7 +1311,8 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
                     log(f"  seed {s} came out blank (black), rendering it again (ComfyUI may be short of memory)")
                     retry = None
                     try:  # best effort: if the re-render fails, keep the blank image and the rest of the run
-                        retry = comfy.queue(_uncached(wf, attempt), front=True)  # next, not behind this run
+                        scene_blank = any(is_blank(png) for _, png in side)
+                        retry = comfy.queue(_uncached(wf, attempt, scene_blank), front=True)  # next, not behind
                         jobs[i - 1] = (s, retry, time.time(), wf)  # so a stop (Ctrl-C) cancels it
                         if _LIVE is not None:
                             _LIVE.forget(pid)  # the blank job no longer counts as a finished image

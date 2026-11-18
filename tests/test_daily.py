@@ -473,6 +473,15 @@ def test_blank_image_never_becomes_the_wallpaper(tulu, comfy, on_c_drive, stub_c
     assert "every image came out blank" in _log_lines(out_dir)[0]
 
 
+def test_cast_refs_mixed_with_char_refs_and_no_description(tulu, daily_conf, make_image):
+    # a path takes the cast name no CHARACTER:REF entry has; a cast preset needs refs, not descriptions
+    characters.new("mitts", "Mitts the cat", refs={"a": str(make_image("cat.png"))})
+    daily_conf(cast=["tulu", "mitts"], ref=["mitts:a", str(make_image("t2.png"))], themes=["on a beach"],
+               months={}, weekdays={}, stand_ins={}, cast_prompt="{replace} Put {images} in.")
+    p = daily.plan(date(2026, 11, 12))
+    assert set(p["cast"]) == {"tulu", "mitts"} and p["cast_prompt"].endswith("Put images 2 and 3 in.")
+
+
 def test_cast_ref_paths_take_the_cast_names(tulu, daily_conf, make_image):
     daily_conf(ref=[str(make_image("t2.png"))], stand_in="A small fox", themes=["on a beach"], months={}, weekdays={},
                stand_ins={})

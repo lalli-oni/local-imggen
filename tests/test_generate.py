@@ -343,6 +343,9 @@ def test_cast_blank_retry_redraws_only_the_edit(comfy, make_image):
     retry = comfy.workflows()[1]
     samplers = [(nid, "imagegen_retry" in n["inputs"]) for nid, n in retry.items() if n["class_type"] == "KSampler"]
     assert dict(samplers) == {"7": False, "13": True}  # the scene (7) comes from ComfyUI's cache
+    # a black scene (Qwen NaNs in the first pass) is redrawn too: from the cache it would stay black
+    redo = imagegen._uncached(comfy.workflows()[0], 1, scene_too=True)
+    assert all("imagegen_retry" in n["inputs"] for n in redo.values() if n["class_type"] == "KSampler")
 
 
 def test_sheet_lists_a_shared_scene_once(comfy, make_image):
@@ -367,12 +370,17 @@ def test_cast_edit_reruns_only_the_cast_pass(comfy, make_image):
     [run] = imagegen.recent_runs(1)
     meta = json.loads((Path(run["run_dir"]) / "run.json").read_text())
     assert meta["source_image"] == str(scene) and meta["refs"][0]["path"] == str(ref) and meta["edit"] is True
+    assert _node(wf, "KSampler")["seed"] == imagegen.cast_seed(4)  # -s S redoes the daily's own cast pass
+    assert meta["styles"] == [] and not list(Path(run["run_dir"]).glob("*-crt.png"))  # no style post steps
     with pytest.raises(ValueError, match="give it ref images"):
         imagegen.edit(str(scene), "x", preset="wallpaper_cast")
+    with pytest.raises(ValueError, match="can't edit") as e:
+        imagegen.edit(str(scene), "x", preset="wallpaper")
+    assert "wallpaper_cast" not in str(e.value)
 
 
 def test_cast_pass_has_its_own_qwen_cache():
-    # #52: with the scene's QwenImage21Cache (a KV cache) shared, the cast pass gave back the scene unchanged
+    # #52: the cast pass keeps its own QwenImage21Cache (a KV cache), apart from the scene pass's
     wf = json.loads((imagegen.ROOT / "workflows" / "qwen_image_21_scene_cast_upscale.json").read_text())
     scene, cast = wf["7"]["inputs"]["model"][0], wf["13"]["inputs"]["model"][0]
     assert scene != cast and wf[cast]["class_type"] == wf[scene]["class_type"] == "QwenImage21Cache"
