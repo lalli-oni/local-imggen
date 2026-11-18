@@ -132,13 +132,20 @@ post = ["crt"]                # a style's post steps run after the preset's
 # The crt post step (gen crt IMAGE... tries other values on finished images, without generating again).
 # Sizes are for a 1080-line image and scale with it (a 4K wallpaper gets twice the px).
 [crt]
-lines = 360        # scanlines over the image height (fewer = thicker, further apart; old TVs had ~480)
+lines = 120        # scanlines over the image height (fewer = thicker, further apart; old TVs had ~480)
 scanline = 0.22    # how dark the gaps between lines get, 0-1 (0 = no lines)
-blur = 0.6         # softness in px
-bleed = 1.0        # red/blue colour fringes sideways in px, like VHS
+blur = 1.0         # softness in px
+bleed = 2.0        # red/blue colour fringes sideways in px, like VHS
 glow = 0.2         # bright parts bloom into their surroundings, 0-1
 warmth = 0.04      # a bit more red, less blue, 0-0.2
 vignette = 0.18    # darker corners, 0-1
+beam = 0.7         # lines follow brightness: 0 = even everywhere, 1 = strong in bright parts, gone in the dark
+wobble = 2.0       # VHS tracking: rows drift sideways by up to this many px, in slow bands
+roll = 0.12        # slow brighter/darker horizontal bands, 0-1
+noise = 0.25       # tape grain, 0-1
+curve = 0.06       # scanlines bow outwards like on a curved tube, 0-0.2 (the picture stays flat)
+edge = 0.5         # lines stronger towards the edges, weaker in the centre, 0-1
+edge_blur = 1.5    # the edges go soft, px of blur in the corners (none in the centre)
 
 [styles.storybook]
 description = "The old daily look: cosy, soft, whimsical"

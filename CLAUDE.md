@@ -23,7 +23,8 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   text; with a ref it goes into ref_prompt's {scene} (and `styles=[]`, its styles' post steps via `post=`), text-only
   presets get it from generate(). A style's `post = [...]` steps run after the preset's (`style_post`).
 - `crt` post step: the CRT/VHS look on a finished image, Pillow only (soft scanlines, blur, colour bleed, glow, warmth,
-  vignette; knobs in `[crt]`, `CRT_DEFAULTS`, sizes per 1080 lines). Writes `<stem>-crt.png` and keeps the clean PNG;
+  vignette, #74: lines that follow brightness (`beam`), VHS `wobble`, `roll` bands, `noise` grain, lines bowed (`curve`)
+  and stronger at the edges (`edge`), soft corners (`edge_blur`); knobs in `[crt]`, `CRT_DEFAULTS`, sizes per 1080 lines). Writes `<stem>-crt.png` and keeps the clean PNG;
   on a -crt.png it restarts from the clean one. `gen crt PATH... [--lines N ...]` re-tunes finished images.
   `retro_digital` uses it. `[daily.props]` (category = [items]) + `props_per_day`: date-picked 80s items, one per
   category, added to the theme ("..., with X and Y in the scene"); run.json `daily.props`.
