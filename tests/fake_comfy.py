@@ -338,7 +338,7 @@ class _WS:
             try:
                 self.wfile.write(head + data)
                 self.wfile.flush()
-            except OSError:
+            except (OSError, ValueError):  # ValueError: the file is closed, the test's client has gone (#72)
                 pass
 
     def serve(self) -> None:
