@@ -79,6 +79,16 @@ def test_other_rocm_torch_is_a_warning(comfy_venv):
     assert doctor.check_torch()["status"] == "warn"
 
 
+@pytest.mark.parametrize("torch, status", [
+    ("2.9.1+rocm7.2.0.lw.git7e1940d4", "ok"),  # AMD's build tag on the expected wheel (#76)
+    ("2.9.2+rocm7.2.0", "warn"),
+    ("2.9.1+rocm7.2.01", "warn"),  # a different local version, not a build tag
+])
+def test_torch_build_tag(comfy_venv, torch, status):
+    comfy_venv(torch=torch, torchvision="0.24.0+rocm7.2.0", torchaudio="2.9.0+rocm7.2.0")
+    assert doctor.check_torch()["status"] == status
+
+
 def test_missing_venv(monkeypatch, tmp_path):
     monkeypatch.setattr(doctor, "COMFY_VENV_PY", tmp_path / "nope")
     assert doctor.check_torch()["status"] == "fail"
