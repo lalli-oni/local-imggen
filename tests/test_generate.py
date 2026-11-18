@@ -271,7 +271,7 @@ def test_cast_preset_runs_scene_then_cast_in_one_job(comfy, make_image, out_dir)
     scene_enc, cast_enc = (n["inputs"] for n in wf.values() if n["class_type"] == "TextEncodeQwenImage21")
     assert scene_enc["prompt"].startswith("a taco truck on the moon, wallpaper")
     assert cast_enc["prompt"].startswith("Put the characters from images 2 and 3 into the scene from image 1")
-    assert wf[cast_enc["images.image_1"][0]]["class_type"] == "VAEDecode"
+    assert wf[cast_enc["images.image_1"][0]]["class_type"] == "VAEDecodeTiled"
     ups = [wf[cast_enc[f"images.image_{k}"][0]]["inputs"]["image"] for k in (2, 3)]
     assert len(set(ups)) == 2 and set(ups) == set(comfy.uploads)
     assert Image.open(io.BytesIO(comfy.uploads[ups[0]])).size == imagegen.kontext_size(600, 800)

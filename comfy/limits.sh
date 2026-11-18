@@ -59,7 +59,7 @@ restart() { sudo systemctl daemon-reload && sudo systemctl restart comfyui && wa
 cmd_status() {
   if [ -f "$DROPIN" ]; then echo "Limits: ON ($DROPIN)"; else echo "Limits: off"; fi
   echo "ExecStart: $(effective_exec)"
-  systemctl show -p Nice -p CPUWeight -p IOWeight comfyui | sed 's/^/  /'
+  systemctl show -p Nice -p CPUWeight -p IOWeight -p MemoryHigh -p Environment comfyui | sed 's/^/  /'
 }
 
 cmd_on() {

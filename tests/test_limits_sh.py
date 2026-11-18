@@ -51,12 +51,15 @@ def test_on_with_yes_flag(sh, stub_calls):
     assert r.code == 0, r.out
     text = sh.dropin.read_text()
     assert "Nice=10" in text and "CPUWeight=20" in text
-    assert f"ExecStart=\nExecStart={BASE} --reserve-vram 2 --disable-smart-memory" in text
+    assert f"ExecStart=\nExecStart={BASE} --reserve-vram 3 --disable-smart-memory" in text
     assert "ComfyUI is up" in r.out
     calls = stub_calls()
     assert "sudo systemctl restart comfyui" in calls and "sudo systemctl daemon-reload" in calls
+    # #63: the ROCm allocator setting and the soft RAM ceiling
+    assert "Environment=PYTORCH_HIP_ALLOC_CONF=expandable_segments:True" in text and "MemoryHigh=21G" in text
     st = sh.run("status")
-    assert "Limits: ON" in st.out and "--reserve-vram 2" in st.out and "Nice=10" in st.out
+    assert "MemoryHigh=21G" in st.out and "PYTORCH_HIP_ALLOC_CONF" in st.out
+    assert "Limits: ON" in st.out and "--reserve-vram 3" in st.out and "Nice=10" in st.out
 
 
 def test_on_twice_never_stacks_flags(sh):
