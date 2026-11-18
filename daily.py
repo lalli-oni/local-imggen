@@ -251,10 +251,11 @@ SCENE_PROMPT = ("A wide, finished wallpaper image that fills the whole frame: {s
                 "in the image is the sign text named in the scene, spelled exactly as given; no other signs, labels "
                 "or writing. Detailed background, scenery and lighting everywhere, no white or empty background, "
                 "no border")  # no full stop: generate() adds the preset's suffix and the style after it
-CAST_PROMPT = ("{replace} Each character keeps the place, pose, size and action of the creature it replaces, and "
-               "anything it wears or holds (hats, glasses, clothes), and is lit and shaded like the rest of the "
-               "scene, with its shadows and reflections, not like a flat sticker; its body, face, colours and "
-               "proportions match its reference image exactly. Keep everything else in image 1 the same.")
+# The wording of the cast-only retry that put tulu in on-model, 2 of 2 (#52); a longer one about light and
+# shading, with a look-alike stand-in, left a creepy realistic Cthulhu as it was.
+CAST_PROMPT = ("{replace} Each one keeps the same place, pose and action, and the hat, glasses, clothes or anything "
+               "else it wears or holds, but its body, head, face, colours and wings look exactly like its reference "
+               "image. Keep everything else in image 1 the same.")
 
 
 def _name(name: str | None) -> str:
@@ -281,8 +282,10 @@ def cast_prompts(d: dict, theme: str, names: list[str | None]) -> tuple[str, str
         else:
             stand_ins = ", ".join(f"{lk}{pl}" for lk, pl in zip(looks, places))
         bare = [re.sub(r"^(an?|the)\s+", "", lk, flags=re.IGNORECASE) for lk in looks]
-        replace = " ".join(f"Replace the {bare[k]}{places[k]} in image 1 "
-                           f"with {_name(nm)}, the character from image {k + 2}." for k, nm in enumerate(names))
+        # no character names here: "the character from image 2" is what worked on tulu (#52); a name the model
+        # doesn't know (lil tulu) gave it nothing to go on
+        replace = " ".join(f"Replace the {bare[k]}{places[k]} in image 1 with the character from image {k + 2}."
+                           for k in range(n))
     else:
         stand_ins = "nobody in it yet"
         replace = " ".join(f"Add {_name(nm)}, the character from image {k + 2}, into the scene from image 1, "

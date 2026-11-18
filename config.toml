@@ -220,11 +220,10 @@ setting = ["a glowing wireframe grid floor stretching to the horizon", "palm tre
            "a lava lamp", "a mall fountain with pennies", "a checkerboard floor", "a mirror ball", "a pink flamingo lawn ornament",
            "a heart-shaped waterbed", "a shag pile carpet", "wood-panelled walls"]
 
-# wallpaper_cast: a rough look-alike per cast character for the scene pass, so the edit only fixes the details
-# to match the ref (a generic "cute creature" was left as it was in the first run on tulu). Not a full description:
-# the scene model draws it in the scene's own style.
+# wallpaper_cast: a stand-in per cast character instead of stand_in (CHARACTER = "..."). Keep it generic: a tulu
+# look-alike ("chibi Cthulhu with face tentacles...") came out as a creepy realistic Cthulhu in the house style,
+# and the edit then left it as it was. The generic cute creature was swapped for tulu fine.
 [daily.stand_ins]
-tulu = "a small chubby green chibi Cthulhu creature with a huge round head, four short face tentacles, big amber eyes and tiny bat wings"
 
 # Optional: replaces `themes` on a day. The most specific entry wins: "YYYY-MM-DD", "MM-DD", month, weekday.
 # Movable feasts (Easter-based, Þorri) change date every year: add them as "YYYY-MM-DD", one year at a time.
