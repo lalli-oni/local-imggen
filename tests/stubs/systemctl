@@ -31,7 +31,7 @@ case "$1" in
       cmd=$(setting ExecStart "$base")
       [ -n "$cmd" ] && echo "{ path=${cmd%% *} ; argv[]=$cmd ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }"
     else
-      for k in Nice CPUWeight IOWeight; do
+      for k in Nice CPUWeight IOWeight MemoryHigh Environment; do
         case "$*" in *"-p $k"*) echo "$k=$(setting "$k" "$([ $k = Nice ] && echo 0 || echo '[not set]')")" ;; esac
       done
     fi ;;

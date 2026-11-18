@@ -6,6 +6,6 @@
   "6": {"class_type": "TextEncodeQwenImage21", "inputs": {"clip": ["3", 0], "prompt": "{{prompt}}", "negative_prompt": "{{negative}}", "resolution": "{{resolution}}"}},
   "10": {"class_type": "EmptyLatentImage", "inputs": {"width": "{{width}}", "height": "{{height}}", "batch_size": 1}},
   "7": {"class_type": "KSampler", "inputs": {"seed": "{{seed}}", "steps": "{{steps}}", "cfg": "{{cfg}}", "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0, "model": ["2", 0], "positive": ["6", 0], "negative": ["6", 1], "latent_image": ["10", 0]}},
-  "8": {"class_type": "VAEDecode", "inputs": {"samples": ["7", 0], "vae": ["4", 0]}},
+  "8": {"class_type": "VAEDecodeTiled", "inputs": {"samples": ["7", 0], "vae": ["4", 0], "tile_size": 512, "overlap": 64, "temporal_size": 64, "temporal_overlap": 8}},
   "9": {"class_type": "SaveImage", "inputs": {"filename_prefix": "imagegen", "images": ["8", 0]}}
 }

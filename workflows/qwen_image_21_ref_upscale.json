@@ -6,7 +6,7 @@
   "5": {"class_type": "LoadImage", "inputs": {"image": "{{image}}"}},
   "6": {"class_type": "TextEncodeQwenImage21", "inputs": {"clip": ["3", 0], "vae": ["4", 0], "prompt": "{{prompt}}", "negative_prompt": "", "resolution": "{{resolution}}", "images.image_1": ["5", 0]}},
   "7": {"class_type": "KSampler", "inputs": {"seed": "{{seed}}", "steps": "{{steps}}", "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0, "model": ["2", 0], "positive": ["6", 0], "negative": ["6", 1], "latent_image": ["6", 2]}},
-  "8": {"class_type": "VAEDecode", "inputs": {"samples": ["7", 0], "vae": ["4", 0]}},
+  "8": {"class_type": "VAEDecodeTiled", "inputs": {"samples": ["7", 0], "vae": ["4", 0], "tile_size": 512, "overlap": 64, "temporal_size": 64, "temporal_overlap": 8}},
   "20": {"class_type": "UpscaleModelLoader", "inputs": {"model_name": "{{upscale_model}}"}},
   "21": {"class_type": "ImageUpscaleWithModel", "inputs": {"upscale_model": ["20", 0], "image": ["8", 0]}},
   "22": {"class_type": "ImageScale", "inputs": {"image": ["21", 0], "upscale_method": "lanczos", "width": "{{target_width}}", "height": "{{target_height}}", "crop": "center"}},

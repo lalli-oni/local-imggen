@@ -59,3 +59,20 @@ def test_preset_post_steps_exist():
     for name, p in imagegen.list_presets().items():
         for step in p.get("post", []):
             assert step in imagegen.POST, f"{name}: unknown post step {step}"
+
+
+def test_qwen_workflows_decode_tiled():
+    # #63: a one-shot VAEDecode of a big Qwen image hit "HSA exception ... alloc failed" on tulu; tiles keep the peak small.
+    # The video-style VAE ignores the temporal knobs for stills, but the node requires them.
+    import json
+    from conftest import REPO
+    files = sorted((REPO / "workflows").glob("qwen_image_21_*.json"))
+    assert files
+    for f in files:
+        nodes = json.loads(f.read_text()).values()
+        classes = [n["class_type"] for n in nodes]
+        assert "VAEDecode" not in classes, f.name
+        assert "VAEDecodeTiled" in classes, f.name
+        for n in nodes:
+            if n["class_type"] == "VAEDecodeTiled":
+                assert {"tile_size", "overlap", "temporal_size", "temporal_overlap"} <= set(n["inputs"]), f.name

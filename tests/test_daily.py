@@ -250,7 +250,7 @@ def test_default_preset_puts_the_cast_into_a_scene(tulu, comfy, on_c_drive, stub
     assert cast.startswith("Replace the main character in image 1 with the character from image 2. ")
     assert "Keep everything else in image 1" in cast and "from head to feet" in cast
     scene_img = wf[cast_enc["images.image_1"][0]]  # image 1 = the scene pass's decoded image
-    assert scene_img["class_type"] == "VAEDecode"
+    assert scene_img["class_type"] == "VAEDecodeTiled"
     assert wf[wf[scene_img["inputs"]["samples"][0]]["inputs"]["latent_image"][0]]["class_type"] == "EmptyLatentImage"
     loader = cast_enc["images.image_2"][0]
     up = wf[loader]["inputs"]["image"]
