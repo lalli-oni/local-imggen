@@ -466,7 +466,8 @@ cfg = 1.0
 # (each new pass moves on along the list). needs_text: the stage won't run without typed text.
 [stages.explore]
 mode = "text"
-preset = "draft"              # cheap and fast; off-model is fine here, you're after a direction
+preset = "klein"              # tapir test 2026-11-18: 8/8 klein drafts read as the animal asked for, SDXL draft
+                              # drew pigs, cows and anteaters; qwen also good but ~5 min an image
 count = 8
 
 [stages.converge]

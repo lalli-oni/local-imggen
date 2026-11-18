@@ -13,7 +13,7 @@ So each stage generates its own way, and the board has one button per stage.
 
 | Stage | Goal | What its Generate runs (`[stages.*]` in config.toml) | Triage |
 |---|---|---|---|
-| **explore** | a rough direction | text only: the character description + project prompt, `draft` preset, 8 images | quick picks, notes on parts ("these wings") |
+| **explore** | a rough direction | text only: the character description + project prompt, `klein` preset (fast, follows the description), 8 images | quick picks, notes on parts ("these wings") |
 | **converge** | on-model variety | klein edits of one image, a different idea per image ("sitting down", "seen from the side"), 4 images | promote the best to the character ref |
 | **polish** | fix details | a klein edit with one fix you type ("remove the bump on the right elbow"), 2 images | compare with the ref, promote or drop |
 

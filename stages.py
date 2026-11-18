@@ -24,7 +24,7 @@ MODES = ("text", "img2img", "edit")
 
 # What each stage runs when config.toml has no [stages.NAME] (or leaves a key out).
 DEFAULTS = {
-    "explore": {"mode": "text", "preset": "draft", "count": 8},
+    "explore": {"mode": "text", "preset": "klein", "count": 8},
     "converge": {"mode": "edit", "preset": "klein", "count": 4,
                  "instruction": "The same character with the same design, proportions and colours, {text}. "
                                 "Plain light background, only this one character.",

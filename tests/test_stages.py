@@ -61,7 +61,7 @@ def test_project_stage_in_summary(tulu, out_dir):
     assert projects.summary("fjord")["stage"] is None
     s = projects.summary("tulu")["stage"]
     assert s["character"] == "tulu" and s["stage"] == "explore" and s["ref"] == "main"
-    assert s["stages"]["explore"] == {"mode": "text", "preset": "draft", "count": 8,
+    assert s["stages"]["explore"] == {"mode": "text", "preset": "klein", "count": 8,
                                       "needs_text": False, "needs_source": False}
     assert s["stages"]["polish"]["needs_text"] and s["stages"]["converge"]["mode"] == "edit"
     characters.set_state("tulu", stage="polish")
@@ -86,7 +86,7 @@ def test_settings_come_from_config(tulu, monkeypatch):
 def test_explore_is_text_with_the_stage_preset(tulu, comfy):
     projects.set_state("tulu", params={"steps": 40})  # the project's params are for its own preset
     run = stages.run_stage("tulu", seed=5)
-    assert run["preset"] == "draft" and len(run["images"]) == 8
+    assert run["preset"] == "klein" and len(run["images"]) == 8
     wf = comfy.workflows()[0]
     assert TULU in _texts(wf) and '"steps": 40' not in _texts(wf)
     assert not comfy.uploads  # no source image
