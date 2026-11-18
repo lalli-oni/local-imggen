@@ -20,8 +20,20 @@ jobs:
         run: |
           pip install -r requirements-dev.txt -r requirements-browser.txt
           python -m playwright install --with-deps chromium
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - name: Viewer app (#82): type check and build
+        working-directory: app
+        run: |
+          npm ci
+          npm run check
+          npm run build
       - name: ./test.sh
         env:
           IMAGEGEN_TEST_PYTHON: python
           IMAGEGEN_REQUIRE_BROWSER: "1"
+          IMAGEGEN_REQUIRE_APP: "1"  # the app's browser tests run against the build above
         run: ./test.sh
