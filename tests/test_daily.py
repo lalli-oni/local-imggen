@@ -530,3 +530,11 @@ def test_date_preview_does_not_use_up_the_theme_today(tulu, daily_conf, make_run
     conf = imagegen.load_config()
     assert daily.recent_themes(conf, today + timedelta(days=1), 6) == {}  # not used in the week before tomorrow
     assert daily.recent_themes(conf, far + timedelta(days=1), 6) == {"a": far}  # but it counts on its own day
+
+
+def test_run_made_far_ahead_still_counts(tulu, daily_conf, make_run):
+    """Made 12 days before the day it is for: its folder is older than the window, but it still counts."""
+    daily_conf(themes=["a", "b"], months={}, weekdays={}, no_repeat_days=7)
+    make_run(n=1, preset="wallpaper", prompt="x", date="2026-11-18", daily={"theme": "a", "date": "2026-11-30"})
+    conf = imagegen.load_config()
+    assert daily.recent_themes(conf, date(2026, 12, 1), 6) == {"a": date(2026, 11, 30)}

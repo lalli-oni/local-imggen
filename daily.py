@@ -162,13 +162,16 @@ def recent_themes(conf: dict, day: date, days: int) -> dict[str, date]:
     root = Path(conf["output_dir"]).expanduser()
     lo, hi = day - timedelta(days=days), day - timedelta(days=1)
     seen: list[tuple[date, str]] = []
-    # folders are keyed by the day the run happened: a run for `day` can sit in any folder up to today
-    for n in range((max(hi, date.today()) - min(lo, date.today())).days + 1):
-        folder = min(lo, date.today()) + timedelta(days=n)
-        for f in sorted((root / folder.isoformat()).glob("*/run.json")):
+    # a run for `day` can sit in any date folder (made in advance or backfilled with --date), so look at all of them
+    for folder in sorted(root.glob("????-??-??")):
+        try:
+            fdate = date.fromisoformat(folder.name)
+        except ValueError:
+            continue
+        for f in sorted(folder.glob("*/run.json")):
             try:
                 meta = (json.loads(f.read_text()).get("daily") or {})
-                theme, used = meta.get("theme"), folder
+                theme, used = meta.get("theme"), fdate
                 if isinstance(meta.get("date"), str):
                     used = date.fromisoformat(meta["date"])
             except (OSError, ValueError, AttributeError):
