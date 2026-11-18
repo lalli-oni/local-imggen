@@ -725,9 +725,9 @@ CRT_DEFAULTS = {
     "wobble": 2.0,     # VHS tracking: rows drift sideways by up to this many px at 1080 lines, in slow bands
     "roll": 0.12,      # slow brighter/darker horizontal bands, 0-1 (like a picture that never quite settles)
     "noise": 0.25,     # tape grain, 0-1
-    "curve": 0.06,     # scanlines bow outwards like on a curved tube, 0-0.2 (the picture itself stays flat)
-    "edge": 0.5,       # lines stronger towards the edges, weaker in the centre, 0-1
-    "edge_blur": 1.5,  # the edges go soft, px of blur at 1080 lines in the corners (none in the centre)
+    "curve": 0.12,     # scanlines bow outwards like on a curved tube, 0-0.2 (the picture itself stays flat)
+    "edge": 0.8,       # lines stronger towards the edges, weaker in the centre, 0-1
+    "edge_blur": 2.5,  # the edges go soft, px of blur at 1080 lines in the corners (none in the centre)
 }
 
 
