@@ -179,6 +179,8 @@ DOWN_LIMIT = 90  # s of refused/dropped connections before a job counts as lost 
 HANG_AFTER = 1200  # s without a single websocket frame while ComfyUI says our job is running: its worker is
 # dead (#51: an HSA alloc failure left the server answering and queueing, but nothing ran for hours)
 SLOW_TIMEOUT = 300  # s for requests a busy ComfyUI may sit on: queueing, /free, upload, /view
+POLL_EVERY = 1.0  # s between /history looks while a job runs (tests shrink this and RETRY_EVERY, #72)
+RETRY_EVERY = 2.0  # s between tries while ComfyUI is unreachable (booting, restarting)
 
 
 def _is_timeout(e: BaseException) -> bool:
@@ -206,7 +208,7 @@ class Comfy:
                 if time.time() - t0 > timeout:
                     raise RuntimeError(f"ComfyUI not reachable at {self.url} "
                                        "(is the service running? `systemctl status comfyui`)")
-                time.sleep(2)
+                time.sleep(RETRY_EVERY)
 
     def queue(self, workflow: dict, front: bool = False) -> str:
         """Queue a job; front=True puts it ahead of the jobs already waiting."""
@@ -306,7 +308,7 @@ class Comfy:
                 down_since, was_down = down_since or time.time(), True
                 if time.time() - down_since > DOWN_LIMIT:
                     raise RuntimeError(f"lost the connection to ComfyUI for {DOWN_LIMIT}s. {self.CRASH_HINT}")
-                time.sleep(2)
+                time.sleep(RETRY_EVERY)
                 continue
             if prompt_id in hist:
                 entry = hist[prompt_id]
@@ -319,7 +321,7 @@ class Comfy:
                 last_check = time.time()
                 if self._running(prompt_id):  # ComfyUI only talks to the client whose job runs: one of
                     raise RuntimeError(self.HANG_HINT.format(mins=round(quiet / 60)))  # someone else's may be long
-            time.sleep(1)
+            time.sleep(POLL_EVERY)
         raise TimeoutError(f"prompt {prompt_id} did not finish in {timeout:.0f}s")
 
     def upload(self, data: bytes, name: str) -> str:

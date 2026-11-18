@@ -89,7 +89,7 @@ def live(browser, out_dir, comfy):  # noqa: F811
     boards.rate("fjord", ["1:3"], "reject")
     jobs = boardserve.Jobs()
     srv = boardserve.make_server(0, jobs=jobs)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True).start()
     page = browser.new_page(viewport={"width": 1280, "height": 800})
     errors = []
     page.on("pageerror", lambda e: errors.append(str(e)))
@@ -315,7 +315,7 @@ def staged(browser, out_dir, comfy, make_image):  # noqa: F811
     stages.run_stage("tulu", "explore", count=2, seed=1)
     jobs = boardserve.Jobs()
     srv = boardserve.make_server(0, jobs=jobs)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True).start()
     page = browser.new_page(viewport={"width": 1280, "height": 800})
     errors = []
     page.on("pageerror", lambda e: errors.append(str(e)))
