@@ -501,3 +501,40 @@ def test_own_stand_ins(tulu, daily_conf, make_image):
     daily_conf(stand_ins="nope")
     with pytest.raises(ValueError, match="daily.stand_ins"):
         daily.plan(date(2026, 11, 12))
+
+
+# ---------------------------------------------------------------- #60
+
+def test_ref_mode_needs_no_description(out_dir, make_image, daily_conf):
+    """A character made from only a ref image works with wallpaper_ref (the description is thrown away there)."""
+    characters.new("refonly", "ref only", description="", refs={"v1": str(make_image("r.png", (600, 800)))})
+    daily_conf(preset="wallpaper_ref", cast=["refonly"])
+    p = daily.plan(date(2026, 11, 10))
+    assert p["ref"] and p["cast"] == {"refonly": 1}
+
+
+def test_text_mode_still_needs_a_description(out_dir, make_image, daily_conf):
+    characters.new("refonly", "ref only", description="", refs={"v1": str(make_image("r.png", (600, 800)))})
+    daily_conf(preset="wallpaper_sdxl", cast=["refonly"])
+    with pytest.raises(ValueError, match="no description"):
+        daily.plan(date(2026, 11, 10))
+
+
+def test_date_preview_does_not_use_up_the_theme_today(tulu, daily_conf, make_run):
+    """A run for another day (gen daily --date D) sits in today's folder; it counts on D, not today."""
+    daily_conf(themes=["a", "b"], months={}, weekdays={}, no_repeat_days=7)
+    today = date.today()
+    far = today + timedelta(days=30)
+    make_run(n=1, preset="wallpaper", prompt="x", date=today.isoformat(),
+             daily={"theme": "a", "date": far.isoformat()})
+    conf = imagegen.load_config()
+    assert daily.recent_themes(conf, today + timedelta(days=1), 6) == {}  # not used in the week before tomorrow
+    assert daily.recent_themes(conf, far + timedelta(days=1), 6) == {"a": far}  # but it counts on its own day
+
+
+def test_run_made_far_ahead_still_counts(tulu, daily_conf, make_run):
+    """Made 12 days before the day it is for: its folder is older than the window, but it still counts."""
+    daily_conf(themes=["a", "b"], months={}, weekdays={}, no_repeat_days=7)
+    make_run(n=1, preset="wallpaper", prompt="x", date="2026-11-18", daily={"theme": "a", "date": "2026-11-30"})
+    conf = imagegen.load_config()
+    assert daily.recent_themes(conf, date(2026, 12, 1), 6) == {"a": date(2026, 11, 30)}
