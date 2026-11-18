@@ -61,6 +61,7 @@ def list_styles() -> dict:
             for name, st in imagegen.list_styles().items()}
 
 
+SEEN_AS = "claude"  # the reader project_get marks as having seen (gen tunnel serves as "thread", #71)
 WAIT_S = 45  # the remote bridge times out at ~60s, so never block longer than this per call
 JOBS: dict[str, dict] = {}
 
@@ -250,7 +251,7 @@ def project_get(slug: str, preview: bool = False, history: int = 5) -> list:
     Read docs with project_doc. Use this to summarise a project or to decide the next pass: base the
     next prompt version on what the user picked and rejected, and on their notes."""
     import projects
-    s = projects.summary(slug, mark_seen="claude", history=history)
+    s = projects.summary(slug, mark_seen=SEEN_AS, history=history)
     out: list = [s]
     if preview:
         out += [_thumb(r["path"]) for r in s["state"]["refs"].values()]
@@ -267,7 +268,7 @@ def project_new(slug: str, title: str | None = None, brief: str = "", prompt: st
     import projects
     kw = {k: v for k, v in dict(prompt=prompt, preset=preset, palette=palette).items() if v is not None}
     projects.new(slug, title, brief, "claude", **kw)
-    return projects.summary(slug, mark_seen="claude")
+    return projects.summary(slug, mark_seen=SEEN_AS)
 
 
 @mcp.tool()

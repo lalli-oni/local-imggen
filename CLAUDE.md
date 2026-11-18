@@ -71,6 +71,12 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   sizes), and on a TTY (`IMAGEGEN_PROGRESS=0|1` overrides) `Progress`, a block redrawn in place from `Events.listeners`
   (stages done/running/pending, sampler step, ETA from the preset's past run.json timings, VRAM/RAM bars from
   /system_stats). `imagegen.log()` prints above it while `_LIVE` is set. Imports nothing from imagegen.
+- `tunnel.py` (#71, a stopgap until project threads can use trusted devices): `gen tunnel`, started by hand on tulu,
+  serves an allow-list of the MCP tools (`TOOLS`: render + read; image paths only inside output_dir, `LIMITS`) on
+  127.0.0.1 behind a fresh bearer token and a cloudflared quick tunnel; logs every request, Ctrl-C/idle/20 bad
+  requests close it. A thread with the URL + token from Þór's message runs `python tunnel.py tools|call TOOL '{json}'`
+  (images saved, paths printed); without them, copy-paste commands as before. Never store the token. Threat model,
+  CVE notes and removal: `docs/tunnel.md`. `tunnel-cloudflared.sh install|status|remove`: pinned, sha256-checked binary.
 - `doctor.py`: read-only health checks behind `gen doctor` and the MCP `doctor` tool
   (warns when the limits are off while the wallpaper/daily presets use Qwen, `HEAVY_UNETS`)
 - `comfy/`: opt-in resource limits for the comfyui service, **off by default**. `comfy/limits.sh on|off|status`
