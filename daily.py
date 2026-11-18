@@ -252,7 +252,8 @@ SCENE_PROMPT = ("A wide, finished wallpaper image that fills the whole frame: {s
                 "or writing. Detailed background, scenery and lighting everywhere, no white or empty background, "
                 "no border")  # no full stop: generate() adds the preset's suffix and the style after it
 CAST_PROMPT = ("{replace} Each character keeps the place, pose, size and action of the creature it replaces, and "
-               "anything it wears or holds, and is lit like the rest of the scene; its body, face, colours and "
+               "anything it wears or holds (hats, glasses, clothes), and is lit and shaded like the rest of the "
+               "scene, with its shadows and reflections, not like a flat sticker; its body, face, colours and "
                "proportions match its reference image exactly. Keep everything else in image 1 the same.")
 
 
