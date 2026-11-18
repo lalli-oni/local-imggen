@@ -139,6 +139,8 @@ Run `./test.sh` before every push (any args go to pytest, e.g. `./test.sh -k pro
 GPU or ComfyUI: the first run makes `.venv-test/` from requirements-dev.txt, and every test is isolated
 (temp output_dir, IMAGEGEN_COMFY_URL on a closed port, rembg stubbed, `tests/stubs/` first on PATH).
 Cloud sessions also run the contact sheet in Chromium (`/opt/pw-browsers`); elsewhere add `--browser`.
+The autouse `fast_polls` fixture (conftest.py) shrinks the client's waits (`POLL_EVERY`, `RETRY_EVERY`, bake-off
+`SETTLE_STEP`) so a full run takes about 2 minutes (#72). A test about the waiting itself must set them again.
 
 What's there to reuse, instead of building a one-off setup:
 - `comfy` fixture (`tests/fake_comfy.py`): a fake ComfyUI HTTP server with canned PNGs. Inspect `comfy.workflows()`,

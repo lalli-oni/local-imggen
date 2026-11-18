@@ -28,7 +28,7 @@ def server(out_dir):
     """A running board server on a free port: yields (port, jobs)."""
     jobs = boardserve.Jobs()
     srv = boardserve.make_server(0, jobs=jobs)
-    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t = threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True)
     t.start()
     yield srv.server_port, jobs
     srv.shutdown()

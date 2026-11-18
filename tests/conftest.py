@@ -41,6 +41,18 @@ def isolated(tmp_path, monkeypatch):
     return out
 
 
+@pytest.fixture(autouse=True)
+def fast_polls(monkeypatch):
+    """The client's real waits (1 s between /history looks, 2 s between retries, 0.5 s bake-off settle steps)
+    made up most of a full run (#72): the fake ComfyUI answers in milliseconds, so poll every 10 ms instead.
+    A test that is about the waiting itself sets these (or patches time) again."""
+    import bakeoff
+    import imagegen
+    monkeypatch.setattr(imagegen, "POLL_EVERY", 0.01)
+    monkeypatch.setattr(imagegen, "RETRY_EVERY", 0.01)
+    monkeypatch.setattr(bakeoff, "SETTLE_STEP", 0.01)
+
+
 @pytest.fixture
 def out_dir(isolated) -> Path:
     return isolated
