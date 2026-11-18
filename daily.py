@@ -252,11 +252,12 @@ SCENE_PROMPT = ("A wide, finished wallpaper image that fills the whole frame: {s
                 "or writing. Detailed background, scenery and lighting everywhere, no white or empty background, "
                 "no border")  # no full stop: generate() adds the preset's suffix and the style after it
 # The wording of the cast-only retry that put tulu in on-model (#52), but the whole body: "keep the clothes" kept
-# the stand-in's jeans and sneakers. A longer one about light and shading, with a look-alike stand-in, left a
-# creepy realistic Cthulhu as it was.
+# the stand-in's jeans and sneakers. The lighting line came back once the seed bug (cast_seed) was fixed: tulu
+# came out flat-lit with a dark outline, like a sticker.
 CAST_PROMPT = ("{replace} Each one keeps the same place, pose and action and anything it holds, but its whole body "
                "from head to feet, face, colours and wings look exactly like its reference image, with no clothes, "
-               "legs or shoes left over from image 1. Keep everything else in image 1 the same.")
+               "legs or shoes left over from image 1. It is lit and shaded by the scene's own lights, with no outline, "
+               "so it looks like part of image 1. Keep everything else in image 1 the same.")
 
 
 def _name(name: str | None) -> str:
