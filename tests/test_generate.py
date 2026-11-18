@@ -369,3 +369,10 @@ def test_cast_edit_reruns_only_the_cast_pass(comfy, make_image):
     assert meta["source_image"] == str(scene) and meta["refs"][0]["path"] == str(ref) and meta["edit"] is True
     with pytest.raises(ValueError, match="give it ref images"):
         imagegen.edit(str(scene), "x", preset="wallpaper_cast")
+
+
+def test_cast_pass_has_its_own_qwen_cache():
+    # #52: with the scene's QwenImage21Cache (a KV cache) shared, the cast pass gave back the scene unchanged
+    wf = json.loads((imagegen.ROOT / "workflows" / "qwen_image_21_scene_cast_upscale.json").read_text())
+    scene, cast = wf["7"]["inputs"]["model"][0], wf["13"]["inputs"]["model"][0]
+    assert scene != cast and wf[cast]["class_type"] == wf[scene]["class_type"] == "QwenImage21Cache"
