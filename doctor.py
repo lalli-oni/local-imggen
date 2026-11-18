@@ -114,7 +114,8 @@ def check_torch() -> dict:
         return _check("ROCm torch", "fail", f"not ROCm builds: {', '.join(generic)}",
                       "a generic wheel replaced AMD's; reinstall the ROCm wheels for those packages "
                       "and filter torch/torchvision/torchaudio/triton out of future pip installs")
-    if torch != EXPECTED_TORCH:
+    # AMD's wheels may add a build tag after the local version (#76): 2.9.1+rocm7.2.0.lw.git7e1940d4
+    if torch != EXPECTED_TORCH and not torch.startswith(EXPECTED_TORCH + "."):
         return _check("ROCm torch", "warn", f"{detail} (expected torch {EXPECTED_TORCH})",
                       f"fine if you upgraded on purpose; then update EXPECTED_TORCH in doctor.py")
     return _check("ROCm torch", "ok", detail)
