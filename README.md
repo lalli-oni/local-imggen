@@ -60,11 +60,26 @@ image after a model change is slower. `queue` is the wait before ComfyUI started
 
 Presets: `draft` (SDXL, 1024², quick), `wallpaper` (Qwen-Image 2.1, 16:9, upscaled to 3840x2160),
 `wallpaper_ultrawide` (Qwen, 21:9, upscaled to 3440x1440), `wallpaper_ref` (Qwen: a 4K 16:9 wallpaper of the
-character in a ref image, `gen edit REF "scene" -p wallpaper_ref`; `gen daily` uses it), `icon` (SDXL, centered
-object, background removed). The wallpapers moved to Qwen after the #51 bake-off: about 3 minutes an image, so keep
+character in a ref image, `gen edit REF "scene" -p wallpaper_ref`), `wallpaper_cast` (Qwen, #52: the scene from
+the prompt first, then a Qwen edit puts the characters from `--ref` images into it, about twice a wallpaper's time;
+`gen daily` uses it), `icon` (SDXL, centered object, background removed). The wallpapers moved to Qwen after the #51 bake-off: about 3 minutes an image, so keep
 the resource limits on (`comfy/limits.sh on`; `gen doctor` warns otherwise). The fast SDXL/klein versions are still
 there: `wallpaper_sdxl`, `wallpaper_ultrawide_sdxl`, `wallpaper_ref_klein`. Also: `kontext` (edit only), `klein`,
 `qwen`, `qwen_lite` (text-to-image and `gen edit -p ...`; no `gen vary`).
+
+### Characters in a scene (wallpaper_cast)
+
+```bash
+gen "a small cute cartoon creature running a taco truck on the moon" -p wallpaper_cast --ref ~/tulu.png
+gen "two small cartoon creatures at a karaoke bar" -p wallpaper_cast --ref tulu.png --ref cat.png \
+    --cast-prompt "Replace the creature on the left with the character from image 2 and the one on the right with the character from image 3. Keep everything else."
+```
+
+One ComfyUI job per image: Qwen draws the scene, then edits it with the scene as image 1 and the refs as images
+2, 3, ... (up to 15), then the 4x upscale. The scene is kept as `NN-seedS-scene.png`; the contact sheet shows the
+refs and scenes first, and "vs scene" compares a result with its own scene. A stand-in in the scene ("a small
+cartoon creature") that the edit replaces gives the character a place, pose and light that fit; `gen daily` does
+this (`[daily] stand_in`, `scene_prompt`, `cast_prompt`).
 
 ### How a preset works, and how to see it
 

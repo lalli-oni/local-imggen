@@ -60,8 +60,10 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   mtimes) to re-render on any change. Serves only images/.html under output_dir; POSTs must be same-origin JSON.
 - `daily.py`: `gen daily` (#3): picks the day's theme from `[daily]` in config.toml (a date-seeded pick among themes
   not used by past daily runs in `no_repeat_days`; `[daily.dates]` ("MM-DD" or "YYYY-MM-DD"), `[daily.months]`, `[daily.weekdays]` replace them, most specific first), puts the `cast` characters' descriptions
-  first, runs the preset, sets the first image as wallpaper. Default preset `wallpaper_ref` (edit-only: Qwen-Image 2.1 since #51 draws
-  the cast from a ref image, `[daily] ref`, default the first cast character's first ref, at 16:9 + 4x upscale). Failures leave the wallpaper alone; every attempt
+  first, runs the preset, sets the first image as wallpaper. Default preset `wallpaper_cast` (#52, scene first: Qwen draws the theme
+  with a stand-in per cast character (`stand_in`, "on the left"...), then a Qwen edit replaces each with the character from its ref
+  (`[daily] ref`: one or a list, default each cast character's first ref; `scene_prompt`/`cast_prompt` templates, `cast_prompts()`).
+  `wallpaper_ref` (edit-only, #51) still works: the first ref drawn into a scene at 16:9 + 4x upscale, text from `ref_prompt`. Failures leave the wallpaper alone; every attempt
   adds a line to `<output_dir>/daily.log`. `gen daily --show [--date D]` previews.
   `windows/daily-task.sh on [--at HH:MM]|off|status|run`: the Windows scheduled task (user-level, logged-on only,
   start-when-available) that runs it via `conhost --headless wsl.exe ... imagegen.py daily`.
@@ -92,13 +94,18 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   it holds AMD's ROCm wheels and a generic torch would replace them.
 - Models: `~/comfyui/models/{checkpoints,upscale_models,...}`.
 - Adding a preset = new `[presets.x]` table in config.toml (+ a workflow JSON if the graph differs).
-  Every `{{key}}` in the workflow must be a preset key, or one of: seed, prompt, negative, checkpoint,
+  Every `{{key}}` in the workflow must be a preset key, or one of: seed, cast_seed (a second sampler's seed, `cast_seed()`), prompt, negative, checkpoint,
   and for img2img/inpaint workflows also image, mask, denoise (width/height then come from the source).
   A preset picks those graphs with `img2img_workflow` / `inpaint_workflow` (defaults: sdxl_img2img.json, sdxl_inpaint.json).
   Post steps (`post = [...]`, see `POST` in imagegen.py) run on each output in order: `remove_bg`, then the
   optional `keep_largest` (drop stray shapes) and `trim` (crop + centre on a square of the shorter side); the last two rewrite the
   transparent PNG in place and skip images without transparency.
   An edit preset has `edit_workflow` (gets image, width/height; no checkpoint/negative); without `workflow` it is edit-only.
+  A cast preset (#52, `wallpaper_cast`) has a `workflow` with one LoadImage `"{{ref}}"`: `generate(refs=[...], cast_prompt=)` /
+  `gen --ref IMG --cast-prompt` / MCP `generate(refs=)`; `expand_refs` clones that node per ref and its `images.image_K` input
+  (K, K+1, ...), `cast_prompt` (preset key, `{images}` = "image 2".."images 2 and 3") fills `{{cast_prompt}}`. A SaveImage with
+  `filename_prefix = "imagegen-scene"` (`SCENE_PREFIX`) is a by-product: saved as `NN-seedS-scene.png` (sidecar/result `scene`),
+  never in `images`, not checked for black. Refs are saved as `ref-N.png`; the sheet shows refs and scenes as input cards.
   `ref_canvas = [w, h]` fits the source onto a canvas of its corner colour first (Qwen edits draw at the source's
   aspect; any other latent size gave a blank image), used by `wallpaper_ref` for 16:9 from a portrait ref.
   A preset with `unet` (Flux/Qwen diffusion model) gets no default img2img/inpaint graph (`imagegen.mode_workflow`).

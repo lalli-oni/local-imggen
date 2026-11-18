@@ -101,11 +101,15 @@ def _wait_and_report(job_id: str, wait: float) -> list:
 @mcp.tool()
 def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | None = None,
              negative: str | None = None, width: int | None = None, height: int | None = None,
-             steps: int | None = None, preview: bool = True, styles: list[str] | None = None) -> list:
+             steps: int | None = None, preview: bool = True, styles: list[str] | None = None,
+             refs: list[str] | None = None, cast_prompt: str | None = None) -> list:
     """Generate images with a preset. count 1-8 uses consecutive seeds (seed, seed+1, ...).
 
     styles: looks from list_styles() added to the prompt (default: the preset's own, its "styles" in
     list_presets, e.g. synthwave on the wallpaper presets; [] = none).
+    refs / cast_prompt: for wallpaper_cast (scene first, then cast): the prompt describes the scene, refs are
+    character ref images (Linux or Windows paths) and cast_prompt the edit that puts them in ("image 1" = the
+    scene, "image 2".. = the refs; default the preset's). ~6 min an image; the scene is kept as *-scene.png.
 
     Waits up to ~45s. If finished: returns run info (paths, contact sheet) plus JPEG thumbnails
     (if preview=True). If still running: returns {status: "running", job_id} -- call get_job(job_id)
@@ -113,7 +117,8 @@ def generate(prompt: str, preset: str = "draft", count: int = 1, seed: int | Non
     Re-use a seed to reproduce or refine an image.
     """
     kwargs = dict(prompt=prompt, preset=preset, count=min(max(1, count), MAX_COUNT), seed=seed,
-                  negative=negative, width=width, height=height, steps=steps, styles=styles)
+                  negative=negative, width=width, height=height, steps=steps, styles=styles,
+                  refs=refs, cast_prompt=cast_prompt)
     return _start(imagegen.generate, kwargs, preview)
 
 
@@ -149,7 +154,7 @@ MAX_EDITS = 4
 @mcp.tool()
 def edit(path: str, instruction: str, count: int = 1, seed: int | None = None, steps: int | None = None,
          guidance: float | None = None, preview: bool = True, preset: str = imagegen.EDIT_PRESET,
-         styles: list[str] | None = None) -> list:
+         styles: list[str] | None = None, refs: list[str] | None = None) -> list:
     """Edit an image by plain-language instruction (default FLUX.2 klein). path: Linux or Windows path.
 
     Write the instruction as what to change plus what to keep, e.g. "Make the character wave with one
@@ -164,9 +169,12 @@ def edit(path: str, instruction: str, count: int = 1, seed: int | None = None, s
     Needs the preset's opt-in models (doctor shows them as warn if missing).
     styles: list_styles() looks added to the instruction (default: the preset's own, e.g. synthwave on
     wallpaper_ref; [] = none).
+    refs: with preset "wallpaper_cast", redo only the cast pass on a saved scene (NN-seedS-scene.png): ref
+    images of the characters, as image 2, 3...; e.g. "Replace the main character in image 1 with the character
+    from image 2." ({images} = "image 2" / "images 2 and 3").
     """
     kwargs = dict(path=path, instruction=instruction, count=min(max(1, count), MAX_EDITS), seed=seed,
-                  steps=steps, guidance=guidance, preset=preset, styles=styles)
+                  steps=steps, guidance=guidance, preset=preset, styles=styles, refs=refs)
     return _start(imagegen.edit, kwargs, preview)
 
 

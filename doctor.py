@@ -23,13 +23,13 @@ EXPECTED_TORCH = "2.9.1+rocm7.2.0"
 LIMITS_DROPIN = Path("/etc/systemd/system/comfyui.service.d/zz-imagegen-limits.conf")
 # Keys generate() drops from a preset before filling the workflow, plus the ones it always adds.
 NOT_PARAMS = imagegen.NOT_PARAMS
-STANDARD_PARAMS = {"seed", "prompt", "negative", "checkpoint"}
+STANDARD_PARAMS = {"seed", "cast_seed", "prompt", "negative", "checkpoint"}
 # Each mode a preset can run in: (preset key, extra params generate() adds).
-MODES = [("workflow", set()),
+MODES = [("workflow", {"ref"}),  # ref: a cast workflow's ref images (#52), one per --ref
          ("img2img_workflow", {"image", "denoise"}),
          ("inpaint_workflow", {"image", "denoise", "mask"})]
 # Presets with an edit_workflow also run in this mode (edit-only ones have no workflow).
-EDIT_MODE = ("edit_workflow", {"image", "width", "height"})
+EDIT_MODE = ("edit_workflow", {"image", "width", "height", "ref"})  # ref: a cast edit (#52)
 # Which ComfyUI model folder each model-like preset key lives in.
 MODEL_KEYS = {"checkpoint": "checkpoints", "upscale_model": "upscale_models", "unet": "diffusion_models",
               "clip_l": "text_encoders", "t5": "text_encoders", "text_encoder": "text_encoders", "vae": "vae",

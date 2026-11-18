@@ -244,6 +244,9 @@ class Progress:
         self.estimate = dict(estimate or {})
         self.color = (os.environ.get("NO_COLOR") is None) if color is None else color
         self.node_stage = {nid: stage_of(n.get("class_type", "")) for nid, n in workflow.items()}
+        # sampler steps per node (a scene + cast graph has two samplers, #52): ETA and bar for the ones still to run
+        self.node_steps = {nid: st for nid, n in workflow.items()
+                           if self.node_stage[nid] == "sample" and (st := _steps(workflow, n))}
         present = set(self.node_stage.values()) - {"other"}
         self.stages = [s for s in stage_order if s in present]
         self.jobs: dict[str, _Job] = {}
@@ -322,6 +325,16 @@ class Progress:
             return "done", finished, len(nodes)
         return ("part" if finished else "todo"), finished, len(nodes)
 
+    def _job_frac(self, job: _Job) -> float:
+        """How far a job is, by work units: each node 1, each sampler step 1 more (sampling is most of the time)."""
+        total = len(self.node_stage) + sum(self.node_steps.values())
+        if not total:
+            return 0.0
+        done = sum(1 + self.node_steps.get(n, 0) for n in self.node_stage if n in job.done or n in job.cached)
+        if job.node is not None and job.step:
+            done += job.step[0] / job.step[1] * self.node_steps.get(job.node, 0)
+        return min(1.0, done / total)
+
     def _per_image(self) -> dict[str, float]:
         """Seconds per stage per image: this run's finished images if any, else past runs."""
         done = [self.jobs[p].stage_s for p in self.order if self.jobs[p].ended is not None and self.jobs[p].stage_s]
@@ -348,6 +361,9 @@ class Progress:
                             v, m = job.step
                             rate = (job.step_last - job.step_t[0]) / (v - job.step_t[1])
                             left += max(0.0, (m - v) * rate - (now - job.step_last))
+                            # samplers still to come in this job, at this one's rate per step
+                            left += sum(n * rate for nid, n in self.node_steps.items()
+                                        if nid != job.node and nid not in job.done and nid not in job.cached)
                             known = True
                             continue
                     if state != "done" and st in per:
@@ -392,9 +408,8 @@ class Progress:
             elapsed = now - self.t0
             if eta is not None:
                 frac = elapsed / (elapsed + eta) if elapsed + eta > 0 else 0.0
-            else:
-                step = job.step[0] / job.step[1] if job is not None and job.step else 0.0
-                frac = (finished + step) / self.count
+            else:  # nothing to time it by: the share of this image's nodes (and sampler steps) done
+                frac = (finished + (self._job_frac(job) if job is not None else 0.0)) / self.count
             second = [("  ", ""), (self._bar(frac, BAR), "raw"), (f" {int(frac * 100):3d}%  ", ""),
                       (f"{fmt_secs(elapsed)} elapsed", "dim")]
             if eta is not None:

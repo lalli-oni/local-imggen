@@ -1,0 +1,20 @@
+{
+  "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "{{unet}}", "weight_dtype": "{{weight_dtype}}"}},
+  "2": {"class_type": "QwenImage21Cache", "inputs": {"model": ["1", 0], "device": "auto", "dtype": "default"}},
+  "3": {"class_type": "CLIPLoader", "inputs": {"clip_name": "{{text_encoder}}", "type": "qwen_image", "device": "default"}},
+  "4": {"class_type": "VAELoader", "inputs": {"vae_name": "{{vae}}"}},
+  "6": {"class_type": "TextEncodeQwenImage21", "inputs": {"clip": ["3", 0], "prompt": "{{prompt}}", "negative_prompt": "{{negative}}", "resolution": "{{resolution}}"}},
+  "10": {"class_type": "EmptyLatentImage", "inputs": {"width": "{{width}}", "height": "{{height}}", "batch_size": 1}},
+  "7": {"class_type": "KSampler", "inputs": {"seed": "{{seed}}", "steps": "{{steps}}", "cfg": "{{cfg}}", "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0, "model": ["2", 0], "positive": ["6", 0], "negative": ["6", 1], "latent_image": ["10", 0]}},
+  "8": {"class_type": "VAEDecode", "inputs": {"samples": ["7", 0], "vae": ["4", 0]}},
+  "15": {"class_type": "SaveImage", "inputs": {"filename_prefix": "imagegen-scene", "images": ["8", 0]}},
+  "11": {"class_type": "LoadImage", "inputs": {"image": "{{ref}}"}},
+  "16": {"class_type": "QwenImage21Cache", "inputs": {"model": ["1", 0], "device": "auto", "dtype": "default"}, "_meta": {"title": "the cast pass's own KV cache, kept apart from the scene pass's (#52)"}},
+  "12": {"class_type": "TextEncodeQwenImage21", "inputs": {"clip": ["3", 0], "vae": ["4", 0], "prompt": "{{cast_prompt}}", "negative_prompt": "", "resolution": "{{cast_resolution}}", "images.image_1": ["8", 0], "images.image_2": ["11", 0]}},
+  "13": {"class_type": "KSampler", "inputs": {"seed": "{{cast_seed}}", "steps": "{{cast_steps}}", "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0, "model": ["16", 0], "positive": ["12", 0], "negative": ["12", 1], "latent_image": ["12", 2]}},
+  "14": {"class_type": "VAEDecode", "inputs": {"samples": ["13", 0], "vae": ["4", 0]}},
+  "20": {"class_type": "UpscaleModelLoader", "inputs": {"model_name": "{{upscale_model}}"}},
+  "21": {"class_type": "ImageUpscaleWithModel", "inputs": {"upscale_model": ["20", 0], "image": ["14", 0]}},
+  "22": {"class_type": "ImageScale", "inputs": {"image": ["21", 0], "upscale_method": "lanczos", "width": "{{target_width}}", "height": "{{target_height}}", "crop": "center"}},
+  "9": {"class_type": "SaveImage", "inputs": {"filename_prefix": "imagegen", "images": ["22", 0]}}
+}

@@ -148,8 +148,20 @@ suffix = "cosy whimsical storybook scene, soft light"
 # Schedule it: windows/daily-task.sh on [--at 06:00]. Preview a day: gen daily --show [--date 2026-12-24].
 # Log: <output_dir>/daily.log. Themes are picked at random from the ones not used recently.
 [daily]
-preset = "wallpaper_ref"      # Qwen + the cast's ref image (on-model); "wallpaper" = Qwen from text only
-ref = ""                      # CHARACTER:REF, or an image path (relative = under output_dir); "" = first cast character's first ref
+# wallpaper_cast (#52): Qwen draws the scene with a stand-in per cast character, then a Qwen edit replaces each
+# stand-in with the character from its ref image, so the cast is part of the scene (~2x a wallpaper's time).
+# "wallpaper_ref" = the older way (the first ref redrawn into a scene); "wallpaper" = Qwen from text only.
+preset = "wallpaper_cast"
+ref = ""                      # CHARACTER:REF or an image path (relative = under output_dir), or a list of them (one per
+                              # character, wallpaper_cast); "" = each cast character's first ref
+# wallpaper_cast: the scene pass's prompt ({stand_ins}, {scene} = theme + a literal style; named styles are added
+# by the preset) and the cast pass's edit ({replace} = "Replace the main character in image 1 with the
+# character from image 2."). "" = the built-in ones in daily.py. stand_in = "" draws the scene empty and
+# the edit adds the characters instead.
+scene_prompt = ""
+stand_in = "a small cute cartoon creature"
+cast_prompt = ""
+# wallpaper_ref only:
 # With a ref, the prompt is this ({scene} = theme + style, {name} = the cast character); the cast descriptions
 # are left out (they ask for a plain white background, so the model copied the ref as-is).
 # The character is part of the action (#52: blended into the scene, not posing in the middle). Other creatures
@@ -207,6 +219,11 @@ scifi = ["a robot butler with a tray", "a flickering blue hologram", "a chrome l
 setting = ["a glowing wireframe grid floor stretching to the horizon", "palm trees", "Memphis-pattern walls in pastel squiggles",
            "a lava lamp", "a mall fountain with pennies", "a checkerboard floor", "a mirror ball", "a pink flamingo lawn ornament",
            "a heart-shaped waterbed", "a shag pile carpet", "wood-panelled walls"]
+
+# wallpaper_cast: a stand-in per cast character instead of stand_in (CHARACTER = "..."). Keep it generic: a tulu
+# look-alike ("chibi Cthulhu with face tentacles...") came out as a creepy realistic Cthulhu in the house style,
+# and the edit then left it as it was. The generic cute creature was swapped for tulu fine.
+[daily.stand_ins]
 
 # Optional: replaces `themes` on a day. The most specific entry wins: "YYYY-MM-DD", "MM-DD", month, weekday.
 # Movable feasts (Easter-based, Þorri) change date every year: add them as "YYYY-MM-DD", one year at a time.
@@ -354,6 +371,37 @@ ref_canvas = [1536, 864]
 upscale_model = "RealESRGAN_x4plus.pth"
 target_width = 3840
 target_height = 2160
+
+# #52, scene first, then cast: Qwen draws the 16:9 scene from the prompt, then a Qwen edit puts the characters
+# from the ref images into it (image 1 = the scene, images 2.. = one ref per character) and the 4x upscale.
+# One ComfyUI job, the model loaded once; about twice wallpaper's time. The scene is kept as NN-seedS-scene.png.
+# gen "a taco truck on the moon, ..." -p wallpaper_cast --ref tulu.png [--ref cat.png] [--cast-prompt "..."]
+[presets.wallpaper_cast]
+description = "16:9 wallpaper (4K): a scene from text, then the characters from --ref images put into it (Qwen-Image 2.1)"
+styles = ["synthwave"]           # the house look ([styles] below), for the scene; gen --style none for a plain one
+model = "Qwen-Image 2.1"
+workflow = "qwen_image_21_scene_cast_upscale.json"
+# Only the cast pass, on a finished scene (no upscale): gen edit 01-seedS-scene.png "Replace ..." -p wallpaper_cast --ref REF
+edit_workflow = "qwen_image_21_cast_edit.json"
+ref_canvas = [1536, 864]         # gen edit: the scene goes in at its own 16:9 size
+download = "qwen-image-2.1.sh"
+unet = "qwen_image_2.1_bf16.safetensors"
+weight_dtype = "fp8_e4m3fn"
+text_encoder = "qwen3vl_8b_bf16.safetensors"
+vae = "qwen_image_2.1_vae_bf16.safetensors"
+resolution = 1024
+steps = 25
+cfg = 1.0
+width = 1536                     # exactly 16:9 (multiples of 16), so the 4K scale crops nothing
+height = 864
+cast_resolution = 1152           # the edit draws at image 1's (the scene's) shape: 1152 on 16:9 = 1536x864
+cast_steps = 25
+target_width = 3840
+target_height = 2160
+upscale_model = "RealESRGAN_x4plus.pth"
+suffix = ", wallpaper, wide landscape composition, highly detailed"
+# The edit's instruction when none is given ({images} = "image 2" / "images 2 and 3"); gen daily writes its own.
+cast_prompt = "Put the characters from {images} into the scene from image 1, each exactly once, as a natural part of the scene: doing something that fits it, at a size that fits the scene, lit like the scene. Each character keeps exactly the design, colours and proportions of its reference image, in a new pose. Keep everything else in image 1 the same: layout, background, lighting, colours and any text."
 
 # The daily wallpaper before #51: klein draws the ref's character (~20 s, but less polished than Qwen).
 [presets.wallpaper_ref_klein]
