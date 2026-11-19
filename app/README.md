@@ -10,9 +10,7 @@ built app from `app/build/`. Node is only needed to build it.
 ## On tulu
 
 ```bash
-# once: Node 22 LTS (if `node --version` says nothing or < 20)
-curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs
-
+node --version   # needs v20.19 or newer; only install Node if this is missing or older
 cd ~/imagegen/app && npm ci && npm run build
 gen app serve --open
 ```
