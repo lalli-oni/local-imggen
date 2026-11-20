@@ -86,6 +86,7 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   (images saved, paths printed); without them, copy-paste commands as before. Never store the token. Threat model,
   CVE notes and removal: `docs/tunnel.md`. `tunnel-cloudflared.sh install|status|remove`: pinned, sha256-checked binary.
 - `doctor.py`: read-only health checks behind `gen doctor` and the MCP `doctor` tool
+  (warns when /dev/dxg is missing in WSL, the "No HIP GPUs" restart loop after a driver update: `wsl --shutdown`)
   (warns when the limits are off while the wallpaper/daily presets use Qwen, `HEAVY_UNETS`)
 - `comfy/`: opt-in resource limits for the comfyui service, **off by default**. `comfy/limits.sh on|off|status`
   installs/removes `/etc/systemd/system/comfyui.service.d/zz-imagegen-limits.conf` built from `comfyui-args`

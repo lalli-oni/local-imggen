@@ -62,6 +62,18 @@ def test_api_down():
     assert c["status"] == "fail" and stats is None
 
 
+@pytest.mark.parametrize("wsl, dxg, status", [(False, False, "info"), (True, True, "ok"), (True, False, "fail")])
+def test_gpu_device(monkeypatch, tmp_path, wsl, dxg, status):
+    node = tmp_path / "dxg"
+    if dxg:
+        node.write_text("")
+    monkeypatch.setattr(doctor, "DXG", node)
+    monkeypatch.setattr(doctor, "_is_wsl", lambda: wsl)
+    c = doctor.check_gpu_device()
+    assert c["status"] == status
+    assert ("wsl --shutdown" in c.get("fix", "")) == (status == "fail")
+
+
 def test_no_gpu(comfy):
     comfy.no_gpu = True
     c, _ = doctor.check_comfy_api(comfy.url)
