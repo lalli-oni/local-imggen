@@ -154,6 +154,9 @@ def _pool(value) -> list[str]:
     return [t.strip() for t in items if isinstance(t, str) and t.strip()]
 
 
+DAILY_LABEL = "daily-"  # run() labels a daily run's folder with this prefix and the theme's slug
+
+
 def recent_themes(conf: dict, day: date, days: int) -> dict[str, date]:
     """{theme: the last day it was used} over the `days` days before `day`, from past daily runs' run.json.
 
@@ -168,7 +171,9 @@ def recent_themes(conf: dict, day: date, days: int) -> dict[str, date]:
             fdate = date.fromisoformat(folder.name)
         except ValueError:
             continue
-        for f in sorted(folder.glob("*/run.json")):
+        # daily runs' folders carry DAILY_LABEL (run() labels them): other runs are not opened, which keeps the
+        # scan cheap as output_dir fills (#86). A non-daily run whose slug contains it is still opened, then skipped.
+        for f in sorted(folder.glob(f"*-{DAILY_LABEL}*/run.json")):
             try:
                 meta = (json.loads(f.read_text()).get("daily") or {})
                 theme, used = meta.get("theme"), fdate
@@ -371,7 +376,7 @@ def run(day: date | None = None, wait: float = DEFAULT_WAIT, set_wallpaper: bool
         conf = imagegen.load_config()
         p = plan(day, conf)
         imagegen.Comfy(conf["comfy_url"]).wait_ready(timeout=wait)  # generate() then finds it up
-        run = imagegen.generate(p["prompt"], p["preset"], p["count"], label=f"daily-{imagegen.slug(p['theme'], 30)}",
+        run = imagegen.generate(p["prompt"], p["preset"], p["count"], label=f"{DAILY_LABEL}{imagegen.slug(p['theme'], 30)}",
                                 source_image=p["ref"], edit=p["ref"] is not None,
                                 styles=p["gen_styles"], post=p["post"], refs=p["refs"] or None,
                                 cast_prompt=p["cast_prompt"])

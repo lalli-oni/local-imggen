@@ -101,8 +101,8 @@ def test_pick_is_stable_and_ignores_config_order(daily_conf):
 
 def test_history_comes_from_past_daily_runs(tulu, daily_conf, make_run):
     daily_conf(themes=["a", "b"], months={}, weekdays={}, no_repeat_days=7)
-    make_run(n=1, preset="wallpaper", prompt="x", date="2026-11-09", daily={"theme": "a"})
-    make_run(n=1, preset="wallpaper", prompt="y", date="2026-11-03", daily={"theme": "b"})
+    make_run(n=1, preset="wallpaper", prompt="daily-a", date="2026-11-09", daily={"theme": "a"})
+    make_run(n=1, preset="wallpaper", prompt="daily-b", date="2026-11-03", daily={"theme": "b"})
     make_run(n=1, preset="draft", prompt="z", date="2026-11-08")  # not a daily
     conf = imagegen.load_config()
     assert daily.recent_themes(conf, date(2026, 11, 10), 6) == {"a": date(2026, 11, 9)}  # 11-03 is 7 days back
@@ -525,7 +525,7 @@ def test_date_preview_does_not_use_up_the_theme_today(tulu, daily_conf, make_run
     daily_conf(themes=["a", "b"], months={}, weekdays={}, no_repeat_days=7)
     today = date.today()
     far = today + timedelta(days=30)
-    make_run(n=1, preset="wallpaper", prompt="x", date=today.isoformat(),
+    make_run(n=1, preset="wallpaper", prompt="daily-a", date=today.isoformat(),
              daily={"theme": "a", "date": far.isoformat()})
     conf = imagegen.load_config()
     assert daily.recent_themes(conf, today + timedelta(days=1), 6) == {}  # not used in the week before tomorrow
@@ -535,6 +535,27 @@ def test_date_preview_does_not_use_up_the_theme_today(tulu, daily_conf, make_run
 def test_run_made_far_ahead_still_counts(tulu, daily_conf, make_run):
     """Made 12 days before the day it is for: its folder is older than the window, but it still counts."""
     daily_conf(themes=["a", "b"], months={}, weekdays={}, no_repeat_days=7)
-    make_run(n=1, preset="wallpaper", prompt="x", date="2026-11-18", daily={"theme": "a", "date": "2026-11-30"})
+    make_run(n=1, preset="wallpaper", prompt="daily-a", date="2026-11-18", daily={"theme": "a", "date": "2026-11-30"})
     conf = imagegen.load_config()
     assert daily.recent_themes(conf, date(2026, 12, 1), 6) == {"a": date(2026, 11, 30)}
+
+
+def test_ordinary_runs_are_not_read(tulu, daily_conf, make_run, monkeypatch):
+    """#86: the history scan reads only daily runs' run.json, not every run in output_dir."""
+    daily_conf(themes=["a", "b"], months={}, weekdays={}, no_repeat_days=7)
+    make_run(n=1, preset="wallpaper", prompt="daily-a", date="2026-11-09", daily={"theme": "a"})
+    for i in range(5):  # ordinary runs, some in the window, some far away
+        make_run(n=1, preset="draft", prompt=f"ordinary {i}", date="2026-11-09", time=f"12000{i}")
+        make_run(n=1, preset="draft", prompt=f"ordinary {i}", date="2026-01-01", time=f"12000{i}")
+    read = []
+    real = Path.read_text
+
+    def spy(self, *a, **k):
+        read.append(self)
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(Path, "read_text", spy)
+    conf = imagegen.load_config()
+    assert daily.recent_themes(conf, date(2026, 11, 10), 6) == {"a": date(2026, 11, 9)}
+    runs = [p for p in read if p.name == "run.json"]
+    assert runs and all("-daily-" in p.parent.name for p in runs), [p.parent.name for p in runs]
