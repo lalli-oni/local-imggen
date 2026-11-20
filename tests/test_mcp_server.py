@@ -177,3 +177,22 @@ def test_list_presets_edit_only_size():
     presets = mcp_server.list_presets()
     assert presets["wallpaper_ref"]["size"].startswith("3840x2160")
     assert presets["kontext"]["size"] == "~1 MP, source aspect"
+
+
+def test_list_presets_survives_partial_target_size(monkeypatch):
+    # #87: a preset with only target_width used to raise KeyError and fail the whole tool
+    fake = {
+        "edit_half": {"edit_workflow": "x.json", "target_width": 1920, "description": "only width"},
+        "edit_height": {"edit_workflow": "x.json", "target_height": 1080},
+        "gen_half": {"workflow": "x.json", "width": 512, "height": 512, "target_width": 1024},
+        "gen_full": {"workflow": "x.json", "width": 512, "height": 512,
+                     "target_width": 1024, "target_height": 1024},
+    }
+    monkeypatch.setattr(mcp_server.imagegen, "list_presets", lambda: fake)
+    presets = mcp_server.list_presets()
+    assert set(presets) == set(fake)  # every preset is still listed
+    assert presets["edit_half"]["size"] == "~1 MP, source aspect"
+    assert presets["edit_height"]["size"] == "~1 MP, source aspect"
+    assert "output_size" not in presets["gen_half"]
+    assert presets["gen_full"]["output_size"] == "1024x1024"
+    assert presets["edit_half"]["mode"] == "edit only"
