@@ -20,6 +20,7 @@ import imagegen
 COMFY_DIR = Path.home() / "comfyui"
 COMFY_VENV_PY = Path.home() / "venvs" / "comfy" / "bin" / "python"
 EXPECTED_TORCH = "2.9.1+rocm7.2.0"
+DXG = Path("/dev/dxg")  # WSL's GPU device; gone after a Windows driver update until `wsl --shutdown`
 LIMITS_DROPIN = Path("/etc/systemd/system/comfyui.service.d/zz-imagegen-limits.conf")
 # Keys generate() drops from a preset before filling the workflow, plus the ones it always adds.
 NOT_PARAMS = imagegen.NOT_PARAMS
@@ -70,6 +71,25 @@ def check_service() -> dict:
                   "sudo systemctl start comfyui; logs: journalctl -u comfyui -n 50")
 
 
+def _is_wsl() -> bool:
+    try:
+        return "microsoft" in Path("/proc/version").read_text().lower()
+    except OSError:
+        return False
+
+
+def check_gpu_device() -> dict:
+    """Is the GPU passed through to WSL? A missing /dev/dxg gives ComfyUI "No HIP GPUs are available" and a
+    restart loop, typically after an Adrenalin update."""
+    if not _is_wsl():
+        return _check("GPU device", "info", "not WSL, skipped")
+    if DXG.exists():
+        return _check("GPU device", "ok", f"{DXG} present")
+    return _check("GPU device", "fail", f"{DXG} is missing, so ComfyUI cannot see the GPU",
+                  "in Windows PowerShell run `wsl --shutdown`, reopen Ubuntu, then "
+                  "`sudo systemctl restart comfyui` (often needed after an Adrenalin update)")
+
+
 def check_comfy_api(url: str) -> tuple[dict, dict | None]:
     try:
         stats = _get_json(url.rstrip("/") + "/system_stats")
@@ -80,7 +100,8 @@ def check_comfy_api(url: str) -> tuple[dict, dict | None]:
     gpus = [d for d in devs if d.get("type") != "cpu"]
     if not gpus:
         return _check("ComfyUI API", "fail", f"{url} is up but reports no GPU (running on CPU)",
-                      "check the ROCm torch in ~/venvs/comfy and `journalctl -u comfyui -n 50`"), stats
+                      "check /dev/dxg (after a driver update: `wsl --shutdown` in PowerShell), the ROCm torch in "
+                      "~/venvs/comfy and `journalctl -u comfyui -n 50`"), stats
     g = gpus[0]
     gib = 1024 ** 3
     vram = f"{g.get('vram_free', 0) / gib:.1f}/{g.get('vram_total', 0) / gib:.1f} GiB free"
@@ -338,6 +359,7 @@ def run_checks(include_mcp: bool = True) -> list[dict]:
     except Exception as e:
         return [_check("config.toml", "fail", str(e), "fix the TOML syntax in config.toml")]
     checks = [_check("config.toml", "ok", f"{len(conf['presets'])} presets")]
+    checks.append(check_gpu_device())
     checks.append(check_service())
     api, stats = check_comfy_api(conf["comfy_url"])
     checks.append(api)
