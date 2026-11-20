@@ -38,19 +38,27 @@ def _thumb(path: str, size: int = 384) -> Image:
     return Image(data=buf.getvalue(), format="jpeg")
 
 
+def _target_size(p: dict) -> str | None:
+    """'WxH' when the preset sets both target sizes; None otherwise (a preset with only one of them is not an error here)."""
+    if "target_width" in p and "target_height" in p:
+        return f"{p['target_width']}x{p['target_height']}"
+    return None
+
+
 @mcp.tool()
 def list_presets() -> dict:
     """List available presets with descriptions and generation sizes."""
     out = {}
     for name, p in imagegen.list_presets().items():
         if "workflow" not in p:  # edit-only (e.g. kontext): use the edit tool
-            size = ("~1 MP, source aspect" if "target_width" not in p
-                    else f"{p['target_width']}x{p['target_height']} (upscaled)")
+            target = _target_size(p)
+            size = f"{target} (upscaled)" if target else "~1 MP, source aspect"
             out[name] = {"description": p.get("description", ""), "mode": "edit only", "size": size,
                          **({"styles": p["styles"]} if p.get("styles") else {})}
             continue
+        target = _target_size(p)
         out[name] = {"description": p.get("description", ""), "size": f"{p['width']}x{p['height']}",
-                     **({"output_size": f"{p['target_width']}x{p['target_height']}"} if "target_width" in p else {}),
+                     **({"output_size": target} if target else {}),
                      **({"styles": p["styles"]} if p.get("styles") else {})}
     return out
 
