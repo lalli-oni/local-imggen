@@ -168,7 +168,9 @@ def recent_themes(conf: dict, day: date, days: int) -> dict[str, date]:
             fdate = date.fromisoformat(folder.name)
         except ValueError:
             continue
-        for f in sorted(folder.glob("*/run.json")):
+        # daily runs are labelled daily-<theme> (folder "<HHMMSS>-<preset>-daily-<theme>"): skip the rest unread,
+        # so the scan stays cheap as output_dir fills with ordinary runs (#86)
+        for f in sorted(folder.glob("*-daily-*/run.json")):
             try:
                 meta = (json.loads(f.read_text()).get("daily") or {})
                 theme, used = meta.get("theme"), fdate
