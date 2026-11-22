@@ -258,7 +258,7 @@ the images are the product, all with the same prompt and seeds:
 
 - `-p klein,qwen`: the model (a preset: its model and workflow). This is how the model-consolidation pass (#64) is
   compared. Use `--style none` so every model gets the bare prompt; without `--style` each preset keeps its own look.
-- `--steps`, `--cfg` (SDXL, Qwen), `--guidance` (FLUX), `--style a,none,b+c`, `--seeds N` (base, base+1, ...).
+- `--steps`, `--cfg` (SDXL, Qwen), `--guidance` (only for workflows with a guidance input; no text-to-image preset has one yet, so it errors), `--style a,none,b+c`, `--seeds N` (base, base+1, ...).
 
 With one axis the values run along the top. With more, the rows are `--rows AXIS` (default: seed if it varies, else
 the first of model, style, steps, cfg, guidance) and the columns are the rest, combined ("klein · steps 8").

@@ -101,7 +101,8 @@ def plan(prompt: str, presets: list[str], conf: dict, steps=None, cfg=None, guid
 
     def show(axis, v):
         if axis == "preset":
-            return pconf[v].get("model", v)
+            model = pconf[v].get("model", v)
+            return f"{model} ({v})" if sum(pconf[p].get("model", p) == model for p in presets) > 1 else model
         if axis == "style":
             return _style_label(v)
         return f"{axis} n/a" if v is None else f"{axis} {_num(v)}"
@@ -114,6 +115,10 @@ def plan(prompt: str, presets: list[str], conf: dict, steps=None, cfg=None, guid
     for p in presets:
         t = (imagegen.ROOT / "workflows" / pconf[p]["workflow"]).read_text()
         texts[p] = {k: "{{" + k + "}}" in t for k in PARAM_AXES}
+    for k in PARAM_AXES:
+        if len(vals[k]) > 1 and not any(texts[p][k] for p in presets):
+            raise ValueError(f"no chosen preset has a {k} input, so {k} can't vary "
+                             f"(presets with one: {', '.join(n for n, q in pconf.items() if q.get('workflow') and '{{' + k + '}}' in (imagegen.ROOT / 'workflows' / q['workflow']).read_text()) or 'none'})")
     cells = []
     for r, rk in enumerate(row_keys):
         for c, ck in enumerate(col_keys):

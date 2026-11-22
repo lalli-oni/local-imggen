@@ -198,7 +198,7 @@ def sweep(prompt: str, presets: list[str] | None = None, steps: list[int] | None
 
     Every argument that gets more than one value is an axis; the images are the product (same prompt and the same
     seeds in every cell). presets = models to compare (e.g. ["klein", "qwen"], default ["draft"]), steps, cfg
-    (SDXL/Qwen), guidance (FLUX), styles (list_styles names, "none", "a+b"; default each preset's own look, give
+    (SDXL/Qwen), guidance (no text-to-image preset takes it yet), styles (list_styles names, "none", "a+b"; default each preset's own look, give
     ["none"] plus one more to compare, or one value "none" to give every model the bare prompt), seeds = how many seeds
     (base, base+1, ...; rows share one). A setting a model has no input for (klein: cfg) is rendered once and the other
     values are skipped. width and height together fix the size of every cell. rows: the axis down the side (default

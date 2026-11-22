@@ -169,3 +169,13 @@ def test_mcp_sweep(comfy):
     assert summary["contact_sheet_windows"] is None or "index.html" in summary["contact_sheet_windows"]
     with pytest.raises(ValueError, match="together"):
         mcp_server.sweep("a fox", width=512)
+
+
+def test_models_that_share_a_model_name_get_the_preset_name_too():
+    pl = sweep.plan("fox", ["draft", "icon"], _conf(), seeds=2)
+    assert pl["cols"] == ["SDXL base 1.0 (draft)", "SDXL base 1.0 (icon)"]
+
+
+def test_an_axis_no_chosen_preset_can_vary_is_an_error():
+    with pytest.raises(ValueError, match="no chosen preset has a guidance input"):
+        sweep.plan("fox", ["klein", "qwen"], _conf(), guidance=[2.0, 4.0])
