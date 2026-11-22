@@ -66,6 +66,17 @@ figure.src figcaption b { color: var(--text); font-weight: 500; }
 figure.a .pick { border-color: var(--pick-a); color: var(--pick-a); }
 figure.b .pick { border-color: var(--pick-b); color: var(--pick-b); }
 .tag { color: var(--text); font-weight: 500; }
+/* gen sweep (#17): the images as a labelled grid, the axes' values as headers */
+#sweep { display: grid; gap: var(--gap); padding: var(--pad); align-items: start; }
+#sweep .col, #sweep .row { color: var(--text); font-weight: 500; font-size: 12px; overflow-wrap: anywhere; }
+#sweep .col { align-self: end; text-align: center; }
+#sweep .row { align-self: center; max-width: 12ch; }
+#sweep .corner { color: var(--muted); font-size: 11px; align-self: end; }
+#sweep figure img { aspect-ratio: var(--aspect, auto); object-fit: contain; }
+#sweep figure .tag, #sweep figure .seed { display: none; }
+#sweep .empty { aspect-ratio: var(--aspect, 1); border: 1px dashed var(--line); border-radius: 8px; padding: 8px;
+  color: var(--muted); font-size: 12px; overflow: hidden; overflow-wrap: anywhere; }
+#sweep .empty.err { color: #ff8a80; }
 #bake { margin-top: 8px; color: var(--muted); }
 #bake ol { margin: 4px 0 8px; padding-left: 22px; }
 #bake .scroll { overflow-x: auto; }
@@ -129,6 +140,7 @@ figure.b .pick { border-color: var(--pick-b); color: var(--pick-b); }
 </div>
 
 <main id="grid"></main>
+<div id="sweep" hidden></div>
 
 <div class="view" id="view" role="dialog" aria-modal="true">
   <div class="top">
@@ -293,6 +305,47 @@ const cards = images.map((im, i) => {
   return fig;
 });
 
+/* ---------- sweep (#17) ---------- */
+const SW = RUN.sweep;
+if (SW) {
+  const nums = el("details", {}, el("summary", { textContent: "time and memory per image" }));  // 16 rows would push the grid down
+  nums.append($("bake").querySelector(".scroll"));
+  $("bake").append(nums);
+  $("bake").querySelector("ol").hidden = true;
+  $("grid").hidden = true;
+  $("sweep").hidden = false;
+  const byCol = {};
+  images.forEach((im, i) => { if (im.column) byCol[im.column] = i; });
+  const result = {};
+  for (const r of RUN.bakeoff.presets) result[r.preset] = r;
+  const hasRows = SW.rows.length > 0;
+  const sw = $("sweep");
+  sw.append(...(hasRows ? [el("div", { className: "corner", textContent: `↓ ${SW.row_axis}   → ${SW.col_axes.join(" · ")}` })] : []),
+    ...SW.cols.map((t) => el("div", { className: "col", textContent: t })));
+  const rows = Math.max(SW.rows.length, 1);
+  for (let r = 0; r < rows; r++) {
+    if (hasRows) sw.append(el("div", { className: "row", textContent: SW.rows[r] }));
+    for (let c = 0; c < SW.cols.length; c++) {
+      const cell = SW.cells.find((x) => x.r === r && x.c === c);
+      const i = cell ? byCol[cell.name] : undefined;
+      if (i !== undefined) { sw.append(cards[i]); continue; }
+      const res = (cell && result[cell.name]) || {};
+      sw.append(el("div", { className: "empty" + (res.error ? " err" : ""),
+        textContent: res.error || res.note || "not run" }));
+    }
+  }
+}
+function sweepLayout() {
+  const fit = state.layout === "fit";
+  $("mode-fit").setAttribute("aria-pressed", fit);
+  $("mode-grid").setAttribute("aria-pressed", !fit);
+  $("size").value = state.thumb;
+  const sw = $("sweep");
+  sw.style.setProperty("--aspect", state.aspectKnown ? String(state.aspect) : "auto");
+  sw.style.gridTemplateColumns = (SW.rows.length ? "max-content " : "") +
+    `repeat(${SW.cols.length}, ${fit ? "minmax(0, 1fr)" : state.thumb + "px"})`;
+}
+
 function bestFit(n, W, H, aspect, gap, cap) {
   // the column count that gives the largest images with all n visible in W x H
   let best = { cols: n, w: 0 };
@@ -307,6 +360,7 @@ function bestFit(n, W, H, aspect, gap, cap) {
 }
 
 function layout() {
+  if (SW) return sweepLayout();
   const fit = state.layout === "fit";
   $("mode-fit").setAttribute("aria-pressed", fit);
   $("mode-grid").setAttribute("aria-pressed", !fit);

@@ -101,7 +101,7 @@ def _wait_and_report(job_id: str, wait: float) -> list:
     summary = {"job_id": job_id, "status": "done", "elapsed_s": round(time.time() - job["started"]),
                "run_dir_windows": run["run_dir_windows"], "contact_sheet_windows": run["contact_sheet_windows"],
                "base_seed": run["base_seed"], "timing": (run.get("timing") or {}).get("summary"),
-               "images": [{"path": im["path"], "windows_path": im["windows_path"], "seed": im["seed"]}
+               "images": [{"path": im["path"], "windows_path": im.get("windows_path"), "seed": im["seed"]}
                           for im in run["images"]]}
     out: list = [summary]
     if job["preview"]:
@@ -187,6 +187,33 @@ def edit(path: str, instruction: str, count: int = 1, seed: int | None = None, s
     kwargs = dict(path=path, instruction=instruction, count=min(max(1, count), MAX_EDITS), seed=seed,
                   steps=steps, guidance=guidance, preset=preset, styles=styles, refs=refs)
     return _start(imagegen.edit, kwargs, preview)
+
+
+@mcp.tool()
+def sweep(prompt: str, presets: list[str] | None = None, steps: list[int] | None = None,
+          cfg: list[float] | None = None, guidance: list[float] | None = None, styles: list[str] | None = None,
+          seeds: int = 1, seed: int | None = None, width: int | None = None, height: int | None = None,
+          rows: str | None = None, confirm: bool = False, preview: bool = False) -> list:
+    """Compare settings or models: one prompt over a grid, as a labelled contact sheet (#17).
+
+    Every argument that gets more than one value is an axis; the images are the product (same prompt and the same
+    seeds in every cell). presets = models to compare (e.g. ["klein", "qwen"], default ["draft"]), steps, cfg
+    (SDXL/Qwen), guidance (no text-to-image preset takes it yet), styles (list_styles names, "none", "a+b"; default each preset's own look, give
+    ["none"] plus one more to compare, or one value "none" to give every model the bare prompt), seeds = how many seeds
+    (base, base+1, ...; rows share one). A setting a model has no input for (klein: cfg) is rendered once and the other
+    values are skipped. width and height together fix the size of every cell. rows: the axis down the side (default
+    seed if it varies, else the first of model, style, steps, cfg, guidance).
+    More than 16 images needs confirm=True (it can take a long time: Qwen is minutes an image).
+    Returns the run with the grid page (contact_sheet_windows); open_contact_sheet shows it. Same
+    waiting/job_id behaviour as generate: poll get_job. Per-cell time and peak VRAM/RAM are in bakeoff.json.
+    """
+    if (width is None) != (height is None):
+        raise ValueError("give width and height together")
+    import sweep as sweep_mod
+    kwargs = dict(prompt=prompt, presets=presets or ["draft"], steps=steps, cfg=cfg, guidance=guidance,
+                  styles=styles, seeds=seeds, seed=seed, size=(width, height) if width else None, rows=rows,
+                  confirm=confirm)
+    return _start(sweep_mod.sweep, kwargs, preview)
 
 
 @mcp.tool()

@@ -11,6 +11,7 @@ Usage:
   gen edit PATH "make it wave, side view"      # instruction edit (FLUX.2 klein; -p kontext|qwen; opt-in models)
   gen bakeoff PATH "instr" ["instr"...]         # same edits through kontext, klein, qwen; time/VRAM/RAM
   gen bakeoff --t2i "prompt"... [--ref IMG --ref-prompt "scene"]  # compare text-to-image models (#51)
+  gen sweep "prompt" -p klein,qwen --steps 8,16 --seeds 2         # settings/models as a labelled grid (#17)
   gen cutout PATH [--clean]                     # remove the background -> PATH-transparent.png
                                                 #   --clean: also drop stray shapes, centre on a square
   gen crt PATH... [--lines 120 --scanline 0.22] # CRT/VHS look on finished images -> PATH-crt.png
@@ -1569,7 +1570,7 @@ def write_contact_sheet(run_dir: Path, run: dict) -> Path:
         if "total_s" in timing:
             entry["time_s"] = timing["total_s"]
             entry["timing"] = ", ".join(_stage_parts(timing))
-        entry.update({k: im[k] for k in ("tag", "seconds") if im.get(k) is not None})  # tag: gen bakeoff
+        entry.update({k: im[k] for k in ("tag", "seconds", "column") if im.get(k) is not None})  # gen bakeoff / sweep
         if im.get("scene") and (run_dir / Path(im["scene"]).name).is_file():  # a cast run's scene (#52)
             entry["scene"] = Path(im["scene"]).name
             if entry["scene"] not in [x["file"] for x in scenes]:  # a job with 2 outputs shares one scene
@@ -1590,7 +1591,7 @@ def write_contact_sheet(run_dir: Path, run: dict) -> Path:
                        if r.get("file") and (run_dir / r["file"]).is_file()] + scenes,
             "cast_prompt": run.get("cast_prompt"),
             "mask": bool(run.get("mask")), "denoise": run.get("denoise"), "edit": bool(run.get("edit")),
-            "run_dir": str(run_dir), "project": run.get("project"), "bakeoff": run.get("bakeoff"),
+            "run_dir": str(run_dir), "project": run.get("project"), "bakeoff": run.get("bakeoff"), "sweep": run.get("sweep"),
             "timing": (run.get("timing") or {}).get("summary")}
     # "<" escaped so no value can close the <script> block it is inlined into
     fills = {"TITLE": html.escape(run["prompt"][:60]),
@@ -1806,6 +1807,9 @@ def main(argv: list[str]) -> int:
                    _style_arg(a.styles), a.refs)
         _print_run(run, a.open)
         return 0
+    if argv and argv[0] == "sweep":
+        import sweep  # lazy, like bakeoff
+        return sweep.main(argv[1:])
     if argv and argv[0] == "bakeoff":
         import bakeoff  # lazy: only gen bakeoff needs it
         return bakeoff.main(argv[1:])

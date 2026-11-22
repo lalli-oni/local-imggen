@@ -252,7 +252,8 @@ def _bake(comfy: imagegen.Comfy, out: Path, columns: list[tuple[str, list[tuple]
                             if (side := src.with_suffix(".json")).is_file():
                                 shutil.copy2(side, dest.with_suffix(".json"))
                             entries.append({"path": str(dest), "seed": im["seed"], "seconds": im.get("seconds"),
-                                            "timing": im.get("timing"), "tag": f"{label} · {n}"})  # per stage
+                                            "timing": im.get("timing"), "tag": f"{label} · {n}",
+                                            "column": name})  # column: where gen sweep puts it  # per stage
                         if not (out / imagegen.SHEET_SOURCE).is_file() and \
                                 (s := Path(run["run_dir"]) / imagegen.SHEET_SOURCE).is_file():
                             shutil.copy2(s, out / imagegen.SHEET_SOURCE)
@@ -279,10 +280,10 @@ def _bake(comfy: imagegen.Comfy, out: Path, columns: list[tuple[str, list[tuple]
 STOPPED = " (so far: still running, or stopped)"  # a sheet written before the last column finished
 
 
-def _out_dir(conf: dict, label: str) -> Path:
+def _out_dir(conf: dict, label: str, kind: str = "bakeoff") -> Path:
     now = datetime.now()
     out = Path(conf["output_dir"]).expanduser() / now.strftime("%Y-%m-%d") / \
-        f"{now:%H%M%S}-bakeoff-{imagegen.slug(label, 30)}"
+        f"{now:%H%M%S}-{kind}-{imagegen.slug(label, 30)}"
     out.mkdir(parents=True, exist_ok=True)
     return out
 
