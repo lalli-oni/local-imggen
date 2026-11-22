@@ -13,6 +13,11 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   `--t2i "fresh prompt"... [--ref IMG --ref-prompt "scene"...]` compares text-to-image models, #51: fresh prompts from text,
   and the ref test through each preset's edit_workflow or its `ref_preset` (SDXL -> sdxl_ref, IP-Adapter); labels from `model`;
   the sheet is rewritten after every column and on Ctrl-C, `--rebuild FOLDER` for older stopped folders),
+  `gen sweep "prompt" -p klein,qwen --steps 8,16 --cfg .. --guidance .. --style a,none --seeds N` (sweep.py, #17): the
+  product of the axes you give several values, same prompt/seeds per cell, as a labelled grid on one sheet (run.json
+  `sweep`: rows/cols/cells, images carry `column`; the template lays them out; `bakeoff._bake` runs it, so
+  per-cell time/VRAM/RAM, a sheet after every cell, Ctrl-C keeps it). A preset without an input for a setting
+  runs it once and skips the rest. >16 images needs `-y` / MCP `confirm`. MCP `sweep` (not in the tunnel allow-list),
   `gen sheet [RUN_DIR|DATE]` to rebuild contact sheets (default: latest run), `gen doctor` for a health check)
 - Styles (#10): `[styles.NAME]` in config.toml (`suffix`, optional `negative_extra`) is a look added after the preset
   suffix; a preset's `styles = [...]` is its default (the wallpaper presets: `synthwave`, the house style), and

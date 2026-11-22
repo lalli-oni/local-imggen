@@ -187,3 +187,26 @@ def test_cast_run_shows_refs_and_scene_compare(comfy, make_image, open_sheet):
     assert page.locator("#view-title").inner_text().count("scene · seed") == 1
     assert page.locator("#stage img").count() == 2
     assert not errors, errors
+
+
+def test_sweep_sheet_is_a_labelled_grid(comfy, open_sheet, monkeypatch):
+    """#17: axis values as headers, each image in its cell, a skipped cell shows why; fit/grid and compare still work."""
+    import sweep
+    run = sweep.sweep("a fox", ["draft", "klein"], cfg=[3.0, 6.0], seeds=2, seed=10, interval=0.01)
+    page, errors = open_sheet(run)
+    assert page.locator("#grid").is_hidden() and page.locator("#sweep").is_visible()
+    heads = page.locator("#sweep .col").all_inner_texts()
+    assert heads[0].endswith("cfg 3") and heads[1].endswith("cfg 6") and heads[2] == "FLUX.2 klein 4B · cfg 3" \
+        and heads[3] == "FLUX.2 klein 4B · cfg 6"
+    assert page.locator("#sweep .row").all_inner_texts() == ["seed 10", "seed 11"]
+    assert page.locator("#sweep figure").count() == 6  # klein's second cfg is skipped, in both rows
+    empties = page.locator("#sweep .empty").all_inner_texts()
+    assert len(empties) == 2 and all("no cfg input" in t for t in empties)
+    # images are where the headers say: row 1 = seed 11, so the first cell of that row is seed 11
+    first_of_row2 = page.locator("#sweep figure").nth(3).get_attribute("title")
+    assert "seed11" in first_of_row2
+    page.click("#mode-grid")
+    page.click("#sweep figure a >> nth=0")  # opens the viewer
+    assert page.locator("#view.open").count() == 1
+    page.keyboard.press("Escape")
+    assert not errors, errors

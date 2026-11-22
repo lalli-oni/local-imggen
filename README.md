@@ -29,6 +29,7 @@ gen "misty fjord at sunrise" -p wallpaper --open
 | `gen edit PATH "instruction" [-p klein\|kontext\|qwen]` | Edit with a plain-language instruction; FLUX.2 klein by default, opt-in models (`models/*.sh`) |
 | `gen bakeoff PATH "instr" ["instr"...] [-p kontext,klein,qwen] [-n 2]` | The same edits through several edit models (same seeds), time/VRAM/RAM per model, one contact sheet |
 | `gen bakeoff --t2i "fresh prompt"... [--ref IMG --ref-prompt "scene"...] [-p draft,dreamshaper,klein,qwen] [--steps klein=16]` | Compare text-to-image models: fresh prompts from text alone, and a character from a ref image (IP-Adapter for SDXL) |
+| `gen sweep "prompt" [-p klein,qwen] [--steps 8,16] [--cfg 3,6] [--guidance G,H] [--style a,none] [--seeds N]` | One prompt over a grid of settings or models (same seeds in every cell) as a labelled grid on one contact sheet (#17) |
 | `gen project new\|list\|status\|set\|gen\|promote\|keep\|import\|doc` | Creative projects: versioned prompt/palette/refs, named assets, docs, import an existing folder |
 | `gen project rate\|note\|board` | The project's board: pick/maybe/reject and notes on pass images (`P:N`), and its `index.html` page |
 | `gen board serve [SLUG] [--open]` | The board on http://127.0.0.1:8190, clickable: click an image to select it, then keys: arrows move, 1/2/3 rate, 0 clears, n notes, o opens full size, "Generate 4 more", refreshes itself on any change |
@@ -249,3 +250,27 @@ gen bakeoff --t2i \
   --open \
   "a red fox in a yellow raincoat holding a blue umbrella at a bus stop on a rainy street at night, a lit sign above it reads BUS 14, three puddles reflecting neon lights, a cat watching from a window, detailed storybook illustration"
 ```
+
+### Parameter sweep grid (`gen sweep`, #17)
+
+One prompt, many settings, one labelled grid. Every option you give several comma-separated values is an axis, and
+the images are the product, all with the same prompt and seeds:
+
+- `-p klein,qwen`: the model (a preset: its model and workflow). This is how the model-consolidation pass (#64) is
+  compared. Use `--style none` so every model gets the bare prompt; without `--style` each preset keeps its own look.
+- `--steps`, `--cfg` (SDXL, Qwen), `--guidance` (FLUX), `--style a,none,b+c`, `--seeds N` (base, base+1, ...).
+
+With one axis the values run along the top. With more, the rows are `--rows AXIS` (default: seed if it varies, else
+the first of model, style, steps, cfg, guidance) and the columns are the rest, combined ("klein · steps 8").
+A model with no input for a setting (klein has no cfg) renders that column once; its other values are shown as
+skipped. More than 16 images asks first (`-y` to skip the question; without a terminal it refuses). The models are
+unloaded between presets, each image has its time and peak VRAM/RAM in a collapsed table above the grid, and the
+sheet is rewritten after every image, so Ctrl-C keeps what ran. The MCP tool `sweep` does the same (poll `get_job`).
+
+```bash
+# the first model comparison for #64: same prompt, same 2 seeds, klein vs Qwen (about 4 min per Qwen image)
+gen sweep "a cozy cabin by a misty fjord at dusk, northern lights" -p klein,qwen --style none --seeds 2 --seed 100 --size 1344x768 --open
+# how many steps are enough on klein and Qwen
+gen sweep "a cozy cabin by a misty fjord at dusk" -p klein,qwen --style none --steps 4,8,16 --seed 100 --rows steps
+```
+
