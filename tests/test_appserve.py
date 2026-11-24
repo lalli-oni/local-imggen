@@ -281,3 +281,16 @@ def test_prompts_survives_a_broken_character(world, server):
     (characters.char_dir("tulu") / "character.json").write_text("{nope")
     st, _, d = get(server, "/api/prompts")
     assert st == 200 and d["characters"] == [] and any("tulu" in e for e in d["errors"])
+
+
+def test_prompts_odd_config(world, server, monkeypatch):
+    conf = imagegen.load_config()
+    conf["daily"].update(themes=["a", "a ", "b"], style=" ", stand_in="", props={"x": ["i", "i"]})
+    conf["presets"]["klein"]["styles"] = "synthwave"  # a string is accepted by generate()
+    monkeypatch.setattr(imagegen, "load_config", lambda: conf)
+    _, _, d = get(server, "/api/prompts")
+    assert [t["text"] for t in d["themes"]["pool"]] == ["a", "b"] and d["props"]["x"] == ["i"]
+    assert d["daily"]["style"] == "" and d["templates"]["stand_in"] == ""
+    syn = next(s for s in d["styles"] if s["name"] == "synthwave")
+    assert syn["daily"] and "klein" in syn["presets"]
+    assert next(p for p in d["presets"] if p["name"] == "klein")["styles"] == ["synthwave"]

@@ -316,7 +316,7 @@ def overview(index: RunIndex) -> dict:
 # ---------------------------------------------------------------- prompts (#99)
 
 def _texts(value) -> list[str]:
-    return daily._pool(value)
+    return list(dict.fromkeys(daily._pool(value)))  # no repeats: the page keys rows by their text
 
 
 def _theme_rows(texts: list[str], used: dict[str, dict]) -> list[dict]:
@@ -352,8 +352,9 @@ def prompts_overview(index: RunIndex) -> dict:
         return {"text": custom or default, "custom": bool(custom)}
 
     daily_preset = d.get("preset", "wallpaper_cast")
+    style = str(d.get("style") or "").strip()  # like daily.settings: blank = the preset's styles
     out = {
-        "daily": {"preset": daily_preset, "style": str(d.get("style") or ""), "cast": _texts(d.get("cast")),
+        "daily": {"preset": daily_preset, "style": style, "cast": _texts(d.get("cast")),
                   "no_repeat_days": d.get("no_repeat_days", 7), "props_per_day": d.get("props_per_day", 0),
                   "count": d.get("count", 1)},
         "themes": {"pool": _theme_rows(_texts(d.get("themes")), used),
@@ -363,13 +364,13 @@ def prompts_overview(index: RunIndex) -> dict:
         "props": {k: _texts(v) for k, v in (d.get("props") or {}).items()},
         "styles": [{"name": n, "description": s.get("description", ""), "suffix": s.get("suffix", ""),
                     "negative_extra": s.get("negative_extra", ""), "post": s.get("post", []),
-                    "presets": sorted(k for k, p in presets.items() if n in (p.get("styles") or [])),
-                    "daily": n in imagegen.split_styles(d.get("style"))
-                    or (not d.get("style") and n in (presets.get(daily_preset, {}).get("styles") or []))}
+                    "presets": sorted(k for k, p in presets.items() if n in imagegen.split_styles(p.get("styles"))),
+                    "daily": n in (imagegen.split_styles(style) if style
+                                   else imagegen.split_styles(presets.get(daily_preset, {}).get("styles")))}
                    for n, s in styles.items()],
         "presets": [{"name": n, "description": p.get("description", ""), "model": p.get("model"),
                      "kind": "edit" if "edit_workflow" in p and "workflow" not in p else "image",
-                     "styles": p.get("styles") or [], "suffix": p.get("suffix", ""),
+                     "styles": imagegen.split_styles(p.get("styles")), "suffix": p.get("suffix", ""),
                      "negative_extra": p.get("negative_extra", ""), "post": p.get("post", []),
                      "size": f"{p['width']}x{p['height']}" if "width" in p and "height" in p else None,
                      "daily": n == daily_preset}
@@ -377,7 +378,7 @@ def prompts_overview(index: RunIndex) -> dict:
         "templates": {"scene_prompt": builtin("scene_prompt", daily.SCENE_PROMPT),
                       "cast_prompt": builtin("cast_prompt", daily.CAST_PROMPT),
                       "ref_prompt": {"text": str(d.get("ref_prompt") or ""), "custom": bool(d.get("ref_prompt"))},
-                      "stand_in": str(d.get("stand_in") or daily.STAND_IN),
+                      "stand_in": str(d.get("stand_in", daily.STAND_IN) or ""),  # "" = nobody in the scene
                       "stand_ins": {k: str(v) for k, v in (d.get("stand_ins") or {}).items()}},
         "stages": [], "characters": [], "projects": [], "errors": errors,
     }

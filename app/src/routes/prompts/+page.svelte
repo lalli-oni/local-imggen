@@ -179,7 +179,11 @@
 		{/each}
 		<div class="panel">
 			<h3>Stand-ins</h3>
-			<p class="small">default: {data.templates.stand_in}</p>
+			<p class="small">
+				{data.templates.stand_in
+					? `default: ${data.templates.stand_in}`
+					: 'none: the scene is drawn empty and the edit adds the characters (the per-character ones below are unused)'}
+			</p>
 			{#each Object.entries(data.templates.stand_ins) as [who, text] (who)}
 				<p class="small"><strong>{who}</strong>: {text}</p>
 			{/each}
@@ -244,6 +248,9 @@
 </div>
 
 <style>
+	.section-head {
+		flex-wrap: wrap;
+	}
 	.lead {
 		margin: -12px 0 0;
 	}
