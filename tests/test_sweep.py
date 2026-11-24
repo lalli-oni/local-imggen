@@ -179,3 +179,84 @@ def test_models_that_share_a_model_name_get_the_preset_name_too():
 def test_an_axis_no_chosen_preset_can_vary_is_an_error():
     with pytest.raises(ValueError, match="no chosen preset has a guidance input"):
         sweep.plan("fox", ["klein", "qwen"], _conf(), guidance=[2.0, 4.0])
+
+
+def test_per_model_steps_give_each_model_its_own_columns_and_no_empty_cells():
+    pl = sweep.plan("fox", ["draft", "klein"], _conf(), steps={"draft": [10, 20], "klein": [4, 8, 16]}, seed=3)
+    assert pl["row_axis"] is None  # the models' step lists differ, so they are columns, not shared rows
+    got = [(c["preset"], c["steps"]) for c in pl["cells"]]
+    assert got == [("draft", 10), ("draft", 20), ("klein", 4), ("klein", 8), ("klein", 16)]
+    assert all(c["skip"] is None for c in pl["cells"])
+    assert pl["cols"][2] == "FLUX.2 klein 4B · steps 4"
+
+
+def test_a_star_default_and_a_bare_list_are_the_same_plan():
+    bare = sweep.plan("fox", ["draft", "klein"], _conf(), steps=[8, 16], seed=2)
+    star = sweep.plan("fox", ["draft", "klein"], _conf(), steps={"*": [8, 16]}, seed=2)
+    assert [(c["preset"], c["steps"], c["label"]) for c in bare["cells"]] == \
+        [(c["preset"], c["steps"], c["label"]) for c in star["cells"]]
+
+
+def test_a_model_not_named_keeps_its_own_steps():
+    pl = sweep.plan("fox", ["draft", "klein"], _conf(), steps={"klein": [4, 8]}, seed=2)
+    draft = [c for c in pl["cells"] if c["preset"] == "draft"]
+    assert [c["steps"] for c in draft] == [None] and "steps preset default" in draft[0]["label"]
+    assert [c["steps"] for c in pl["cells"] if c["preset"] == "klein"] == [4, 8]
+
+
+def test_per_model_steps_with_rows_on_steps_skip_what_a_model_does_not_have():
+    pl = sweep.plan("fox", ["draft", "klein"], _conf(), steps={"draft": [10, 20], "klein": [4]}, rows="steps", seed=1)
+    assert pl["rows"] == ["steps 10", "steps 20", "steps 4"]
+    skipped = [c for c in pl["cells"] if c["skip"]]
+    assert {(c["preset"], c["steps"]) for c in skipped} == {("draft", 4), ("klein", 10), ("klein", 20)}
+    assert "klein has no steps 10" in next(c["skip"] for c in skipped if c["preset"] == "klein")
+
+
+def test_per_model_steps_errors():
+    c = _conf()
+    with pytest.raises(ValueError, match="isn't one of the models"):
+        sweep.plan("fox", ["draft"], c, steps={"nope": [4, 8]})
+    with pytest.raises(ValueError, match="twice"):
+        sweep.plan("fox", ["draft"], c, steps={"draft": [8, 8]})
+    with pytest.raises(ValueError, match="steps must be"):
+        sweep.plan("fox", ["draft", "klein"], c, steps={"klein": [0, 8]})
+
+
+def test_steps_arguments_parse_bare_and_per_model():
+    assert sweep._steps_arg(["4,8"]) == {"*": [4, 8]}
+    assert sweep._steps_arg(["klein=4,8,16", "qwen=15,25,40"]) == {"klein": [4, 8, 16], "qwen": [15, 25, 40]}
+    assert sweep._steps_arg(["klein=4", "8,16"]) == {"klein": [4], "*": [8, 16]}
+    for bad in (["4,8", "8"], ["klein=4", "klein=8"], ["klein="], ["klein=4,x"]):
+        with pytest.raises(Exception):
+            sweep._steps_arg(bad)
+
+
+def test_cli_steps_flag_can_come_before_the_prompt(monkeypatch):
+    seen = {}
+
+    def fake_sweep(*args, **kwargs):
+        seen["steps"] = args[2]
+        raise SystemExit(0)  # stop before any run
+    monkeypatch.setattr(sweep, "sweep", fake_sweep)
+    with pytest.raises(SystemExit):
+        sweep.main(["a fox", "-p", "klein,draft", "--steps", "klein=4,8,16", "--steps", "draft=10,20", "--style", "none"])
+    assert seen["steps"] == {"klein": [4, 8, 16], "draft": [10, 20]}
+    with pytest.raises(SystemExit):
+        sweep.main(["--steps", "8,16", "a fox", "-p", "klein"])
+    assert seen["steps"] == {"*": [8, 16]}
+
+
+def test_per_model_steps_run_each_model_at_its_own_steps(comfy):
+    run = sweep.sweep("a fox", ["draft", "klein"], steps={"draft": [8], "klein": [4, 16]}, styles=["none"],
+                      interval=0.01)
+    got = sorted((_ks(w)["steps"]) for w in comfy.workflows())
+    assert got == [4, 8, 16]  # one image per model and step count, no more
+    assert len(run["images"]) == 3
+    assert run["preset"] == "sweep: 2 model × per-model steps"
+    assert run["sweep"]["cols"][-1] == "FLUX.2 klein 4B · steps 16"
+
+
+def test_per_model_steps_label_a_model_left_out_as_its_default():
+    pl = sweep.plan("fox", ["draft", "klein"], _conf(), steps={"klein": [4, 8]}, seed=2)
+    draft = next(c for c in pl["cells"] if c["preset"] == "draft")
+    assert "steps preset default" in draft["label"]
