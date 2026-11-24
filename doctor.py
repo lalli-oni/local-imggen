@@ -36,6 +36,8 @@ MODEL_KEYS = {"checkpoint": "checkpoints", "upscale_model": "upscale_models", "u
               "clip_l": "text_encoders", "t5": "text_encoders", "text_encoder": "text_encoders", "vae": "vae",
               "ipadapter_model": "ipadapter", "clip_vision": "clip_vision"}
 MODELS_DIR = "~/imagegen/models"  # where a preset's `download` script lives
+GATED_SCRIPTS = {"flux3-klein.sh"}  # Hugging Face repos that need a licence click + a read token (#95)
+HF_TOKEN_HINT = " (gated: accept the licence on Hugging Face and save a read token in ~/.cache/huggingface/token first)"
 
 
 def _modes(p: dict) -> list[tuple[str, str | None, set[str]]]:
@@ -195,6 +197,8 @@ def check_models(conf: dict, api_up: bool) -> list[dict]:
             else:
                 fix = " or ".join(f"{MODELS_DIR}/{s}" for s in sorted(scripts)) or \
                     f"put it in {COMFY_DIR / 'models' / folder}/"
+                if scripts & GATED_SCRIPTS:
+                    fix += HF_TOKEN_HINT
                 out.append(_check(f"model {name}", "warn", f"missing from {folder} ({source}); "
                                   "only opt-in presets need it", f"opt-in download: {fix}"))
     # rembg: used by the icon preset's remove_bg step and by `gen cutout`

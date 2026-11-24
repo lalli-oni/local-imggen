@@ -103,7 +103,9 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   always-on once applied (needs `wsl --shutdown`), so it is not part of the on/off toggle.
 - `models/*.sh`: opt-in downloads (ask y/N, resumable, sha256) into `~/comfyui/models`, sharing `models/_fetch.sh`:
   `flux-kontext.sh` (~17.7 GB), `flux2-klein.sh` (~11.9 GB), `dreamshaper-xl-lightning.sh` (~6.9 GB, SDXL finetune), `ipadapter-sdxl.sh` (~3.4 GB; the ComfyUI_IPAdapter_plus node is a manual git clone), `qwen-image-2.1.sh` (~30 GB, bf16: no int8, it renders
-  black on gfx1201). `qwen3vl-8b-fp8.sh` (~10.6 GB): the fp8 text encoder for `qwen_lite` (bf16's 16 GB swapped WSL and stalled Windows). A preset's `download` key names its script; `gen doctor` shows those models (and nodes only
+  black on gfx1201). `flux3-klein.sh` (~20 GB, #95: FLUX 3 Image Klein 5.6B bf16 + Qwen3-VL-4B encoder, preset `klein3`; GATED: accept the licence on
+  Hugging Face; `_fetch.sh` reads a read token from `$HF_TOKEN`, `$HF_TOKEN_PATH`, `$HF_HOME/token` or `~/.cache/huggingface/token`; no
+  fp8 build exists, the int8-convrot/nvfp4 files are skipped). `qwen3vl-8b-fp8.sh` (~10.6 GB): the fp8 text encoder for `qwen_lite` (bf16's 16 GB swapped WSL and stalled Windows). A preset's `download` key names its script; `gen doctor` shows those models (and nodes only
   they use) as warn while missing. Never run automatically.
 - `test.sh` + `tests/`: the test suite (see Testing below). `requirements-dev.txt` / `requirements-browser.txt`
   hold test-only deps; CI runs it on every PR (`.github/workflows/test.yml`).

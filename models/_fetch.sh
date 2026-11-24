@@ -5,6 +5,7 @@
 #   LICENCE  one line printed before asking (licence + model page)
 #   TRY      what to run once everything is there
 # Args: -y/--yes (no prompt), -h/--help (prints the caller's header comment).
+# A Hugging Face read token (HF_TOKEN or ~/.cache/huggingface/token, see below) is sent when found.
 # Safe to re-run: skips files that are there, resumes partial downloads (*.part), checks sha256
 # when Hugging Face sends it. Only writes model files: no sudo, no pip, never touches ~/venvs/comfy
 # or the comfyui service (ComfyUI sees new model files without a restart).
@@ -25,6 +26,14 @@ done
 command -v wget >/dev/null || { echo "wget not found (sudo apt install wget)" >&2; exit 1; }
 [ -d "$MODELS" ] || { echo "$MODELS not found (is ComfyUI installed in ~/comfyui?)" >&2; exit 1; }
 
+# Gated repos (FLUX 3 klein) need a Hugging Face read token. Lookup order, like huggingface_hub:
+# $HF_TOKEN, the file $HF_TOKEN_PATH, $HF_HOME/token, ~/.cache/huggingface/token. Save it once:
+#   mkdir -p ~/.cache/huggingface && read -rsp "HF token: " t && echo "$t" > ~/.cache/huggingface/token && chmod 600 ~/.cache/huggingface/token
+if [ -z "${HF_TOKEN:-}" ]; then
+  for tf in "${HF_TOKEN_PATH:-}" "${HF_HOME:+$HF_HOME/token}" "$HOME/.cache/huggingface/token"; do
+    if [ -n "$tf" ] && [ -r "$tf" ]; then HF_TOKEN=$(tr -d '[:space:]' <"$tf"); break; fi
+  done
+fi
 auth=()
 [ -n "${HF_TOKEN:-}" ] && auth=(--header "Authorization: Bearer $HF_TOKEN")
 
@@ -81,7 +90,8 @@ for f in "${missing[@]}"; do
   echo "==> $folder/$name (${size} GB)"
   wget -c -q --show-progress "${auth[@]}" -O "$dest.part" "$url" || {
     echo "!! download failed. Re-run to resume. If it says 401/403, the file may need a Hugging Face"
-    echo "   login: accept the licence on the model page, then HF_TOKEN=hf_... $0" >&2
+    echo "   login: accept the licence on the model page, and save a read token in ~/.cache/huggingface/token" >&2
+    echo "   (or run: HF_TOKEN=hf_... $0)" >&2
     exit 1
   }
   sha=$(expected_sha "$url" || true)
