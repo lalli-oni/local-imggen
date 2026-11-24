@@ -311,9 +311,8 @@ def check_limits(conf: dict | None = None) -> dict:
 
 
 def check_claude_cli(conf: dict | None = None) -> dict | None:
-    """#94: the claude CLI, only when [daily.director] or gen ideas' [daily.ideas] is switched on."""
-    daily = (conf or {}).get("daily", {})
-    if not ((daily.get("director") or {}).get("enabled") or (daily.get("ideas") or {}).get("use")):
+    """#94: the claude CLI, only when [daily.director] is on (gen ideas reports its own failure)."""
+    if not (((conf or {}).get("daily", {}).get("director") or {}).get("enabled")):
         return None
     import shutil
     if shutil.which("claude"):

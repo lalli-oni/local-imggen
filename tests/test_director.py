@@ -116,7 +116,7 @@ def test_run_saves_the_director_result_in_run_json(tulu, daily_conf, comfy, on_c
 
 
 def test_roles_for_a_cast_of_two(daily_conf):
-    daily_conf(cast=["a", "b"])
+    daily_conf(cast=["a", "b"], preset="wallpaper")
     assert daily.roles(daily.settings()) == ["the character on the left", "the character on the right"]
 
 
@@ -159,5 +159,41 @@ def test_doctor_checks_claude_only_when_used():
 
 def test_doctor_warns_without_the_cli(monkeypatch):
     monkeypatch.setenv("PATH", "/nonexistent")
-    c = doctor.check_claude_cli({"daily": {"ideas": {"use": True}}})
+    assert doctor.check_claude_cli({"daily": {"ideas": {"use": True}}}) is None  # only gen ideas needs it
+    c = doctor.check_claude_cli({"daily": {"director": {"enabled": True}}})
     assert c["status"] == "warn" and "claude --version" in c["fix"]
+
+
+# ---------------------------------------------------------------- hardening (code review)
+
+@pytest.mark.parametrize("bad", [{"scene": "x y", "gags": 3}, {"scene": "x y", "gags": "ha", "layout": 5}])
+def test_odd_gags_and_layout_types_do_not_crash(bad):
+    r = director.check_scene("plain", bad)
+    assert r["gags"] == [] and r["layout"] == ""
+
+
+@pytest.mark.parametrize("junk", ["[]", "null", '"text"', "7"])
+def test_damaged_cache_is_asked_again(tmp_path, junk):
+    conf, day, who = imagegen.load_config(), date(2026, 11, 10), ["the main character"]
+    f = director.cache_file(conf, day, THEME, who)
+    f.parent.mkdir(parents=True); f.write_text(junk)
+    assert "SQUID PRO QUO" in director.direct_cached(conf, day, THEME, who)["scene"]
+    assert "SQUID PRO QUO" in json.loads(f.read_text())["scene"]  # overwritten
+
+
+def test_themes_must_be_a_list(monkeypatch):
+    monkeypatch.setattr(director, "ask", lambda *a, **k: {"themes": "some text"})
+    with pytest.raises(director.Unavailable, match="no list of themes"):
+        director.make_ideas(3, imagegen.load_config())
+    assert director.load_ideas(imagegen.load_config()) == []
+
+
+def test_apostrophe_in_a_word_does_not_hide_the_sign():
+    assert director.signs("Tulu's heist, a sign reads 'SQUID PRO QUO'") == ["SQUID PRO QUO"]
+    assert director.signs("a sign reads 'Hot Tub, Hotter Lava'.") == ["Hot Tub, Hotter Lava"]
+
+
+def test_one_string_theme_in_config_is_fine_for_ideas(daily_conf):
+    daily_conf(themes="a single theme")
+    conf = imagegen.load_config()
+    assert director.make_ideas(5, conf)

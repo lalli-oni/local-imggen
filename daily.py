@@ -335,7 +335,8 @@ def cast_prompts(d: dict, theme: str, names: list[str | None]) -> tuple[str, str
 
 def roles(d: dict) -> list[str]:
     """How the director may call the characters: "the main character", or "the character on the left", ..."""
-    n = max(1, len(_pool(d["cast"])))
+    # a cast preset only shows the characters that have a ref (find_refs), like cast_prompts
+    n = max(1, len(find_refs(d)) if d["casting"] else len(_pool(d["cast"])))
     return ["the main character"] if n == 1 else [f"the character {PLACES[k] if k < len(PLACES) else f'number {k + 1}'}"
                                                    for k in range(n)]
 

@@ -16,11 +16,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import signal
 import shutil
 import subprocess
 import sys
 import tempfile
+import types
 from datetime import date
 from pathlib import Path
 
@@ -81,13 +84,22 @@ def ask(system: str, prompt: str, model: str = "", timeout: float = TIMEOUT) -> 
     if model:
         cmd += ["--model", model]
     try:
-        # cwd = a temp folder, so the CLI does not read this repo's CLAUDE.md
-        p = subprocess.run(cmd, input=prompt, capture_output=True, text=True, timeout=timeout,
-                           cwd=tempfile.gettempdir())
-    except subprocess.TimeoutExpired:
-        raise Unavailable(f"claude did not answer within {timeout:.0f}s") from None
+        # cwd = a temp folder, so the CLI does not read this repo's CLAUDE.md. Own process group: on a timeout the
+        # whole group is killed, or a child holding the pipes open would keep us waiting past the timeout.
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, cwd=tempfile.gettempdir(), start_new_session=True)
+        try:
+            stdout, stderr = proc.communicate(prompt, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except OSError:
+                proc.kill()
+            proc.communicate()
+            raise Unavailable(f"claude did not answer within {timeout:.0f}s") from None
     except OSError as e:
         raise Unavailable(f"could not run claude: {e}") from None
+    p = types.SimpleNamespace(returncode=proc.returncode, stdout=stdout, stderr=stderr)
     try:
         out = json.loads(p.stdout)
     except ValueError:
@@ -112,12 +124,16 @@ def _json_object(text: str) -> dict:
 
 
 def signs(text: str) -> list[str]:
-    """Quoted sign texts in a theme: 'SQUID PRO QUO' ("CAN'T STOP" is one: a quote closes before a space/punctuation)."""
-    return [m.strip() for m in re.findall(r"""['"](.+?)['"](?=[\s,.;:)]|$)""", text) if len(m.strip()) > 1 and m.strip().upper() == m.strip()]
+    """Quoted sign texts in a theme: 'SQUID PRO QUO'. A quote opens after a space, bracket or the start (not Tulu's)
+    and closes before a space or punctuation (so "CAN'T STOP" is one sign)."""
+    found = re.findall(r"""(?:^|(?<=[\s(]))['"](.+?)['"](?=[\s,.;:)]|$)""", text)
+    return [m.strip() for m in found if len(m.strip()) > 1]
 
 
 def check_scene(theme: str, obj: dict) -> dict:
     """Validate direct()'s answer: {scene, gags, layout}. Raises Unavailable on a bad one."""
+    if not isinstance(obj, dict):
+        raise Unavailable("claude's answer is not a JSON object")
     scene = obj.get("scene")
     if not isinstance(scene, str) or not scene.strip():
         raise Unavailable("claude's answer has no scene")
@@ -127,7 +143,8 @@ def check_scene(theme: str, obj: dict) -> dict:
     lost = [s for s in signs(theme) if s not in scene]
     if lost:  # Qwen writes gibberish on signs it makes up, so a lost sign text is worse than no rewrite
         raise Unavailable(f"claude's scene lost the sign text {lost[0]!r}")
-    gags = [g.strip() for g in obj.get("gags") or [] if isinstance(g, str) and g.strip()][:5]
+    raw = obj.get("gags")
+    gags = [g.strip() for g in (raw if isinstance(raw, list) else []) if isinstance(g, str) and g.strip()][:5]
     layout = obj.get("layout")
     return {"scene": scene, "gags": gags, "layout": " ".join(layout.split()) if isinstance(layout, str) else ""}
 
@@ -152,8 +169,8 @@ def direct_cached(conf: dict, day: date, theme: str, who: list[str], model: str 
     f = cache_file(conf, day, theme, who)
     try:
         return check_scene(theme, json.loads(f.read_text()))
-    except (OSError, ValueError, Unavailable):
-        pass
+    except (OSError, ValueError, TypeError, AttributeError, Unavailable):
+        pass  # no cache, or a damaged one: ask again (and overwrite it)
     res = direct(theme, who, model, timeout)
     try:
         f.parent.mkdir(parents=True, exist_ok=True)
@@ -179,12 +196,16 @@ def load_ideas(conf: dict) -> list[str]:
 
 def make_ideas(n: int, conf: dict, model: str = "", timeout: float = TIMEOUT * 2) -> list[str]:
     """Ask for n new themes (different from [daily] themes and earlier ideas), append them to ideas.json. Returns the new ones."""
-    have = list(dict.fromkeys([*conf.get("daily", {}).get("themes", []), *load_ideas(conf)]))
+    cfg = conf.get("daily", {}).get("themes", [])
+    have = list(dict.fromkeys([*([cfg] if isinstance(cfg, str) else cfg), *load_ideas(conf)]))
     examples = have[-12:]
     prompt = (f"Write {n} new themes.\nExamples of the style (and things not to repeat):\n"
               + "\n".join(f"- {t}" for t in examples))
     obj = ask(IDEAS_SYSTEM, prompt, model, timeout)
-    fresh = [" ".join(t.split()) for t in obj.get("themes") or [] if isinstance(t, str) and t.strip()]
+    raw = obj.get("themes")
+    if not isinstance(raw, list):
+        raise Unavailable("claude's answer has no list of themes")
+    fresh = [" ".join(t.split()) for t in raw if isinstance(t, str) and 10 < len(t.strip()) <= 400]
     fresh = [t for t in dict.fromkeys(fresh) if t not in have][:n]
     if not fresh:
         raise Unavailable("claude gave no new themes")
@@ -195,8 +216,10 @@ def make_ideas(n: int, conf: dict, model: str = "", timeout: float = TIMEOUT * 2
     except (OSError, ValueError):
         old = []
     f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps(old + [{"theme": t, "added": date.today().isoformat()} for t in fresh], indent=2,
-                            ensure_ascii=False))
+    tmp = f.with_name(f.name + ".tmp")  # write + rename: a Ctrl-C half way can't leave a broken ideas.json
+    tmp.write_text(json.dumps(old + [{"theme": t, "added": date.today().isoformat()} for t in fresh], indent=2,
+                              ensure_ascii=False))
+    tmp.replace(f)
     return fresh
 
 
