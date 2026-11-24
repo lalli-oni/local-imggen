@@ -161,3 +161,9 @@ def test_klein3_doctor_says_how_to_get_the_gated_files(comfy):
     c = checks["model flux3-image-klein-bf16.safetensors"]
     assert c["status"] == "warn" and "models/flux3-klein.sh" in c["fix"] and "huggingface/token" in c["fix"]
     assert "huggingface/token" not in checks["model flux-2-klein-4b-fp8.safetensors"]["fix"]
+
+
+def test_gated_hint_only_when_every_script_is_gated(comfy):
+    comfy.models["vae"] = []
+    c = {c["name"]: c for c in doctor.check_models(imagegen.load_config(), api_up=True)}["model flux2-vae.safetensors"]
+    assert "flux2-klein.sh" in c["fix"] and "huggingface/token" not in c["fix"]  # klein4B's script is public

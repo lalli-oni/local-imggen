@@ -197,7 +197,7 @@ def check_models(conf: dict, api_up: bool) -> list[dict]:
             else:
                 fix = " or ".join(f"{MODELS_DIR}/{s}" for s in sorted(scripts)) or \
                     f"put it in {COMFY_DIR / 'models' / folder}/"
-                if scripts & GATED_SCRIPTS:
+                if scripts and scripts <= GATED_SCRIPTS:  # an ungated script that has it needs no token
                     fix += HF_TOKEN_HINT
                 out.append(_check(f"model {name}", "warn", f"missing from {folder} ({source}); "
                                   "only opt-in presets need it", f"opt-in download: {fix}"))
