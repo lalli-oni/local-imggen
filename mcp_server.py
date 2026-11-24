@@ -190,14 +190,14 @@ def edit(path: str, instruction: str, count: int = 1, seed: int | None = None, s
 
 
 @mcp.tool()
-def sweep(prompt: str, presets: list[str] | None = None, steps: list[int] | None = None,
+def sweep(prompt: str, presets: list[str] | None = None, steps: list[int] | dict[str, list[int]] | None = None,
           cfg: list[float] | None = None, guidance: list[float] | None = None, styles: list[str] | None = None,
           seeds: int = 1, seed: int | None = None, width: int | None = None, height: int | None = None,
           rows: str | None = None, confirm: bool = False, preview: bool = False) -> list:
     """Compare settings or models: one prompt over a grid, as a labelled contact sheet (#17).
 
     Every argument that gets more than one value is an axis; the images are the product (same prompt and the same
-    seeds in every cell). presets = models to compare (e.g. ["klein", "qwen"], default ["draft"]), steps, cfg
+    seeds in every cell). presets = models to compare (e.g. ["klein", "qwen"], default ["draft"]), steps (a list for every model, or {"klein": [4, 8], "qwen": [15, 25]} per model, #94), cfg
     (SDXL/Qwen), guidance (no text-to-image preset takes it yet), styles (list_styles names, "none", "a+b"; default each preset's own look, give
     ["none"] plus one more to compare, or one value "none" to give every model the bare prompt), seeds = how many seeds
     (base, base+1, ...; rows share one). A setting a model has no input for (klein: cfg) is rendered once and the other
