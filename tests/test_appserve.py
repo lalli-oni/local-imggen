@@ -236,3 +236,48 @@ def test_routes_with_dots_get_the_app(server):
     _, body = fetch_ok(server, "/runs/2026-11-18/101500-draft-v1.5-test")
     assert b"<title>app</title>" in body
     assert get(server, "/missing.png")[0] == 404
+
+
+def test_prompts_overview(world, server):
+    st, _, d = get(server, "/api/prompts")
+    assert st == 200
+    conf = imagegen.load_config()
+    # themes: the pool from config, with how often the daily runs used each
+    assert len(d["themes"]["pool"]) == len(conf["daily"]["themes"])
+    assert d["daily"]["preset"] == conf["daily"]["preset"]
+    used = [t for t in d["themes"]["pool"] + [x for v in d["themes"]["dates"].values() for x in v]
+            if t["uses"]]
+    assert used == []  # the one daily run in the fixture used a theme that is not in config
+    assert set(d["props"]) == set(conf["daily"]["props"])
+    # styles and presets carry their text, and who uses them
+    syn = next(s for s in d["styles"] if s["name"] == "synthwave")
+    assert syn["suffix"] and "wallpaper" in syn["presets"] and syn["daily"]
+    assert next(p for p in d["presets"] if p["name"] == "wallpaper_cast")["daily"]
+    assert next(p for p in d["presets"] if p["name"] == "klein")["kind"] == "image"
+    assert next(p for p in d["presets"] if p["name"] == "kontext")["kind"] == "edit"
+    # templates: the built-in text when config leaves them empty
+    assert d["templates"]["scene_prompt"]["text"] and d["templates"]["scene_prompt"]["custom"] is False
+    assert [s["stage"] for s in d["stages"]] == ["explore", "converge", "polish"]
+    # characters and projects, with their prompt text
+    [c] = d["characters"]
+    assert (c["name"], c["stage"], c["description"], c["projects"]) == ("tulu", "converge", "chibi cthulhu", ["walls"])
+    [p] = d["projects"]
+    assert p["slug"] == "walls" and p["prompt"] == "misty fjord, warm light" and p["cast"] == ["tulu"]
+    assert d["errors"] == []
+
+
+def test_prompts_theme_usage(world, server, monkeypatch):
+    theme = "synthwave beach"
+    conf = imagegen.load_config()
+    conf["daily"]["themes"] = [theme, "never used"]
+    monkeypatch.setattr(imagegen, "load_config", lambda: conf)
+    _, _, d = get(server, "/api/prompts")
+    rows = {t["text"]: t for t in d["themes"]["pool"]}
+    assert (rows[theme]["uses"], rows[theme]["last"]) == (1, "2026-11-17")
+    assert rows["never used"]["uses"] == 0 and rows["never used"]["last"] is None
+
+
+def test_prompts_survives_a_broken_character(world, server):
+    (characters.char_dir("tulu") / "character.json").write_text("{nope")
+    st, _, d = get(server, "/api/prompts")
+    assert st == 200 and d["characters"] == [] and any("tulu" in e for e in d["errors"])

@@ -209,6 +209,79 @@ export interface Wallpapers {
 	log: LogLine[];
 }
 
+export interface ThemeRow {
+	text: string;
+	uses: number;
+	last: string | null;
+}
+
+export interface Prompts {
+	daily: {
+		preset: string;
+		style: string;
+		cast: string[];
+		no_repeat_days: number;
+		props_per_day: number;
+		count: number;
+	};
+	themes: {
+		pool: ThemeRow[];
+		dates: Record<string, ThemeRow[]>;
+		months: Record<string, ThemeRow[]>;
+		weekdays: Record<string, ThemeRow[]>;
+	};
+	props: Record<string, string[]>;
+	styles: {
+		name: string;
+		description: string;
+		suffix: string;
+		negative_extra: string;
+		post: string[];
+		presets: string[];
+		daily: boolean;
+	}[];
+	presets: {
+		name: string;
+		description: string;
+		model: string | null;
+		kind: 'image' | 'edit';
+		styles: string[];
+		suffix: string;
+		negative_extra: string;
+		post: string[];
+		size: string | null;
+		daily: boolean;
+	}[];
+	templates: {
+		scene_prompt: { text: string; custom: boolean };
+		cast_prompt: { text: string; custom: boolean };
+		ref_prompt: { text: string; custom: boolean };
+		stand_in: string;
+		stand_ins: Record<string, string>;
+	};
+	stages: {
+		stage: StageName;
+		mode: string;
+		preset: string;
+		count: number;
+		instruction: string;
+		ideas: string[];
+		needs_text: boolean;
+	}[];
+	characters: { name: string; title: string; stage: StageName; description: string; projects: string[] }[];
+	projects: {
+		slug: string;
+		title: string;
+		prompt: string;
+		negative: string | null;
+		preset: string | null;
+		snippets: Record<string, string>;
+		cast: string[];
+		docs: string[];
+	}[];
+	errors: string[];
+}
+
 /** Runs per page on the runs list. */
 export const RUNS_PAGE = 24;
 
