@@ -6,6 +6,8 @@ built SvelteKit PWA from app/build, on 127.0.0.1.
     GET /api/projects/<slug>           one project: board data (passes, ratings, notes), assets, versions
     GET /api/characters                every character: stage, description, first ref, projects using it
     GET /api/characters/<name>         one character: refs, palette, versions (with their refs)
+    GET /api/prompts                   the prompt material in one place (#99): daily themes with their use, props, styles,
+                                       preset suffixes, templates, stage instructions, character and project prompts
     GET /api/runs?offset&limit&preset&q&wallpaper=1    the run history, newest first
     GET /api/runs/<date>/<run>         one run with each image's sidecar (prompt, seed, params, timing)
     GET /api/wallpapers                wallpaper runs (daily ones with theme/props) + daily.log
@@ -30,6 +32,7 @@ from urllib.parse import parse_qs, quote, unquote, urlsplit
 import boards
 import boardserve
 import characters
+import daily
 import imagegen
 import projects
 import stages
@@ -310,6 +313,104 @@ def overview(index: RunIndex) -> dict:
             "wallpaper": walls[0] if walls else None, "recent": runs[:8]}
 
 
+# ---------------------------------------------------------------- prompts (#99)
+
+def _texts(value) -> list[str]:
+    return list(dict.fromkeys(daily._pool(value)))  # no repeats: the page keys rows by their text
+
+
+def _theme_rows(texts: list[str], used: dict[str, dict]) -> list[dict]:
+    return [{"text": t, "uses": used.get(t, {}).get("uses", 0), "last": used.get(t, {}).get("last")} for t in texts]
+
+
+def theme_usage(index: RunIndex) -> dict[str, dict]:
+    """{theme: {uses, last}} over every daily run (its day: daily.date, else the folder's date)."""
+    used: dict[str, dict] = {}
+    for r in index.all():
+        d = r.get("daily") or {}
+        if not isinstance(d.get("theme"), str):
+            continue
+        day = d.get("date") or r["date"]
+        e = used.setdefault(d["theme"], {"uses": 0, "last": day})
+        e["uses"] += 1
+        e["last"] = max(e["last"], day)
+    return used
+
+
+def prompts_overview(index: RunIndex) -> dict:
+    """Everything that shapes a prompt, read from config.toml, the characters and the projects, for one page.
+    Read-only; a part that fails to load is left out with an `errors` note instead of failing the page."""
+    conf = imagegen.load_config()
+    d = conf.get("daily") or {}
+    used = theme_usage(index)
+    errors: list[str] = []
+    presets = conf.get("presets", {})
+    styles = imagegen.list_styles(conf)
+
+    def builtin(key: str, default: str) -> dict:
+        custom = str(d.get(key) or "").strip()
+        return {"text": custom or default, "custom": bool(custom)}
+
+    daily_preset = d.get("preset", "wallpaper_cast")
+    style = str(d.get("style") or "").strip()  # like daily.settings: blank = the preset's styles
+    out = {
+        "daily": {"preset": daily_preset, "style": style, "cast": _texts(d.get("cast")),
+                  "no_repeat_days": d.get("no_repeat_days", 7), "props_per_day": d.get("props_per_day", 0),
+                  "count": d.get("count", 1)},
+        "themes": {"pool": _theme_rows(_texts(d.get("themes")), used),
+                   "dates": {k: _theme_rows(_texts(v), used) for k, v in (d.get("dates") or {}).items()},
+                   "months": {k: _theme_rows(_texts(v), used) for k, v in (d.get("months") or {}).items()},
+                   "weekdays": {k: _theme_rows(_texts(v), used) for k, v in (d.get("weekdays") or {}).items()}},
+        "props": {k: _texts(v) for k, v in (d.get("props") or {}).items()},
+        "styles": [{"name": n, "description": s.get("description", ""), "suffix": s.get("suffix", ""),
+                    "negative_extra": s.get("negative_extra", ""), "post": s.get("post", []),
+                    "presets": sorted(k for k, p in presets.items() if n in imagegen.split_styles(p.get("styles"))),
+                    "daily": n in (imagegen.split_styles(style) if style
+                                   else imagegen.split_styles(presets.get(daily_preset, {}).get("styles")))}
+                   for n, s in styles.items()],
+        "presets": [{"name": n, "description": p.get("description", ""), "model": p.get("model"),
+                     "kind": "edit" if "edit_workflow" in p and "workflow" not in p else "image",
+                     "styles": imagegen.split_styles(p.get("styles")), "suffix": p.get("suffix", ""),
+                     "negative_extra": p.get("negative_extra", ""), "post": p.get("post", []),
+                     "size": f"{p['width']}x{p['height']}" if "width" in p and "height" in p else None,
+                     "daily": n == daily_preset}
+                    for n, p in presets.items()],
+        "templates": {"scene_prompt": builtin("scene_prompt", daily.SCENE_PROMPT),
+                      "cast_prompt": builtin("cast_prompt", daily.CAST_PROMPT),
+                      "ref_prompt": {"text": str(d.get("ref_prompt") or ""), "custom": bool(d.get("ref_prompt"))},
+                      "stand_in": str(d.get("stand_in", daily.STAND_IN) or ""),  # "" = nobody in the scene
+                      "stand_ins": {k: str(v) for k, v in (d.get("stand_ins") or {}).items()}},
+        "stages": [], "characters": [], "projects": [], "errors": errors,
+    }
+    for st in stages.STAGES:
+        try:
+            s = stages.settings(st, conf)
+            out["stages"].append({"stage": st, "mode": s["mode"], "preset": s["preset"], "count": int(s["count"]),
+                                  "instruction": s.get("instruction", ""), "ideas": s.get("ideas") or [],
+                                  "needs_text": bool(s.get("needs_text"))})
+        except (ValueError, KeyError, TypeError) as e:
+            errors.append(f"stage {st}: {e}")
+    for name in characters.list_characters():
+        try:
+            ch = characters.load(name)
+            out["characters"].append({"name": name, "title": ch["title"], "stage": stages.character_stage(ch),
+                                      "description": ch["state"].get("description", ""),
+                                      "projects": sorted(characters.used_by(name))})
+        except (OSError, ValueError, KeyError) as e:
+            errors.append(f"character {name}: {e}")
+    for slug in projects.list_projects():
+        try:
+            proj = projects.load(slug)
+            st = proj["state"]
+            out["projects"].append({"slug": slug, "title": proj["title"], "prompt": st.get("prompt", ""),
+                                    "negative": st.get("negative"), "preset": st.get("preset"),
+                                    "snippets": st.get("snippets") or {}, "cast": list(st.get("cast") or {}),
+                                    "docs": sorted(st.get("docs") or {})})
+        except (OSError, ValueError, KeyError) as e:
+            errors.append(f"project {slug}: {e}")
+    return out
+
+
 # ---------------------------------------------------------------- server
 
 class Handler(boardserve.Handler):
@@ -355,6 +456,8 @@ class Handler(boardserve.Handler):
             return {"characters": [character_card(n, self.paths) for n in characters.list_characters()]}
         if len(parts) == 2 and parts[0] == "characters":
             return character_detail(parts[1], self.paths) if self._exists(characters.char_dir, parts[1], "character.json") else None
+        if parts == ["prompts"]:
+            return prompts_overview(self.index)
         if parts == ["runs"]:
             return runs_page(self.index, q)
         if len(parts) == 3 and parts[0] == "runs":

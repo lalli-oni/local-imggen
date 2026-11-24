@@ -150,3 +150,24 @@ def test_installable(app):
     assert page.evaluate("fetch('/manifest.webmanifest').then(r => r.json()).then(m => m.display)") == "standalone"
     assert page.evaluate("navigator.serviceWorker.ready.then(r => !!r.active)")
     assert not errors, errors
+
+
+def test_prompts_page(app):
+    go, page, errors = app
+    go("/prompts")
+    text = page.locator("main").inner_text()
+    for part in ("Daily wallpaper", "Themes", "Props", "Styles", "Presets", "Daily templates", "Character stages",
+                 "chibi cthulhu", "misty fjord, warm light", "synthwave"):
+        assert part in text, part
+    assert page.locator("a[href='/characters/tulu']").count() == 1
+    assert page.locator("a[href='/projects/walls']").count() == 1
+    # the filter narrows themes, props and styles, and clears again
+    n = page.locator("#themes li").count()
+    page.fill("input[type=search]", "heist")
+    assert 0 < page.locator("#themes li").count() < n
+    assert page.locator("#styles .panel").count() == 0
+    page.fill("input[type=search]", "")
+    assert page.locator("#themes li").count() == n
+    # the nav has a Prompts link
+    assert page.locator("nav a[href='/prompts']").count() == 1
+    assert errors == []
