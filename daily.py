@@ -22,6 +22,10 @@ Settings live in config.toml under [daily]:
            categories, picked by the date, are added to the theme ("..., with a boombox and a DeLorean")
   themes   the scene for the day, picked at random (by the date: a re-run that day gets the same theme,
            with a new seed) from the ones the past daily runs haven't used in the last no_repeat_days
+  [daily.director] enabled, model, timeout  (#94, off by default) Claude (the claude CLI, your subscription) rewrites
+           the day's theme into a fuller scene with gags, interactions and a rough layout (run.json
+           daily.director); any failure falls back to the plain theme (see director.py). `gen daily --no-director` skips it
+  [daily.ideas] use, model  (#94) use = true adds the themes `gen ideas` saved (ideas.json) to the pool
   no_repeat_days  at least this many days between two uses of a theme (default 7)
   [daily.dates]    "MM-DD" (every year) or "YYYY-MM-DD" (one year: movable feasts) = a theme or a list
   [daily.months]   jan..dec = the same for a month
@@ -72,6 +76,13 @@ def settings(conf: dict | None = None) -> dict:
     p = conf["presets"][d["preset"]]
     if "workflow" not in p and "edit_workflow" not in p:
         raise ValueError(f"[daily] preset '{d['preset']}' has no workflow")
+    ideas = d.get("ideas") if isinstance(d.get("ideas"), dict) else {}
+    if ideas.get("use"):
+        import director
+        d["themes"] = [*_pool(d["themes"]), *director.load_ideas(conf)]
+    dr = d.get("director") if isinstance(d.get("director"), dict) else {}
+    d["director"] = {"enabled": bool(dr.get("enabled", False)), "model": str(dr.get("model", "")),
+                     "timeout": float(dr.get("timeout", 180))}
     d["refs"] = _pool(d["ref"])
     d["casting"] = imagegen.is_cast_preset(p)
     if d["refs"] and "edit_workflow" not in p and not d["casting"]:
@@ -322,13 +333,29 @@ def cast_prompts(d: dict, theme: str, names: list[str | None]) -> tuple[str, str
     return out[0], out[1]
 
 
-def plan(day: date | None = None, conf: dict | None = None) -> dict:
+def roles(d: dict) -> list[str]:
+    """How the director may call the characters: "the main character", or "the character on the left", ..."""
+    n = max(1, len(_pool(d["cast"])))
+    return ["the main character"] if n == 1 else [f"the character {PLACES[k] if k < len(PLACES) else f'number {k + 1}'}"
+                                                   for k in range(n)]
+
+
+def plan(day: date | None = None, conf: dict | None = None, use_director: bool = True) -> dict:
     day = day or date.today()
     conf = conf or imagegen.load_config()
     d = settings(conf)
     theme, where = pick_theme(d, day, recent_themes(conf, day, max(1, int(d["no_repeat_days"])) - 1))
     props = pick_props(d, day)
     scene = with_props(theme, props)
+    directed = None  # #94: Claude's rewrite of the scene ({scene, gags, layout}) or {"error": why}
+    if use_director and d["director"]["enabled"]:
+        import director
+        try:
+            directed = director.direct_cached(conf, day, scene, roles(d), d["director"]["model"], d["director"]["timeout"])
+            scene = directed["scene"]
+        except director.Unavailable as e:
+            directed = {"error": str(e)}
+            _log(f"director skipped, plain theme used: {e}", conf)
     ref, refs, cast_prompt = None, [], None
     import characters
     if d["casting"]:  # the refs are the cast: no descriptions needed, and only the characters with a ref show
@@ -347,7 +374,7 @@ def plan(day: date | None = None, conf: dict | None = None) -> dict:
             "styles": d["styles"], "gen_styles": [] if ref else d["styles"],  # with a ref: in the prompt
             "post": imagegen.style_post(d["styles"], conf) if ref else [],  # ...so their post steps come from here
             "preset": d["preset"], "count": max(1, int(d["count"])), "ref": ref,
-            "refs": refs, "cast_prompt": cast_prompt}
+            "refs": refs, "cast_prompt": cast_prompt, "director": directed}
 
 
 def log_file(conf: dict | None = None) -> Path:
@@ -369,12 +396,13 @@ def _log(line: str, conf: dict | None) -> None:
         imagegen.log(f"warning: could not write the daily log: {e}")
 
 
-def run(day: date | None = None, wait: float = DEFAULT_WAIT, set_wallpaper: bool = True) -> dict:
+def run(day: date | None = None, wait: float = DEFAULT_WAIT, set_wallpaper: bool = True,
+        use_director: bool = True) -> dict:
     """Make today's wallpaper and set it. Raises (wallpaper untouched) on any failure; logs either way."""
     conf = None
     try:
         conf = imagegen.load_config()
-        p = plan(day, conf)
+        p = plan(day, conf, use_director)
         imagegen.Comfy(conf["comfy_url"]).wait_ready(timeout=wait)  # generate() then finds it up
         run = imagegen.generate(p["prompt"], p["preset"], p["count"], label=f"{DAILY_LABEL}{imagegen.slug(p['theme'], 30)}",
                                 source_image=p["ref"], edit=p["ref"] is not None,
@@ -385,7 +413,7 @@ def run(day: date | None = None, wait: float = DEFAULT_WAIT, set_wallpaper: bool
         rf = Path(run["run_dir"]) / "run.json"
         meta = json.loads(rf.read_text())
         meta["daily"] = run["daily"] = {k: p[k] for k in ("date", "theme", "from", "props", "cast", "ref", "refs",
-                                                          "styles")}
+                                                          "styles", "director")}
         rf.write_text(json.dumps(meta, indent=2))
         good = [im for im in run["images"] if not im.get("blank")]
         if not good:  # a black wallpaper is worse than yesterday's
@@ -411,14 +439,21 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--show", action="store_true", help="only print the day's theme and prompt")
     ap.add_argument("--date", type=date.fromisoformat, help="pretend it is this day (YYYY-MM-DD)")
     ap.add_argument("--no-set", action="store_true", help="generate, but leave the wallpaper as it is")
+    ap.add_argument("--no-director", action="store_true", help="skip the Claude prompt pass ([daily.director])")
     ap.add_argument("--wait", type=float, default=DEFAULT_WAIT,
                     help=f"seconds to wait for ComfyUI to come up (default {DEFAULT_WAIT})")
     ap.add_argument("--open", action="store_true", help="open the contact sheet in the Windows browser")
     a = ap.parse_args(argv)
     if a.show:
-        p = plan(a.date)
+        p = plan(a.date, use_director=not a.no_director)
         print(f"{p['date']}: {p['theme']}  (from {p['from']})")
         print(f"preset:  {p['preset']} x{p['count']}" + (f", style {', '.join(p['styles'])}" if p["styles"] else ""))
+        if p["director"] and "error" in p["director"]:
+            print(f"director: skipped ({p['director']['error']})")
+        elif p["director"]:
+            print(f"director: layout: {p['director']['layout']}")
+            for g in p["director"]["gags"]:
+                print(f"          gag: {g}")
         if p["props"]:
             print("props:   " + "; ".join(p["props"]))
         if p["ref"]:
@@ -434,7 +469,7 @@ def main(argv: list[str]) -> int:
             print(f"prompt:  {p['prompt']}")
         return 0
     try:
-        r = run(a.date, a.wait, not a.no_set)
+        r = run(a.date, a.wait, not a.no_set, not a.no_director)
     except Exception:
         return 1  # already logged with the reason
     imagegen._print_run(r, a.open)

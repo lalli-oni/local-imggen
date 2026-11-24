@@ -310,6 +310,18 @@ def check_limits(conf: dict | None = None) -> dict:
     return _check("resource limits", "info", "off (opt-in: comfy/limits.sh on)")
 
 
+def check_claude_cli(conf: dict | None = None) -> dict | None:
+    """#94: the claude CLI, only when [daily.director] or gen ideas' [daily.ideas] is switched on."""
+    daily = (conf or {}).get("daily", {})
+    if not ((daily.get("director") or {}).get("enabled") or (daily.get("ideas") or {}).get("use")):
+        return None
+    import shutil
+    if shutil.which("claude"):
+        return _check("claude CLI", "ok", "found (the Claude prompt pass uses your subscription)")
+    return _check("claude CLI", "warn", "not found: the Claude prompt pass falls back to the plain theme",
+                  "check: claude --version; install: https://claude.com/claude-code, then run `claude` once to sign in")
+
+
 def check_mcp_import() -> dict:
     try:
         r = subprocess.run([sys.executable, "-c", "import mcp_server"], cwd=imagegen.ROOT,
@@ -373,6 +385,8 @@ def run_checks(include_mcp: bool = True) -> list[dict]:
     if include_mcp:
         checks.append(check_mcp_import())
     checks.append(check_limits(conf))
+    if (cc := check_claude_cli(conf)):
+        checks.append(cc)
     return checks
 
 

@@ -227,6 +227,18 @@ setting = ["a glowing wireframe grid floor stretching to the horizon", "palm tre
            "a lava lamp", "a mall fountain with pennies", "a checkerboard floor", "a mirror ball", "a pink flamingo lawn ornament",
            "a heart-shaped waterbed", "a shag pile carpet", "wood-panelled walls"]
 
+# Claude prompt pass (#94), off by default: the claude CLI (your subscription, no API key; check: claude --version,
+# sign in once by running `claude`) rewrites the day's theme into a fuller scene with gags, character interactions and
+# a rough layout. If it is missing or fails, the plain theme is used and daily.log says why. `gen daily --show` previews it.
+[daily.director]
+enabled = false
+model = ""                    # "" = the CLI's default; "sonnet", "opus", "haiku"
+timeout = 180
+# `gen ideas -n 10` asks Claude for new themes and keeps them in <output_dir>/ideas.json; use = true adds them to `themes`.
+[daily.ideas]
+use = false
+model = ""
+
 # wallpaper_cast: a stand-in per cast character instead of stand_in (CHARACTER = "..."). Keep it generic: a tulu
 # look-alike ("chibi Cthulhu with face tentacles...") came out as a creepy realistic Cthulhu in the house style,
 # and the edit then left it as it was. The generic cute creature was swapped for tulu fine.

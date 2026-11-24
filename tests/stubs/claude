@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Fake `claude -p` (the Claude prompt pass, #94). Records the call; the system prompt (--system-prompt) decides
+# the kind of answer, stdin is the user prompt.
+#   FAKE_CLAUDE_MODE  ok (default) | fail (exit 1) | text (not JSON) | nosign (scene drops the sign text) | slow
+#   FAKE_CLAUDE_SCENE  the "scene" the director answers with (default below)
+. "$(dirname "$0")/_log.sh"
+[ "${1:-}" = "--version" ] && { echo "2.0.0 (Claude Code)"; exit 0; }
+prompt=$(cat)
+sys="" args=""
+while [ $# -gt 0 ]; do
+  if [ "$1" = "--system-prompt" ]; then sys=$2; args="$args --system-prompt <...>"; shift; else args="$args $1"; fi
+  shift
+done
+printf '%s\n' "$args" > "${STUB_LOG:-/dev/null}.claude-args"
+printf '%s\n' "$prompt" > "${STUB_LOG:-/dev/null}.claude-prompt"
+case "${FAKE_CLAUDE_MODE:-ok}" in
+  fail) echo "Not logged in" >&2; exit 1 ;;
+  text) echo '{"result": "Sorry, I cannot do that.", "is_error": false}'; exit 0 ;;
+  slow) sleep 30 ;;
+esac
+if [[ $sys == *"wallpaper themes"* ]]; then
+  result='{"themes": ["roller-skating through a neon mall, a sign reads '"'"'WHEEL DEAL'"'"'", "brewing coffee on Mars, a sign reads '"'"'MARS BARISTA'"'"'"]}'
+else
+  scene=${FAKE_CLAUDE_SCENE:-"robbing a neon casino vault with a squid in a tuxedo, a flamingo guard snoring in the foreground, a neon sign reads 'SQUID PRO QUO' above the door"}
+  [ "${FAKE_CLAUDE_MODE:-ok}" = nosign ] && scene="robbing a casino vault, a sign reads 'SQUID PRO KO'"
+  result=$(python3 -c 'import json,sys; print(json.dumps({"scene": sys.argv[1], "gags": ["the flamingo snores"], "layout": "vault left, guard in front"}))' "$scene")
+fi
+python3 -c 'import json,sys; print(json.dumps({"result": sys.argv[1], "is_error": False, "total_cost_usd": 0.01}))' "$result"

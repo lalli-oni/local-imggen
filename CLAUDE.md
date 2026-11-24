@@ -80,6 +80,15 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   adds a line to `<output_dir>/daily.log`. `gen daily --show [--date D]` previews.
   `windows/daily-task.sh on [--at HH:MM]|off|status|run`: the Windows scheduled task (user-level, logged-on only,
   start-when-available) that runs it via `conhost --headless wsl.exe ... imagegen.py daily`.
+- `director.py` (#94): the Claude prompt pass, optional, off by default. `claude -p --output-format json --tools ""` (the
+  Claude Code CLI on your subscription, no API key; run from a temp dir so no CLAUDE.md is read) behind `direct()` and
+  `make_ideas()`. `[daily.director] enabled` rewrites the day's theme+props into a scene with gags, what each cast
+  character does and a rough `layout` ({scene, gags, layout}; the scene continues "A small creature, ..."); a lost
+  quoted sign text or any CLI failure = `Unavailable`, `gen daily` then uses the plain theme and daily.log says why.
+  Cached per day+theme in `<output_dir>/director/` (`--show` and the run agree); run.json `daily.director` keeps layout
+  and gags for a later layout-controlled pass (not built). `gen daily --no-director`. `gen ideas [-n 10] [--list]` saves themes to
+  `<output_dir>/ideas.json`; `[daily.ideas] use` adds them to the pool. Tests use the fake `tests/stubs/claude`
+  (`FAKE_CLAUDE_MODE` fail|text|nosign|slow). `gen doctor` checks the CLI when either is on.
 - `progress.py`: live progress for `generate()` (#61): `describe` (the preset header line: models, passes, steps,
   sizes), and on a TTY (`IMAGEGEN_PROGRESS=0|1` overrides) `Progress`, a block redrawn in place from `Events.listeners`
   (stages done/running/pending, sampler step, ETA from the preset's past run.json timings, VRAM/RAM bars from

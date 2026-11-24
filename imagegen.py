@@ -20,6 +20,7 @@ Usage:
   gen recent [N]                                # last N runs
   gen set-wallpaper PATH                        # set Windows desktop wallpaper
   gen daily [--show] [--no-set]                 # today's wallpaper from [daily] in config.toml, then set it
+  gen ideas [-n 10] [--list]                    # new wallpaper themes from Claude (your subscription), kept in ideas.json
   gen doctor                                    # health check (service, GPU, torch, models, ...)
   gen sheet [RUN_DIR|DATE]                      # rebuild contact sheet(s); no arg = latest run
   gen project new|list|status|set|gen|promote|keep|import|doc ...  # creative projects (see projects.py)
@@ -1758,6 +1759,9 @@ def main(argv: list[str]) -> int:
     if argv and argv[0] == "daily":
         import daily
         return daily.main(argv[1:])
+    if argv and argv[0] == "ideas":
+        import director
+        return director.main(argv[1:])
     if argv and argv[0] == "doctor":
         import doctor
         return doctor.main()
