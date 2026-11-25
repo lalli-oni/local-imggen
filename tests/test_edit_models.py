@@ -149,6 +149,7 @@ def test_klein3_edit_passes_the_image_as_a_reference(comfy, make_image):
     wf = comfy.workflows()[0]
     ref = next(n["inputs"] for n in wf.values() if n["class_type"] == "ReferenceMultiLatent")
     assert wf[ref["images.image0"][0]]["class_type"] == "LoadImage"
+    assert ref["resolution"] == "resize" and ref["resolution.megapixels"] == 1.0  # tulu's /object_info, 2026-11-25
     ks = _node(wf, "KSampler")
     assert ks["positive"][1] == 0 and ks["negative"][1] == 1  # ReferenceMultiLatent returns both conditionings
     lat = _node(wf, "EmptyFlux2LatentImage")  # the edit keeps the source's shape (scaled to a pixel budget)
