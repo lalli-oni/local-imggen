@@ -29,7 +29,7 @@ gen "misty fjord at sunrise" -p wallpaper --open
 | `gen edit PATH "instruction" [-p klein\|kontext\|qwen]` | Edit with a plain-language instruction; FLUX.2 klein by default, opt-in models (`models/*.sh`) |
 | `gen bakeoff PATH "instr" ["instr"...] [-p kontext,klein,qwen] [-n 2]` | The same edits through several edit models (same seeds), time/VRAM/RAM per model, one contact sheet |
 | `gen bakeoff --t2i "fresh prompt"... [--ref IMG --ref-prompt "scene"...] [-p draft,dreamshaper,klein,qwen] [--steps klein=16]` | Compare text-to-image models: fresh prompts from text alone, and a character from a ref image (IP-Adapter for SDXL) |
-| `gen sweep "prompt" [-p klein,qwen] [--steps 8,16] [--cfg 3,6] [--guidance G,H] [--style a,none] [--seeds N]` | One prompt over a grid of settings or models (same seeds in every cell) as a labelled grid on one contact sheet (#17) |
+| `gen sweep "prompt" [-p klein,qwen] [--steps 8,16 \| --steps klein=4,8,16 qwen=15,25,40] [--cfg 3,6] [--guidance G,H] [--style a,none] [--seeds N]` | One prompt over a grid of settings or models (same seeds in every cell) as a labelled grid on one contact sheet (#17) |
 | `gen project new\|list\|status\|set\|gen\|promote\|keep\|import\|doc` | Creative projects: versioned prompt/palette/refs, named assets, docs, import an existing folder |
 | `gen project rate\|note\|board` | The project's board: pick/maybe/reject and notes on pass images (`P:N`), and its `index.html` page |
 | `gen board serve [SLUG] [--open]` | The board on http://127.0.0.1:8190, clickable: click an image to select it, then keys: arrows move, 1/2/3 rate, 0 clears, n notes, o opens full size, "Generate 4 more", refreshes itself on any change |
@@ -260,7 +260,11 @@ the images are the product, all with the same prompt and seeds:
 
 - `-p klein,qwen`: the model (a preset: its model and workflow). This is how the model-consolidation pass (#64) is
   compared. Use `--style none` so every model gets the bare prompt; without `--style` each preset keeps its own look.
-- `--steps`, `--cfg` (SDXL, Qwen), `--guidance` (only for workflows with a guidance input; no text-to-image preset has one yet, so it errors), `--style a,none,b+c`, `--seeds N` (base, base+1, ...).
+- `--steps 4,8,16` (every model) or per model: `--steps klein=4,8,16 --steps qwen=15,25,40` (#94; repeat the flag). Each model then gets its own
+  step counts, so a comparison can use each model's best setting. A model you don't name keeps its own default, and
+  a bare list covers the others. When the lists differ, each model's steps are its own
+  columns and the rows default to the seed.
+- `--cfg` (SDXL, Qwen), `--guidance` (only for workflows with a guidance input; no text-to-image preset has one yet, so it errors), `--style a,none,b+c`, `--seeds N` (base, base+1, ...).
 
 With one axis the values run along the top. With more, the rows are `--rows AXIS` (default: seed if it varies, else
 the first of model, style, steps, cfg, guidance) and the columns are the rest, combined ("klein · steps 8").

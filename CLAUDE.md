@@ -65,12 +65,14 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   "Generate 4 more" runs `projects.run_pass` (one job at a time), and the page polls `stamp` (project.json + board.json
   mtimes) to re-render on any change. Serves only images/.html under output_dir; POSTs must be same-origin JSON.
 - `appserve.py` + `app/` (#82): the viewer app. `gen app serve [--port 8191] [--open]` is a read-only JSON API
-  (`/api/overview|projects[/SLUG]|characters[/NAME]|runs[/DATE/RUN]|wallpapers`, images under `/files/`, no POST)
+  (`/api/overview|projects[/SLUG]|characters[/NAME]|runs[/DATE/RUN]|wallpapers|prompts`, images under `/files/`, no POST)
   built on boardserve.Handler (same Host check and output_dir file rules), and serves the SvelteKit PWA from
   `app/build` (SPA fallback). `app/` is SvelteKit 2 + Svelte 5 + TS (adapter-static, own service worker; pinned devDeps,
   Node only to build: `cd app && npm ci && npm run build`, `npm run dev` proxies to :8191, `npm run check`).
   Types for every endpoint live in `app/src/lib/api.ts`: change them with appserve.py. Run summaries are cached per
-  run.json mtime (`RunIndex`). Tests: test_appserve.py, test_app_browser.py (needs the build; CI builds it).
+  run.json mtime (`RunIndex`). #99: `/api/prompts` + the Prompts page (`prompts_overview`): daily themes with
+  how often each was used, props, styles, preset suffixes, daily templates, stage instructions, character and project
+  prompts, read-only, with a filter box; one page, no editing yet. Tests: test_appserve.py, test_app_browser.py (needs the build; CI builds it).
 - `daily.py`: `gen daily` (#3): picks the day's theme from `[daily]` in config.toml (a date-seeded pick among themes
   not used by past daily runs in `no_repeat_days`; `[daily.dates]` ("MM-DD" or "YYYY-MM-DD"), `[daily.months]`, `[daily.weekdays]` replace them, most specific first), puts the `cast` characters' descriptions
   first, runs the preset, sets the first image as wallpaper. Default preset `wallpaper_cast` (#52, scene first: Qwen draws the theme

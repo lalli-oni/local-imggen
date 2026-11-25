@@ -9,6 +9,7 @@
 		{ href: '/projects', label: 'Projects' },
 		{ href: '/characters', label: 'Characters' },
 		{ href: '/wallpapers', label: 'Wallpapers' },
+		{ href: '/prompts', label: 'Prompts' },
 		{ href: '/runs', label: 'All runs' }
 	];
 	const active = (href: string) =>
