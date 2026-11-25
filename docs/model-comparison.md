@@ -28,9 +28,9 @@ Each model runs at its own steps (klein 4 and 16, klein3 16, qwen 25).
 
 ## How to rerun
 ```
-gen sweep "a cozy cabin by a misty fjord at dusk" -p klein,klein3,qwen --steps klein=4,16 klein3=16 qwen=25 --seeds 2 --size 1344x768
-gen sweep "a crowded 80s arcade at night, kids at the cabinets, a cat asleep on a counter, a claw machine, a neon sign that says \"GAME ON\"" -p klein,klein3,qwen --steps klein=4,16 klein3=16 qwen=25 --seeds 2 --size 1344x768 --style synthwave
-gen sweep "a busy harbour market at dawn, photorealistic documentary photograph, fishermen, crates of fish, gulls, a tilted rowing boat, many people" -p klein,klein3,qwen --steps klein=4,16 klein3=16 qwen=25 --seeds 2 --size 1344x768
+gen sweep "a cozy cabin by a misty fjord at dusk" -p klein,klein3,qwen --steps klein=4,16 --steps klein3=16 --steps qwen=25 --seeds 2 --size 1344x768
+gen sweep "a crowded 80s arcade at night, kids at the cabinets, a cat asleep on a counter, a claw machine, a neon sign that says \"GAME ON\"" -p klein,klein3,qwen --steps klein=4,16 --steps klein3=16 --steps qwen=25 --seeds 2 --size 1344x768 --style synthwave
+gen sweep "a busy harbour market at dawn, photorealistic documentary photograph, fishermen, crates of fish, gulls, a tilted rowing boat, many people" -p klein,klein3,qwen --steps klein=4,16 --steps klein3=16 --steps qwen=25 --seeds 2 --size 1344x768
 ```
 The sheet (`index.html` in each run folder) and the table `gen sweep` prints give time and peak VRAM/RAM per cell.
 
