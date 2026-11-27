@@ -239,7 +239,8 @@ def recent_runs(n: int = 5) -> list[dict]:
 
 @mcp.tool()
 def run_info(run_dir: str) -> dict:
-    """A generation run's run.json: params, timings and VRAM/RAM (timing.summary), seeds, sweep cells.
+    """A generation run's run.json: timings (timing.summary), per-image seeds and params. Bake-off and sweep
+    runs also carry VRAM/RAM peaks and sweep cells.
     run_dir is a run folder: run_dir from recent_runs, or run_dir_windows from get_job (or the run.json inside it)."""
     return imagegen.read_run(run_dir)
 

@@ -1684,7 +1684,7 @@ def run_json_in_output(value: str) -> Path:
 
 
 def read_run(value: str) -> dict:
-    """The run.json of a run folder inside output_dir: params, timings, VRAM/RAM, sweep cells."""
+    """The run.json of a run folder inside output_dir (timings, per-image params; bake-off and sweep runs add VRAM/RAM and cells)."""
     return json.loads(run_json_in_output(value).read_text())
 
 
