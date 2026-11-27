@@ -1,5 +1,6 @@
 """mcp_server.py tools: called directly, plus through the MCP layer for listing and result conversion."""
 import asyncio
+import os
 import time
 from pathlib import Path
 
@@ -106,10 +107,11 @@ def test_recent_runs_and_open_sheet(make_run, stub_calls):
 
 
 def test_recent_runs_filters_and_paging(make_run):
-    make_run(n=1, preset="draft", prompt="arcade cabin", date="2026-11-26", time="100000")
-    make_run(n=1, preset="sweep", prompt="arcade market", date="2026-11-27", time="090000")
-    make_run(n=1, preset="draft", prompt="harbour market", date="2026-11-27", time="110000")
-    make_run(n=1, preset="klein", prompt="a misty fjord", date="2026-11-27", time="120000")
+    made = [make_run(n=1, preset=p, prompt=t, date=d, time=h) for p, t, d, h in [
+        ("draft", "arcade cabin", "2026-11-26", "100000"), ("sweep", "arcade market", "2026-11-27", "090000"),
+        ("draft", "harbour market", "2026-11-27", "110000"), ("klein", "a misty fjord", "2026-11-27", "120000")]]
+    for i, run in enumerate(made):  # explicit mtimes: the order must not depend on filesystem timestamps
+        os.utime(Path(run["run_dir"]) / "run.json", (1_000_000 + i, 1_000_000 + i))
     prompts = lambda runs: [r["prompt"] for r in runs]  # noqa: E731
     assert prompts(mcp_server.recent_runs(10)) == ["a misty fjord", "harbour market", "arcade market", "arcade cabin"]
     assert prompts(mcp_server.recent_runs(10, date="2026-11-26")) == ["arcade cabin"]
@@ -119,6 +121,7 @@ def test_recent_runs_filters_and_paging(make_run):
     assert prompts(mcp_server.recent_runs(1, match="market", offset=1)) == ["arcade market"]
     assert prompts(mcp_server.recent_runs(10, offset=3)) == ["arcade cabin"]
     assert mcp_server.recent_runs(10, match="no such thing") == []
+    assert mcp_server.recent_runs(0) == [] and mcp_server.recent_runs(-1) == []
 
 
 def test_recent_runs_skips_unreadable_run_json(make_run, out_dir):

@@ -1660,6 +1660,8 @@ def recent_runs(n: int = 5, *, date: str | None = None, preset: str | None = Non
     """The newest runs first, after the filters: `date` = one day folder (YYYY-MM-DD), `preset` = a
     case-insensitive substring of the run's preset ("sweep", "bakeoff"), `match` = a substring of the run
     folder name or prompt, `offset` = how many matches to skip (paging). Unreadable run.json files are skipped."""
+    if n <= 0:
+        return []
     root = Path(load_config()["output_dir"]).expanduser()
     want_preset = preset.lower() if preset else None
     needle = match.lower() if match else None
