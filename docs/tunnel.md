@@ -42,7 +42,7 @@ Only these tools (`TOOLS` in tunnel.py), each with mcp_server.py's own code and 
 
 | Kind | Tools |
 |---|---|
-| Read | doctor, list_presets, list_styles, recent_runs, view_image, get_job, project_list, project_get, character_list, character_get |
+| Read | doctor, list_presets, list_styles, recent_runs, run_info (a run's run.json, #103), view_image, get_job, project_list, project_get, character_list, character_get |
 | Render | generate, vary, edit, cutout (new files inside the output folder) |
 
 project_get records what the reader has seen as "thread", separate from the desktop app's "claude".

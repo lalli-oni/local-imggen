@@ -50,9 +50,10 @@ RATE_PER_MIN = 120  # authorised requests per minute (a tool call is ~3 requests
 # The tools a thread may call. Read and render only: nothing that touches the Windows desktop
 # (set_wallpaper, open_contact_sheet), reads an arbitrary folder (project_import) or changes project or
 # character state. Adding one is a deliberate edit here, reviewed like any change.
-TOOLS = ("doctor", "list_presets", "list_styles", "recent_runs", "view_image", "generate", "get_job",
+TOOLS = ("doctor", "list_presets", "list_styles", "recent_runs", "run_info", "view_image", "generate", "get_job",
          "vary", "edit", "cutout", "project_list", "project_get", "character_list", "character_get")
 PATH_ARGS = {"path", "mask"}  # must be image files inside output_dir
+RUN_PATH_ARGS = {"run_dir"}  # must be a run folder (or its run.json) inside output_dir (#103)
 LIMITS = {  # argument name -> (min, max); anything outside is refused before the tool runs
     "count": (1, 8), "width": (256, 2048), "height": (256, 2048), "steps": (1, 100), "seed": (0, 2**63 - 1),
     "strength": (0.0, 1.0), "guidance": (0.0, 20.0), "size": (64, 1536), "n": (1, 50), "wait": (0, 45),
@@ -132,6 +133,12 @@ def check_args(arguments: dict) -> dict:
             if name in PATH_ARGS:
                 try:
                     v = _image_in_output(v)
+                except ValueError as e:
+                    raise ValueError(f"{name}: {e}") from None
+            elif name in RUN_PATH_ARGS:
+                import imagegen
+                try:
+                    v = str(imagegen.run_json_in_output(v))
                 except ValueError as e:
                     raise ValueError(f"{name}: {e}") from None
         elif isinstance(v, list):
