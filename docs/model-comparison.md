@@ -44,7 +44,10 @@ Fill from the tables `gen sweep` prints (seconds per image; the first image incl
 | 1 cabin | klein3 @ 16 | | | | | |
 | 1 cabin | qwen @ 25 | | | | | |
 | 2 arcade | (same four rows) | | | | | |
-| 3 market | (same four rows) | | | | | |
+| 3 market | klein @4 | 166.0 (incl. load) | 6.9 | 9.5 | 16.4 (comfy RSS 15.1) | seed 1 and 2; comfy swap 5.0 GiB while loading |
+| 3 market | klein @16 | 15.4 | 12.1 | 5.8 | 14.6 (13.4) | |
+| 3 market | klein3 @16 | 208.0 (incl. load) | 19.6 | 10.3-11.7 | 21.0 (19.9-20.4) | |
+| 3 market | qwen @25 | 235.0 | 150.4 | 11.6-11.7 | 22.2-22.6 (20.7-20.8) | comfy swap 5.4-5.6 GiB, sys swap 5.5-5.8 |
 
 ### Baseline impressions (2026-11-24, fjord prompt, before klein3)
 - **klein 4B**: warmer, illustration-like, fewer notable artifacts. About 7 s warm, 4 steps.
