@@ -1,5 +1,6 @@
 """mcp_server.py tools: called directly, plus through the MCP layer for listing and result conversion."""
 import asyncio
+import os
 import time
 from pathlib import Path
 
@@ -103,6 +104,32 @@ def test_recent_runs_and_open_sheet(make_run, stub_calls):
     assert mcp_server.recent_runs(1)[0]["run_dir"] == run["run_dir"]
     assert mcp_server.open_contact_sheet(run["run_dir"] + "/index.html") == "opened"
     assert any(c.startswith("explorer.exe") for c in stub_calls())
+
+
+def test_recent_runs_filters_and_paging(make_run):
+    made = [make_run(n=1, preset=p, prompt=t, date=d, time=h) for p, t, d, h in [
+        ("draft", "arcade cabin", "2026-11-26", "100000"), ("sweep", "arcade market", "2026-11-27", "090000"),
+        ("draft", "harbour market", "2026-11-27", "110000"), ("klein", "a misty fjord", "2026-11-27", "120000")]]
+    for i, run in enumerate(made):  # explicit mtimes: the order must not depend on filesystem timestamps
+        os.utime(Path(run["run_dir"]) / "run.json", (1_000_000 + i, 1_000_000 + i))
+    prompts = lambda runs: [r["prompt"] for r in runs]  # noqa: E731
+    assert prompts(mcp_server.recent_runs(10)) == ["a misty fjord", "harbour market", "arcade market", "arcade cabin"]
+    assert prompts(mcp_server.recent_runs(10, date="2026-11-26")) == ["arcade cabin"]
+    assert prompts(mcp_server.recent_runs(10, preset="SWEEP")) == ["arcade market"]
+    assert prompts(mcp_server.recent_runs(10, match="ARCADE")) == ["arcade market", "arcade cabin"]
+    assert prompts(mcp_server.recent_runs(10, match="market", preset="draft")) == ["harbour market"]
+    assert prompts(mcp_server.recent_runs(1, match="market", offset=1)) == ["arcade market"]
+    assert prompts(mcp_server.recent_runs(10, offset=3)) == ["arcade cabin"]
+    assert mcp_server.recent_runs(10, match="no such thing") == []
+    assert mcp_server.recent_runs(0) == [] and mcp_server.recent_runs(-1) == []
+
+
+def test_recent_runs_skips_unreadable_run_json(make_run, out_dir):
+    good = make_run(n=1, prompt="a fox")
+    broken = out_dir / "2026-11-28" / "000000-draft-broken"
+    broken.mkdir(parents=True)
+    (broken / "run.json").write_text("{not json")
+    assert [r["run_dir"] for r in imagegen.recent_runs(10)] == [good["run_dir"]]
 
 
 def test_project_tools(comfy, make_image):

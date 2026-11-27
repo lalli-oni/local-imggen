@@ -56,7 +56,7 @@ PATH_ARGS = {"path", "mask"}  # must be image files inside output_dir
 LIMITS = {  # argument name -> (min, max); anything outside is refused before the tool runs
     "count": (1, 8), "width": (256, 2048), "height": (256, 2048), "steps": (1, 100), "seed": (0, 2**63 - 1),
     "strength": (0.0, 1.0), "guidance": (0.0, 20.0), "size": (64, 1536), "n": (1, 50), "wait": (0, 45),
-    "history": (0, 20)}
+    "history": (0, 20), "offset": (0, 10000)}
 MAX_TEXT = 4000  # characters in any one string argument
 URL_RE = re.compile(r"https://(?!api\.)[a-z0-9-]+\.trycloudflare\.com")  # not the API host in error lines
 URL_WAIT_S = 60
