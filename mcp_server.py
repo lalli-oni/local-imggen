@@ -232,9 +232,12 @@ def get_job(job_id: str, wait: int = 45) -> list:
 
 
 @mcp.tool()
-def recent_runs(n: int = 5) -> list[dict]:
-    """List the most recent generation runs (newest first) with their image paths."""
-    return imagegen.recent_runs(n)
+def recent_runs(n: int = 5, date: str | None = None, preset: str | None = None, match: str | None = None,
+                offset: int = 0) -> list[dict]:
+    """List generation runs, newest first, with their image paths. Filters: date (YYYY-MM-DD), preset
+    (substring, e.g. "sweep"), match (substring of the folder name or prompt, e.g. "arcade"); offset pages
+    past the first N matches."""
+    return imagegen.recent_runs(n, date=date, preset=preset, match=match, offset=offset)
 
 
 @mcp.tool()

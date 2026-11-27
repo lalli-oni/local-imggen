@@ -1655,15 +1655,34 @@ def rebuild_contact_sheets(path: str | None = None) -> list[Path]:
     return [write_contact_sheet(f.parent, json.loads(f.read_text())) for f in files]
 
 
-def recent_runs(n: int = 5) -> list[dict]:
+def recent_runs(n: int = 5, *, date: str | None = None, preset: str | None = None,
+                match: str | None = None, offset: int = 0) -> list[dict]:
+    """The newest runs first, after the filters: `date` = one day folder (YYYY-MM-DD), `preset` = a
+    case-insensitive substring of the run's preset ("sweep", "bakeoff"), `match` = a substring of the run
+    folder name or prompt, `offset` = how many matches to skip (paging). Unreadable run.json files are skipped."""
     root = Path(load_config()["output_dir"]).expanduser()
-    runs = sorted(root.glob("*/*/run.json"), key=lambda f: f.stat().st_mtime, reverse=True)[:n]
-    out = []
-    for f in runs:
-        r = json.loads(f.read_text())
-        out.append({"run_dir": r["run_dir"], "preset": r["preset"], "styles": r.get("styles", []),
-                    "prompt": r["prompt"],
-                    "images": [im["path"] for im in r["images"]]})
+    want_preset = preset.lower() if preset else None
+    needle = match.lower() if match else None
+    out, skipped = [], 0
+    for f in sorted(root.glob("*/*/run.json"), key=lambda f: f.stat().st_mtime, reverse=True):
+        if date and f.parent.parent.name != date:
+            continue
+        try:
+            r = json.loads(f.read_text())
+            run = {"run_dir": r["run_dir"], "preset": r["preset"], "styles": r.get("styles", []),
+                   "prompt": r["prompt"], "images": [im["path"] for im in r["images"]]}
+        except (OSError, ValueError, KeyError, TypeError):
+            continue  # a half-written or foreign run.json must not hide every other run
+        if want_preset and want_preset not in str(run["preset"]).lower():
+            continue
+        if needle and needle not in f"{f.parent.name} {run['prompt']}".lower():
+            continue
+        if skipped < offset:
+            skipped += 1
+            continue
+        out.append(run)
+        if len(out) >= n:
+            break
     return out
 
 

@@ -239,6 +239,14 @@ def test_check_args_passes_normal_values():
         {"prompt": "a fox", "count": 8, "seed": 0, "preview": True, "styles": []}
 
 
+def test_check_args_limits_recent_runs_paging():
+    assert tunnel.check_args({"match": "arcade", "offset": 40, "n": 50})["offset"] == 40
+    with pytest.raises(ValueError, match="offset"):
+        tunnel.check_args({"offset": 10001})
+    with pytest.raises(ValueError, match="offset"):
+        tunnel.check_args({"offset": -1})
+
+
 # ---------------------------------------------------------------- guessing, flooding
 
 def test_closes_after_too_many_rejected_requests(monkeypatch):

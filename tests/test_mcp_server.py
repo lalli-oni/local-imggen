@@ -105,6 +105,30 @@ def test_recent_runs_and_open_sheet(make_run, stub_calls):
     assert any(c.startswith("explorer.exe") for c in stub_calls())
 
 
+def test_recent_runs_filters_and_paging(make_run):
+    make_run(n=1, preset="draft", prompt="arcade cabin", date="2026-11-26", time="100000")
+    make_run(n=1, preset="sweep", prompt="arcade market", date="2026-11-27", time="090000")
+    make_run(n=1, preset="draft", prompt="harbour market", date="2026-11-27", time="110000")
+    make_run(n=1, preset="klein", prompt="a misty fjord", date="2026-11-27", time="120000")
+    prompts = lambda runs: [r["prompt"] for r in runs]  # noqa: E731
+    assert prompts(mcp_server.recent_runs(10)) == ["a misty fjord", "harbour market", "arcade market", "arcade cabin"]
+    assert prompts(mcp_server.recent_runs(10, date="2026-11-26")) == ["arcade cabin"]
+    assert prompts(mcp_server.recent_runs(10, preset="SWEEP")) == ["arcade market"]
+    assert prompts(mcp_server.recent_runs(10, match="ARCADE")) == ["arcade market", "arcade cabin"]
+    assert prompts(mcp_server.recent_runs(10, match="market", preset="draft")) == ["harbour market"]
+    assert prompts(mcp_server.recent_runs(1, match="market", offset=1)) == ["arcade market"]
+    assert prompts(mcp_server.recent_runs(10, offset=3)) == ["arcade cabin"]
+    assert mcp_server.recent_runs(10, match="no such thing") == []
+
+
+def test_recent_runs_skips_unreadable_run_json(make_run, out_dir):
+    good = make_run(n=1, prompt="a fox")
+    broken = out_dir / "2026-11-28" / "000000-draft-broken"
+    broken.mkdir(parents=True)
+    (broken / "run.json").write_text("{not json")
+    assert [r["run_dir"] for r in imagegen.recent_runs(10)] == [good["run_dir"]]
+
+
 def test_project_tools(comfy, make_image):
     s = mcp_server.project_new("fox", prompt="a fox", palette=["#ff8800"])
     assert s["version"] == 1
