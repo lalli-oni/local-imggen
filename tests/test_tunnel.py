@@ -213,6 +213,33 @@ def test_paths_outside_output_dir_are_refused(server, out_dir, make_image, tmp_p
     assert not (tmp_path / "v").exists()
 
 
+def test_run_info_returns_the_run_json(server, make_run, tmp_path):
+    """#103: a run folder (or its run.json) through the tunnel gives the run's own run.json."""
+    url, _ = server
+    run = make_run(timing={"summary": "queue 1s, comfy 9s"})
+    run_dir = run["run_dir"]
+    for arg in (run_dir, str(run_dir) + "/run.json"):
+        ok, lines = tunnel.call("run_info", {"run_dir": arg}, url, TOKEN, tmp_path)
+        assert ok, lines
+        got = json.loads(lines[0])
+        assert got["timing"] == {"summary": "queue 1s, comfy 9s"} and got["run_dir"] == run_dir
+
+
+@pytest.mark.parametrize("bad", ["/etc", "/etc/passwd", "../../etc", "{out}/../secret", "{out}/linkdir",
+                                 "{out}/linkdir/run.json", "{out}/notes", "{out}/missing"])
+def test_run_info_refuses_folders_outside_output_dir(server, out_dir, make_run, tmp_path, bad):
+    url, _ = server
+    make_run()  # a real run inside, so the folder exists
+    outside = out_dir.parent / "secret"
+    outside.mkdir(exist_ok=True)
+    (outside / "run.json").write_text('{"secret": true}')
+    (out_dir / "linkdir").symlink_to(outside)  # a symlink inside pointing out
+    (out_dir / "notes").mkdir(exist_ok=True)  # inside, but no run.json
+    ok, lines = tunnel.call("run_info", {"run_dir": bad.format(out=out_dir)}, url, TOKEN, tmp_path)
+    assert not ok and "inside the imagegen output folder" in "\n".join(lines)
+    assert "secret" not in "\n".join(lines)
+
+
 def test_vary_mask_is_checked_too(server, make_run, tmp_path):
     url, _ = server
     img = make_run()["images"][0]["path"]

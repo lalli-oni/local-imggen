@@ -1667,6 +1667,27 @@ def recent_runs(n: int = 5) -> list[dict]:
     return out
 
 
+def run_json_in_output(value: str) -> Path:
+    """A run folder, or its run.json, inside output_dir (#103). Symlinks are resolved before the check, so a link
+    pointing out is refused. The read happens after the check, so a folder swapped in between is not re-checked."""
+    root = Path(load_config()["output_dir"]).expanduser().resolve()
+    try:
+        p = to_linux_path(value).resolve()
+        if p.is_dir():
+            p = (p / "run.json").resolve()
+    except Exception:  # noqa: BLE001 - wslpath failing on a bad Windows path
+        p = None
+    if p is None or p.name != "run.json" or not p.is_relative_to(root) or not p.is_file():
+        raise ValueError("must be a run folder inside the imagegen output folder (run_dir from recent_runs, "
+                         "or run_dir_windows from get_job), or its run.json")
+    return p
+
+
+def read_run(value: str) -> dict:
+    """The run.json of a run folder inside output_dir: params, timings, VRAM/RAM, sweep cells."""
+    return json.loads(run_json_in_output(value).read_text())
+
+
 def set_wallpaper(path: str) -> str:
     p = to_linux_path(path)
     if not p.is_file():

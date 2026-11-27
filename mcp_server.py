@@ -238,6 +238,13 @@ def recent_runs(n: int = 5) -> list[dict]:
 
 
 @mcp.tool()
+def run_info(run_dir: str) -> dict:
+    """A generation run's run.json: params, timings and VRAM/RAM (timing.summary), seeds, sweep cells.
+    run_dir is a run folder: run_dir from recent_runs, or run_dir_windows from get_job (or the run.json inside it)."""
+    return imagegen.read_run(run_dir)
+
+
+@mcp.tool()
 def view_image(path: str, size: int = 768) -> Image:
     """Return a preview of an existing image (Linux or Windows path), e.g. from recent_runs."""
     return _thumb(str(imagegen.to_linux_path(path)), min(size, 1536))

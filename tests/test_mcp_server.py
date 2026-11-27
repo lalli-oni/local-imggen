@@ -9,7 +9,7 @@ import imagegen
 import mcp_server
 
 EXPECTED_TOOLS = {"generate", "get_job", "vary", "edit", "cutout", "doctor", "list_presets", "recent_runs",
-                  "view_image", "set_wallpaper", "open_contact_sheet", "project_list", "project_get",
+                  "run_info", "view_image", "set_wallpaper", "open_contact_sheet", "project_list", "project_get",
                   "project_new", "project_update", "project_generate", "project_promote", "project_keep",
                   "project_doc", "project_import", "project_rate", "project_note", "character_list", "character_get", "character_new",
                   "character_update", "list_styles", "sweep"}
