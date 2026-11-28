@@ -155,6 +155,15 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   one-line breakdown that `gen`, the MCP result and the contact sheet show.
 - Logs: `journalctl -u comfyui -f`.
 
+## Issue labels
+Every issue gets exactly one **area** label (two at most if it truly spans two) and one **type** label; a PR gets
+the same area as the issue it closes. Check `gh api repos/lalli-oni/local-imggen/labels` before inventing a new one.
+- Area: `area:tunnel`, `area:viewer-app`, `area:projects` (boards, characters, stages), `area:wallpaper` (daily,
+  scene/cast, detailer), `area:models` (model choice and comparisons), `area:icons`, `area:references` (cloud refs,
+  extension), `area:cli` (gen, MCP, doctor, infra).
+- Type: `bug`, `enhancement`, `research` (compare and decide), `perf`, `chore`.
+- Filter by area to see a component's open work. A GitHub Project board (Status column) is kept by Þór on top of these.
+
 ## Testing
 Run `./test.sh` before every push (any args go to pytest, e.g. `./test.sh -k projects -x`). It needs no tulu,
 GPU or ComfyUI: the first run makes `.venv-test/` from requirements-dev.txt, and every test is isolated
