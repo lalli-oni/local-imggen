@@ -371,6 +371,23 @@ def test_port_in_use_stops_before_cloudflared(tmp_path):
     assert not (tmp_path / "cf-args").exists()
 
 
+def test_port_in_time_wait_can_be_taken_again(tmp_path):
+    """Ctrl-C leaves server-closed connections in TIME_WAIT; the next serve() must still bind the port."""
+    exe = fake_cloudflared(tmp_path, "exit 0\n")
+    with socket.socket() as ls:
+        ls.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        ls.bind(("127.0.0.1", 0))
+        ls.listen()
+        port = ls.getsockname()[1]
+        with socket.create_connection(("127.0.0.1", port)) as c:
+            conn, _ = ls.accept()
+            conn.close()  # the server closes first, so its side of the port goes to TIME_WAIT
+            c.recv(1)
+    with pytest.raises(SystemExit) as e:  # serve() binds the port, then stops at the fake cloudflared
+        tunnel.serve(port=port, cloudflared=exe)
+    assert "in use" not in str(e.value)
+
+
 def test_closing_with_renders_running_says_how_to_clear_the_queue(monkeypatch, capsys):
     monkeypatch.setattr(mcp_server, "JOBS", {"ab12": {"status": "running"}, "cd34": {"status": "done"}})
     tunnel._warn_running_jobs()

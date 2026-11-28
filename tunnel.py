@@ -334,6 +334,9 @@ def serve(port: int = DEFAULT_PORT, idle_min: float = IDLE_MIN, local: bool = Fa
     token = secrets.token_urlsafe(32)
     proc = None
     sock = socket.socket()
+    # After Ctrl-C the connections the server closed sit in TIME_WAIT for about a minute, and without
+    # SO_REUSEADDR a bind to that port fails ("Address already in use") even though nothing listens.
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
         sock.bind(("127.0.0.1", port))  # before cloudflared points at the port: fail here if it's taken
     except OSError as e:
