@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Reference images</title>
+<style>
+  :root { color-scheme: light dark; --bg:#fff; --fg:#1b1b22; --mute:#6a6a78; --card:#f4f4f8; --line:#d8d8e2; --acc:#c026a8; --ok:#15803d; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#14141a; --fg:#ececf2; --mute:#9a9aab; --card:#1e1e27; --line:#33333f; --acc:#f472d0; --ok:#4ade80; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.45 system-ui, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 1.3rem; margin: 0 0 4px; }
+  h2 { font-size: 1.05rem; margin: 28px 0 4px; }
+  h2 a { color: var(--acc); }
+  .mute { color: var(--mute); font-size: .9rem; }
+  .warn { background: #fde68a33; border: 1px solid #d9a40655; padding: 8px 12px; border-radius: 8px; margin: 8px 0; }
+  .task { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin: 10px 0; }
+  .task.done { opacity: .55; }
+  .head { display: flex; gap: 10px; align-items: center; }
+  .head input { width: 22px; height: 22px; }
+  .head b { flex: 1; }
+  pre { white-space: pre-wrap; word-break: break-word; background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+        padding: 10px; margin: 8px 0; font: inherit; font-size: .95rem; }
+  button { font: inherit; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); cursor: pointer; }
+  button.primary { background: var(--acc); border-color: var(--acc); color: #fff; }
+  button.copied { border-color: var(--ok); color: var(--ok); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 6px 0; }
+  code { background: var(--bg); border: 1px solid var(--line); padding: 1px 6px; border-radius: 6px; word-break: break-all; }
+  #count { font-weight: 600; }
+</style>
+<main>
+  <h1 id="title"></h1>
+  <div class="mute">Save each result with the name shown into <code id="inbox"></code>, then run <code>gen ref import --yes</code> on tulu.</div>
+  <div class="mute"><span id="count"></span> done</div>
+  <div id="warnings"></div>
+  <div id="list"></div>
+</main>
+<script>
+const P = {{DATA}};
+const el = (tag, props = {}, ...kids) => {
+  const e = Object.assign(document.createElement(tag), props);
+  kids.flat().forEach(k => e.append(k));
+  return e;
+};
+let store = {};
+try { store = JSON.parse(localStorage.getItem('refs-' + P.date) || '{}'); } catch (e) {}
+const saveStore = () => { try { localStorage.setItem('refs-' + P.date, JSON.stringify(store)); } catch (e) {} };
+const isDone = t => t.status === 'imported' || store[t.id];
+
+async function copy(text, btn) {
+  try { await navigator.clipboard.writeText(text); }
+  catch (e) { const ta = el('textarea', { value: text }); document.body.append(ta); ta.select(); document.execCommand('copy'); ta.remove(); }
+  const old = btn.textContent; btn.textContent = 'Copied'; btn.classList.add('copied');
+  setTimeout(() => { btn.textContent = old; btn.classList.remove('copied'); }, 1200);
+}
+
+function render() {
+  document.getElementById('title').textContent = 'Reference images for ' + P.date;
+  document.getElementById('inbox').textContent = P.inbox_windows;
+  document.getElementById('warnings').replaceChildren(...(P.warnings || []).map(w => el('div', { className: 'warn', textContent: w })));
+  const list = document.getElementById('list');
+  list.replaceChildren();
+  Object.entries(P.services).forEach(([name, info]) => {
+    list.append(el('h2', {}, el('a', { href: info.url, target: '_blank', rel: 'noopener', textContent: info.title || name }),
+                   el('span', { className: 'mute', textContent: info.daily ? '  about ' + info.daily + ' free a day' : '' })));
+    if (info.tips) list.append(el('div', { className: 'mute', textContent: info.tips }));
+    P.tasks.filter(t => t.service === name).forEach(t => {
+      const cb = el('input', { type: 'checkbox', checked: !!isDone(t), disabled: t.status === 'imported' });
+      cb.onchange = () => { store[t.id] = cb.checked; saveStore(); render(); };
+      const card = el('div', { className: 'task' + (isDone(t) ? ' done' : '') },
+        el('div', { className: 'head' }, cb, el('b', { textContent: t.title })),
+        el('pre', { textContent: t.prompt }),
+        el('div', { className: 'row' },
+          (() => { const b = el('button', { className: 'primary', textContent: 'Copy prompt' }); b.onclick = () => copy(t.prompt, b); return b; })(),
+          el('a', { href: info.url, target: '_blank', rel: 'noopener', textContent: 'Open ' + (info.title || name) })),
+        ...t.attachments.map(a => el('div', { className: 'row' }, el('span', { textContent: 'Attach ' }), el('code', { textContent: a.windows }),
+          (() => { const b = el('button', { textContent: 'Copy path' }); b.onclick = () => copy(a.windows, b); return b; })())),
+        el('div', { className: 'row' }, el('span', { textContent: 'Save as ' }), el('code', { textContent: t.id + '.png' }),
+          (() => { const b = el('button', { textContent: 'Copy name' }); b.onclick = () => copy(t.id, b); return b; })()));
+      list.append(card);
+    });
+  });
+  document.getElementById('count').textContent = P.tasks.filter(isDone).length + ' / ' + P.tasks.length;
+}
+render();
+</script>

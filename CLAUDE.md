@@ -93,6 +93,15 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   requests close it. A thread with the URL + token from Þór's message runs `python tunnel.py tools|call TOOL '{json}'`
   (images saved, paths printed); without them, copy-paste commands as before. Never store the token. Threat model,
   CVE notes and removal: `docs/tunnel.md`. `tunnel-cloudflared.sh install|status|remove`: pinned, sha256-checked binary.
+- `refs.py` + `templates/ref_checklist.html` + `extension/` (#112, docs/ref-inbox.md): the reference inbox for the free web
+  tiers (`[ref_services.*]` + `[refs] watch` in config.toml). The services ban bots and programmatic extraction, so a person
+  clicks Generate and saves; tooling only plans and imports. `gen ref plan --from FILE|-` takes a plan text (JSON: date, tasks
+  with service, prompt, attachments, target project/asset[/as_ref] or character/ref) and writes `<output_dir>/refs-inbox/<date>/`
+  `plan.json`, `checklist.md`, `checklist.html` (copy buttons); `gen ref import [--yes] [--watch DIR]` finds `<id>.<ext>` there and files it
+  (`projects.promote(external=...)` or a character ref; the asset version records `external`); `gen ref status|services`.
+  `extension/` is a Chrome/Edge side panel (load unpacked, MV3, `activeTab` only, no content scripts or host permissions):
+  pastes the plan text, copy buttons, outlines the prompt/attach/generate/download element on click. It must never fill,
+  click, submit, read or save anything on a page (test_refs_browser.py checks); selectors in extension/services.js are best effort.
 - `doctor.py`: read-only health checks behind `gen doctor` and the MCP `doctor` tool
   (warns when /dev/dxg is missing in WSL, the "No HIP GPUs" restart loop after a driver update: `wsl --shutdown`)
   (warns when the limits are off while the wallpaper/daily presets use Qwen, `HEAVY_UNETS`)
