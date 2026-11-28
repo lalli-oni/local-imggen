@@ -35,19 +35,41 @@ gen sweep "a busy harbour market at dawn, photorealistic documentary photograph,
 The sheet (`index.html` in each run folder) and the table `gen sweep` prints give time and peak VRAM/RAM per cell.
 
 ## Results
-Fill from the tables `gen sweep` prints (seconds per image; the first image includes the model load).
 
-| Scene | Model @ steps | first (s) | median (s) | peak VRAM GiB | peak RAM GiB | Notes |
-|---|---|---|---|---|---|---|
-| 1 cabin | klein @ 4 | | | | | |
-| 1 cabin | klein @ 16 | | | | | |
-| 1 cabin | klein3 @ 16 | | | | | |
-| 1 cabin | qwen @ 25 | | | | | |
-| 2 arcade | (same four rows) | | | | | |
-| 3 market | klein @4 | 166.0 (incl. load) | 6.9 | 9.5 | 16.4 (comfy RSS 15.1) | seed 1 and 2; comfy swap 5.0 GiB while loading |
-| 3 market | klein @16 | 15.4 | 12.1 | 5.8 | 14.6 (13.4) | |
-| 3 market | klein3 @16 | 208.0 (incl. load) | 19.6 | 10.3-11.7 | 21.0 (19.9-20.4) | |
-| 3 market | qwen @25 | 235.0 | 150.4 | 11.6-11.7 | 22.2-22.6 (20.7-20.8) | comfy swap 5.4-5.6 GiB, sys swap 5.5-5.8 |
+Run on 2026-11-24 to 2026-11-27 on the machine above. Seeds: cabin 2139207221-24, arcade 2299944486-89, market 3336029649-52,
+size 1344x768. The grids below show the final settings, four seeds per row (full-size originals stay in the output folder).
+
+### Final settings per model
+| Model | Steps | Why |
+|---|---|---|
+| klein 4B fp8 | 8 | 4 is fine for drafts; 16 and 32 change composition more than quality, and 32 garbles signs more |
+| klein3 5.6B bf16 | 24 | Very stable from 8 to 32. 24 was the best on the cabin seed that grows a second door at 16 and 32 (Þór); arcade 24 to 32 about equal, slightly cleaner at 32 (Þór) |
+| qwen 2.1 bf16 | 25 | 15 is darker and muddier; 25 and 40 look the same |
+
+### Time and memory (warm = after the first image of a run, which includes loading the model)
+| Model @ steps | Warm per image | First image (cold load) | Peak VRAM GiB | System RAM GiB (comfy RSS) | Swap while running |
+|---|---|---|---|---|---|
+| klein @8 | about 7.5 s | 15 to 106 s | about 6 (9.5 at load) | 14.6 (13.2) | about 1.5 GiB |
+| klein @16 | 12 to 15 s | | about 6 | 14.6 (13.4) | about 1.5 GiB |
+| klein3 @24 | 31 to 38 s | 31 to 144 s | 10.5 to 12 | 21.1 (about 20) | 1.2 to 2 GiB |
+| klein3 @16 | about 20 to 25 s | up to 208 s | 11.7 | 21.0 (about 20) | 1.1 to 1.3 GiB |
+| qwen @25 | 150 to 220 s (up to 305 s with a shared GPU) | 235 to 319 s | about 11.7 | 22.2 to 22.8 (about 20.7) | 5.4 to 5.8 GiB (comfy), about 6 (system) |
+
+Sources: the tables `gen sweep` prints, and the timing line of the final render. klein3 times in the steps sweep jumped between 17 and 217 s
+per image with no pattern (something else was using the PC), so the warm klein3 numbers come from the cleaner runs. klein3 runs bf16 and
+uses about 7 GiB more RAM than klein, close to qwen's 22 GiB, which is near the soft `MemoryHigh=21G` in `comfy/limits.conf`.
+
+### Final grids (rows: klein @8, klein3 @24, qwen @25; columns: seeds 1-4)
+A grey cell means that image has not been rendered yet.
+
+Cabin: `a cozy cabin by a misty fjord at dusk`
+![cabin](model-comparison/cabin-final.jpg)
+
+Arcade (house style `synthwave`): `a crowded 80s arcade at night, kids at the cabinets, a cat asleep on a counter, a claw machine, a neon sign that says "GAME ON"`
+![arcade](model-comparison/arcade-final.jpg)
+
+Market: `a busy harbour market at dawn, photorealistic documentary photograph, fishermen, crates of fish, gulls, a tilted rowing boat, many people`
+![market](model-comparison/market-final.jpg)
 
 ### Baseline impressions (2026-11-24, fjord prompt, before klein3)
 - **klein 4B**: warmer, illustration-like, fewer notable artifacts. About 7 s warm, 4 steps.
@@ -55,8 +77,22 @@ Fill from the tables `gen sweep` prints (seconds per image; the first image incl
 - Both showed artifacts.
 
 ### Written assessment
-Per model: look (vaporwave/synthwave fit, warmth, artifacts), prompt following and signs/text, character fidelity
-with a ref (`gen edit`, `wallpaper_cast`), reliability (black images, crashes, swapping). To fill in after the runs.
+Þór's own observations are marked (Þór); the rest are Claude's reads from downscaled previews and not an artifact count.
+
+- **klein 4B fp8:** the warmest and most "cozy" look: golden light, lit windows, pines, decks. Reads literally on the 80s interior (waterbed with a
+  cat, wood panelling) and keeps "GAME ON" legible. Composition depends on steps and seed (cabin seed 1 jumps from distant to close-up at 16 steps).
+  Sign text beyond the main one is often garbled. Fast and light: about 7.5 s an image and 6 GiB VRAM. More stylised than photographic.
+- **klein3 5.6B bf16:** a cooler, quieter dusk and believable cabins (wood cladding, steep roofs); the most photographic of the family. Very
+  stable across steps. Arcade: fewer kids and less crowded than klein, signs mostly cleaner ("GAME ON"), garbled text on cabinets. Market: wide, top-down
+  compositions with many gulls. Cabin seed 1 grows a second door at 16 and 32 steps (Þór). Noticeably different from klein (Þór). About 4 to 5 times klein's time
+  and 7 GiB more RAM.
+- **qwen 2.1 bf16:** the moodiest and densest: best mist, darkest neon (arcade), the busiest and most realistic market. Seed-to-seed it varies the most on what
+  a "cozy cabin" is (white farmhouse, red cabin, weathered veranda cabin). Slowest by far (150 to 300 s) and RAM maxed with swap. 25 to 40 steps is not much better (Þór).
+- **Overall:** no huge difference at first look (Þór), but klein vs klein3 do differ in feel. Not yet decided: see below.
+
+### Not done yet
+- The qwen arcade and market cells for seeds 3 and 4, and the final tallies of visible artifacts per image (Þór counts from the grids: garbled text, duplicated doors, odd hands or faces, melted objects).
+- The edit comparison (`gen bakeoff PATH "instruction" -p klein,klein3,qwen`, #64 A) and the character-reference test (#4 in the test set).
 
 ## LoRA support and tooling
 A LoRA works for one model family only, so this can outweigh a small quality gap. Plan: a character LoRA used in
