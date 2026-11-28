@@ -79,7 +79,7 @@ def test_plan_cap_warning(rs):
     assert any("chatgpt" in w and "free tier" in w for w in p["warnings"])
 
 
-def test_import_project_asset_with_provenance(rs, make_image):
+def test_import_project_asset_with_provenance(rs, make_image, capsys):
     plan(text(task(target={"project": "rs", "asset": "world/skyline", "as_ref": "skyline"})))
     save_result("2026-11-29", "01-chatgpt-neon-skyline", make_image)
     dry = import_inbox()
@@ -93,6 +93,8 @@ def test_import_project_asset_with_provenance(rs, make_image):
                              "task": "01-chatgpt-neon-skyline", "date": "2026-11-29"}
     assert v["prompt"] == "a neon skyline at dusk" and "skyline" in proj["state"]["refs"]
     assert projects.summary("rs")["assets"]["world/skyline"]["external"]["service"] == "chatgpt"
+    assert projects.main(["status", "rs"]) == 0
+    assert "external (chatgpt)" in capsys.readouterr().out
     # done tasks are not imported again, and the checklist shows them ticked
     assert import_inbox(apply=True)["results"] == []
     assert "[x]" in (refs.inbox_dir("2026-11-29") / "checklist.md").read_text()

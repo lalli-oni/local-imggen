@@ -805,7 +805,8 @@ def _print_status(s: dict) -> None:
         for n, a in s["assets"].items():
             flag = f"  STALE: {'; '.join(a['stale_reasons'])}" if a["stale"] else ""
             shows = f" shows {', '.join(a['shows'])}" if a.get("shows") else ""
-            origin = "imported" if a.get("imported") else f"from project v{a['made_from_project_version']}"
+            origin = (f"external ({a['external']['service']})" if a.get("external")
+                      else "imported" if a.get("imported") else f"from project v{a['made_from_project_version']}")
             print(f"  {n:20} {a['current']:4} ({origin}){shows}{flag}")
     print("history:")
     for v in s["recent_versions"]:
