@@ -298,14 +298,39 @@ def _finish(out: Path, run: dict) -> dict:
     return run
 
 
+def _check_steps(steps: dict | None, presets: list[str]) -> dict[str, list[int]]:
+    """--steps as {preset: [steps, ...]}: only presets in the bake-off, each value 1-150 and listed once."""
+    steps = dict(steps or {})
+    if bad := [p for p in steps if p not in presets]:
+        raise ValueError(f"--steps names a preset that isn't in the bake-off: {', '.join(bad)}")
+    steps = {p: [int(x) for x in (v if isinstance(v, (list, tuple)) else [v])] for p, v in steps.items()}
+    if bad := [p for p, v in steps.items() if not v or not all(1 <= x <= 150 for x in v) or len(set(v)) != len(v)]:
+        raise ValueError(f"steps must be 1-150, each value once ({', '.join(bad)})")
+    return steps
+
+
+def _unique_labels(columns: list[tuple[str, list[tuple]]]) -> list[tuple[str, list[tuple]]]:
+    """Two columns on the same model and steps (wallpaper, icon; or wallpaper_ref_klein next to klein) would
+    share a label: name the column too."""
+    seen: dict[str, int] = {}
+    for _, cols in columns:
+        for c in cols:
+            seen[c[1]] = seen.get(c[1], 0) + 1
+    return [(p, [(c[0], f"{c[1]} ({c[0]})" if seen[c[1]] > 1 else c[1], *c[2:]) for c in cols])
+            for p, cols in columns]
+
+
 def bakeoff(path: str, instructions: list[str], presets: list[str] | tuple[str, ...] = DEFAULT_PRESETS,
             count: int = 2, seed: int | None = None, free: bool = True, label: str | None = None,
-            interval: float = 1.0) -> dict:
-    """Run every edit instruction through every edit preset with the same seeds; returns the bake-off run dict."""
+            interval: float = 1.0, steps: dict[str, int | list[int]] | None = None) -> dict:
+    """Run every edit instruction through every edit preset with the same seeds; returns the bake-off run dict.
+    steps: {preset: steps} overrides a preset's own steps; a list sweeps them ({"klein": [4, 8, 16]}: a column
+    per step count, named klein@4, klein@8, ...), like the text-to-image bake-off."""
     presets = list(presets)
     instructions = _clean(instructions, "instruction")
     conf = imagegen.load_config()
     _check_presets(presets, conf["presets"])
+    steps = _check_steps(steps, presets)
     src = imagegen.to_linux_path(path)
     if not src.is_file():
         raise FileNotFoundError(src)
@@ -316,9 +341,12 @@ def bakeoff(path: str, instructions: list[str], presets: list[str] | tuple[str, 
     _require_idle(comfy)
     out = _out_dir(conf, label or src.stem)
 
-    def call(preset):
-        return lambda n, text: imagegen.edit(str(src), text, count, preset, seed=base_seed,
-                                             label=f"bakeoff-{preset}-{n}-{imagegen.slug(text, 20)}", styles=[])
+    def at(st):  # steps go in the run folder name: two step columns must not share a folder
+        return f"@{st}" if st else ""
+
+    def call(preset, st):
+        return lambda n, text: imagegen.edit(str(src), text, count, preset, seed=base_seed, steps=st,
+                                             label=f"bakeoff-{preset}{at(st)}-{n}-{imagegen.slug(text, 20)}", styles=[])
     items = list(enumerate(instructions, 1))
 
     def build(results, images, done=True):
@@ -326,10 +354,14 @@ def bakeoff(path: str, instructions: list[str], presets: list[str] | tuple[str, 
                 "prompt": " | ".join(f"{n}. {i}" for n, i in enumerate(instructions, 1)),
                 "base_seed": base_seed, "count": len(images), "run_dir": str(out), "images": images,
                 "transparent": False, "source_image": str(src), "mask": None, "denoise": None, "edit": True,
-                "bakeoff": {"mode": "edit", "instructions": instructions, "count": count, "complete": done,
-                            "presets": results}}
-    results, images = _bake(comfy, out, [(p, [(p, _label(conf["presets"][p], p), call(p), items)])
-                                         for p in presets], free, interval,
+                "bakeoff": {"mode": "edit", "instructions": instructions, "count": count, "steps": steps,
+                            "complete": done, "presets": results}}
+    columns = []
+    for p in presets:
+        sweep = steps.get(p, [None])  # None: the preset's own steps
+        columns.append((p, [(p if len(sweep) == 1 else f"{p}@{st}", _label(conf["presets"][p], p, st),
+                             call(p, st), items) for st in sweep]))
+    results, images = _bake(comfy, out, _unique_labels(columns), free, interval,
                             save=lambda r, i, done: _finish(out, build(r, i, done)))
     return _finish(out, build(results, images))
 
@@ -407,12 +439,7 @@ def t2i_bakeoff(prompts: list[str] | None = None, presets: list[str] | tuple[str
         raise ValueError(f"no ref input: {', '.join(bad)} (only the ref test is running)")
     if len(set(presets)) != len(presets):
         raise ValueError("a preset is listed twice")
-    steps = dict(steps or {})
-    if bad := [p for p in steps if p not in presets]:
-        raise ValueError(f"--steps names a preset that isn't in the bake-off: {', '.join(bad)}")
-    steps = {p: [int(x) for x in (v if isinstance(v, (list, tuple)) else [v])] for p, v in steps.items()}
-    if bad := [p for p, v in steps.items() if not v or not all(1 <= x <= 150 for x in v) or len(set(v)) != len(v)]:
-        raise ValueError(f"steps must be 1-150, each value once ({', '.join(bad)})")
+    steps = _check_steps(steps, presets)
     for p in presets:
         _ref_preset(pconf, p)  # a broken ref_preset is a config error, not a quiet "no ref input"
     w, h = (int(v) for v in size)
@@ -427,13 +454,13 @@ def t2i_bakeoff(prompts: list[str] | None = None, presets: list[str] | tuple[str
 
     def text_call(preset, st):
         return lambda n, text: imagegen.generate(text, preset, count, base_seed, width=w, height=h, steps=st,
-                                                 label=f"bakeoff-{preset}-{n}-{imagegen.slug(text, 20)}",
+                                                 label=f"bakeoff-{preset}{f'@{st}' if st else ''}-{n}-{imagegen.slug(text, 20)}",
                                                  styles=[])  # the same prompt for every model
 
     def ref_call(preset, rp, st):  # rp: the preset that draws preset's model with the ref
         return lambda n, text: imagegen.generate(text + REF_SUFFIX, rp, count, base_seed, source_image=str(src),
                                                  edit=True, steps=st, styles=[],
-                                                 label=f"bakeoff-{preset}-ref-{n}-{imagegen.slug(text, 20)}")
+                                                 label=f"bakeoff-{preset}{f'@{st}' if st else ''}-ref-{n}-{imagegen.slug(text, 20)}")
     text_items = list(enumerate(prompts, 1))
     ref_items = list(enumerate(ref_prompts, len(prompts) + 1))  # numbered after the fresh prompts
     def runnable(call, workflow):  # a missing custom node becomes a note up front, not a ComfyUI error
@@ -458,13 +485,7 @@ def t2i_bakeoff(prompts: list[str] | None = None, presets: list[str] | tuple[str
                 if not rp:
                     break  # one "no ref input" row per model is enough
         columns.append((p, cols))
-    # two presets on the same model and steps (wallpaper, icon) would share a label: name the preset too
-    seen: dict[str, int] = {}
-    for _, cols in columns:
-        for c in cols:
-            seen[c[1]] = seen.get(c[1], 0) + 1
-    columns = [(p, [(c[0], f"{c[1]} ({c[0]})" if seen[c[1]] > 1 else c[1], *c[2:]) for c in cols])
-               for p, cols in columns]
+    columns = _unique_labels(columns)
     labels = [c[1] for _, cols in columns for c in cols if callable(c[2])]
     listed = prompts + [f"with the ref: {t}" for t in ref_prompts]
 
@@ -592,7 +613,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--size", type=_parse_size,
                     help=f"with --t2i: WxH for every text-only image (default {T2I_SIZE[0]}x{T2I_SIZE[1]})")
     ap.add_argument("--steps", type=_parse_steps, metavar="PRESET=N[,...]",
-                    help="with --t2i: sampling steps for some presets instead of their own (klein=16), or a sweep "
+                    help="sampling steps for some presets instead of their own (klein=16), or a sweep "
                          "with a column per value (klein=8/16/32,qwen=15/25/40)")
     ap.add_argument("-p", "--presets", help=f"comma-separated presets, in order (default {','.join(DEFAULT_PRESETS)}; "
                                             f"with --t2i {','.join(T2I_PRESETS)})")
@@ -611,8 +632,8 @@ def main(argv: list[str]) -> int:
         if a.open:
             imagegen.open_in_windows(run["contact_sheet"])
         return 0
-    if not a.t2i and (a.ref or a.ref_prompts or a.size or a.steps):
-        ap.error("--ref, --ref-prompt, --size and --steps go with --t2i")
+    if not a.t2i and (a.ref or a.ref_prompts or a.size):
+        ap.error("--ref, --ref-prompt and --size go with --t2i")
     if a.t2i and bool(a.ref) != bool(a.ref_prompts):
         ap.error("--ref and --ref-prompt go together")
     if a.t2i and not a.args and not a.ref_prompts:
@@ -625,7 +646,7 @@ def main(argv: list[str]) -> int:
         run = t2i_bakeoff(a.args, presets, a.ref, a.ref_prompts, a.count, a.seed, a.size or T2I_SIZE,
                           not a.no_free, a.label, steps=a.steps)
     else:
-        run = bakeoff(a.args[0], a.args[1:], presets, a.count, a.seed, not a.no_free, a.label)
+        run = bakeoff(a.args[0], a.args[1:], presets, a.count, a.seed, not a.no_free, a.label, steps=a.steps)
     print(table(run))
     print(f"\ncontact sheet: {run['contact_sheet_windows'] or run['contact_sheet']}")
     print(f"numbers: {Path(run['run_dir']) / 'bakeoff.json'}")
