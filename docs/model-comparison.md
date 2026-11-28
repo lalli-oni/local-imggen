@@ -60,7 +60,6 @@ per image with no pattern (something else was using the PC), so the warm klein3 
 uses about 7 GiB more RAM than klein, close to qwen's 22 GiB, which is near the soft `MemoryHigh=21G` in `comfy/limits.conf`.
 
 ### Final grids (rows: klein @8, klein3 @24, qwen @25; columns: seeds 1-4)
-A grey cell means that image has not been rendered yet.
 
 Cabin: `a cozy cabin by a misty fjord at dusk`
 ![cabin](model-comparison/cabin-final.jpg)
@@ -90,9 +89,14 @@ Market: `a busy harbour market at dawn, photorealistic documentary photograph, f
   a "cozy cabin" is (white farmhouse, red cabin, weathered veranda cabin). Slowest by far (150 to 300 s) and RAM maxed with swap. 25 to 40 steps is not much better (Þór).
 - **Overall:** no huge difference at first look (Þór), but klein vs klein3 do differ in feel. Not yet decided: see below.
 
+### Edit path (first look, Þór, 2026-11-28)
+`gen bakeoff` on the lil tulu ref, "wave with one tentacle" and "side view", klein vs klein3 vs qwen, 2 seeds each: klein3's edits were decent
+in 2 of 3 cases (one grew a stray tentacle out of the head); not yet compared at different step counts. The earlier #40 numbers for klein and qwen edits are
+in that issue. The steps pass and the rest of the edit comparison are follow-ups (see below).
+
 ### Not done yet
-- The qwen arcade and market cells for seeds 3 and 4, and the final tallies of visible artifacts per image (Þór counts from the grids: garbled text, duplicated doors, odd hands or faces, melted objects).
-- The edit comparison (`gen bakeoff PATH "instruction" -p klein,klein3,qwen`, #64 A) and the character-reference test (#4 in the test set).
+- The final tallies of visible artifacts per image (Þór counts from the grids: garbled text, duplicated doors, odd hands or faces, melted objects).
+- Edit comparison at tuned steps (needs `--steps` in edit-mode `gen bakeoff`, its own issue and thread) and the character-reference test (#4 in the test set).
 
 ## LoRA support and tooling
 A LoRA works for one model family only, so this can outweigh a small quality gap. Plan: a character LoRA used in
