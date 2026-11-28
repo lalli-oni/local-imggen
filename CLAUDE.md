@@ -112,6 +112,9 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   they use) as warn while missing. Never run automatically.
 - `test.sh` + `tests/`: the test suite (see Testing below). `requirements-dev.txt` / `requirements-browser.txt`
   hold test-only deps; CI runs it on every PR (`.github/workflows/test.yml`).
+- `.claude/agents/image-judge.md` + `docs/judging.md` (#113): a read-only Sonnet subagent that scores generated images
+  (artifacts with severity 1-3, instruction following, character and style match) as JSON. Advisory only, nothing automatic
+  uses it. Ask "judge these images" and give paths, prompt, style and ref; it judges only the paths given (private runs).
 - `setup.sh`: idempotent setup (venv `~/venvs/imagegen`, `gen` wrapper, upscaler + rembg models)
 
 ## Rules
