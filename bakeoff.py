@@ -309,6 +309,17 @@ def _check_steps(steps: dict | None, presets: list[str]) -> dict[str, list[int]]
     return steps
 
 
+def _unique_labels(columns: list[tuple[str, list[tuple]]]) -> list[tuple[str, list[tuple]]]:
+    """Two columns on the same model and steps (wallpaper, icon; or wallpaper_ref_klein next to klein) would
+    share a label: name the column too."""
+    seen: dict[str, int] = {}
+    for _, cols in columns:
+        for c in cols:
+            seen[c[1]] = seen.get(c[1], 0) + 1
+    return [(p, [(c[0], f"{c[1]} ({c[0]})" if seen[c[1]] > 1 else c[1], *c[2:]) for c in cols])
+            for p, cols in columns]
+
+
 def bakeoff(path: str, instructions: list[str], presets: list[str] | tuple[str, ...] = DEFAULT_PRESETS,
             count: int = 2, seed: int | None = None, free: bool = True, label: str | None = None,
             interval: float = 1.0, steps: dict[str, int | list[int]] | None = None) -> dict:
@@ -330,9 +341,12 @@ def bakeoff(path: str, instructions: list[str], presets: list[str] | tuple[str, 
     _require_idle(comfy)
     out = _out_dir(conf, label or src.stem)
 
+    def at(st):  # steps go in the run folder name: two step columns must not share a folder
+        return f"@{st}" if st else ""
+
     def call(preset, st):
         return lambda n, text: imagegen.edit(str(src), text, count, preset, seed=base_seed, steps=st,
-                                             label=f"bakeoff-{preset}-{n}-{imagegen.slug(text, 20)}", styles=[])
+                                             label=f"bakeoff-{preset}{at(st)}-{n}-{imagegen.slug(text, 20)}", styles=[])
     items = list(enumerate(instructions, 1))
 
     def build(results, images, done=True):
@@ -347,7 +361,7 @@ def bakeoff(path: str, instructions: list[str], presets: list[str] | tuple[str, 
         sweep = steps.get(p, [None])  # None: the preset's own steps
         columns.append((p, [(p if len(sweep) == 1 else f"{p}@{st}", _label(conf["presets"][p], p, st),
                              call(p, st), items) for st in sweep]))
-    results, images = _bake(comfy, out, columns, free, interval,
+    results, images = _bake(comfy, out, _unique_labels(columns), free, interval,
                             save=lambda r, i, done: _finish(out, build(r, i, done)))
     return _finish(out, build(results, images))
 
@@ -440,13 +454,13 @@ def t2i_bakeoff(prompts: list[str] | None = None, presets: list[str] | tuple[str
 
     def text_call(preset, st):
         return lambda n, text: imagegen.generate(text, preset, count, base_seed, width=w, height=h, steps=st,
-                                                 label=f"bakeoff-{preset}-{n}-{imagegen.slug(text, 20)}",
+                                                 label=f"bakeoff-{preset}{f'@{st}' if st else ''}-{n}-{imagegen.slug(text, 20)}",
                                                  styles=[])  # the same prompt for every model
 
     def ref_call(preset, rp, st):  # rp: the preset that draws preset's model with the ref
         return lambda n, text: imagegen.generate(text + REF_SUFFIX, rp, count, base_seed, source_image=str(src),
                                                  edit=True, steps=st, styles=[],
-                                                 label=f"bakeoff-{preset}-ref-{n}-{imagegen.slug(text, 20)}")
+                                                 label=f"bakeoff-{preset}{f'@{st}' if st else ''}-ref-{n}-{imagegen.slug(text, 20)}")
     text_items = list(enumerate(prompts, 1))
     ref_items = list(enumerate(ref_prompts, len(prompts) + 1))  # numbered after the fresh prompts
     def runnable(call, workflow):  # a missing custom node becomes a note up front, not a ComfyUI error
@@ -471,13 +485,7 @@ def t2i_bakeoff(prompts: list[str] | None = None, presets: list[str] | tuple[str
                 if not rp:
                     break  # one "no ref input" row per model is enough
         columns.append((p, cols))
-    # two presets on the same model and steps (wallpaper, icon) would share a label: name the preset too
-    seen: dict[str, int] = {}
-    for _, cols in columns:
-        for c in cols:
-            seen[c[1]] = seen.get(c[1], 0) + 1
-    columns = [(p, [(c[0], f"{c[1]} ({c[0]})" if seen[c[1]] > 1 else c[1], *c[2:]) for c in cols])
-               for p, cols in columns]
+    columns = _unique_labels(columns)
     labels = [c[1] for _, cols in columns for c in cols if callable(c[2])]
     listed = prompts + [f"with the ref: {t}" for t in ref_prompts]
 

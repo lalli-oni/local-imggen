@@ -463,3 +463,12 @@ def test_edit_step_sweep_cli(comfy, make_image, fake_proc):
     assert imagegen.main(["bakeoff", str(make_image()), "wave", "-p", "klein,qwen", "-n", "1",
                           "--steps", "klein=4/8, qwen=15"]) == 0
     assert [_steps(wf) for wf in comfy.workflows()] == [4, 8, 15]
+
+
+def test_edit_step_columns_get_their_own_folders_and_unique_labels(comfy, make_image, fake_proc):
+    run = bakeoff.bakeoff(str(make_image()), ["wave"], ["klein", "wallpaper_ref_klein"], count=1, seed=1,
+                          steps={"klein": [4, 16], "wallpaper_ref_klein": 16}, interval=0.01)
+    res = run["bakeoff"]["presets"]
+    assert len({r["runs"][0] for r in res}) == 3  # klein@4 and klein@16 no longer share a run folder
+    labels = [r["label"] for r in res]
+    assert len(set(labels)) == 3 and labels[1].endswith("(klein@16)")
