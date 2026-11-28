@@ -28,7 +28,14 @@ def env(tmp_path):
     models = tmp_path / "models"
     models.mkdir()
     return dict(os.environ, PATH=f"{bin_}{os.pathsep}{os.environ['PATH']}", COMFY_MODELS=str(models),
-                FAKE_SHA=hashlib.sha256(DATA).hexdigest(), HF_TOKEN="")
+                FAKE_SHA=hashlib.sha256(DATA).hexdigest(), HF_TOKEN="", HF_HOME=str(tmp_path / "hf"),
+                HF_TOKEN_PATH="", HOME=str(tmp_path / "home"))
+
+
+def stub_log(env):
+    """The lines the fake wget wrote (its arguments, so the auth header shows)."""
+    path = env["STUB_LOG"]
+    return open(path).read().splitlines() if os.path.exists(path) else []
 
 
 def _files(script):
@@ -90,3 +97,27 @@ def test_presets_and_scripts_agree():
         for key in ("unet", "text_encoder", "clip_l", "t5", "vae"):
             if key in p:
                 assert p[key] in names, f"{name}.{key} = {p[key]} not in {p['download']}"
+
+
+@pytest.mark.parametrize("how", ["env", "hf_home", "token_path", "default_file"])
+def test_hf_token_is_found_and_sent(how, env, tmp_path):
+    token = "hf_testtoken123"
+    if how == "env":
+        env["HF_TOKEN"] = token
+    elif how == "hf_home":
+        (tmp_path / "hf").mkdir()
+        (tmp_path / "hf" / "token").write_text(token + "\n")
+    elif how == "token_path":
+        (tmp_path / "tok").write_text(token)
+        env["HF_TOKEN_PATH"] = str(tmp_path / "tok")
+    else:
+        (tmp_path / "home" / ".cache" / "huggingface").mkdir(parents=True)
+        (tmp_path / "home" / ".cache" / "huggingface" / "token").write_text(token)
+    run_script([str(REPO / "models" / "flux2-klein.sh"), "-y"], env)
+    wget_calls = [c for c in stub_log(env) if c.startswith("wget")]
+    assert wget_calls and all(f"Authorization: Bearer {token}" in c for c in wget_calls)
+
+
+def test_no_token_sends_no_auth_header(env):
+    run_script([str(REPO / "models" / "flux2-klein.sh"), "-y"], env)
+    assert all("Authorization" not in c for c in stub_log(env) if c.startswith("wget"))

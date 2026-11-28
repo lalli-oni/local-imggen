@@ -1,6 +1,6 @@
 """gen sweep (#17): one prompt, many settings, laid out as a labelled grid on one contact sheet.
 
-    gen sweep "prompt" [-p klein,qwen] [--steps 4,8,16 | --steps klein=4,8,16 qwen=15,25,40] [--cfg 3,5]
+    gen sweep "prompt" [-p klein,qwen] [--steps 4,8,16 | --steps klein=4,8,16 --steps qwen=15,25,40] [--cfg 3,5]
               [--guidance G,..] [--style a,none] [--seeds N] [--seed S] [--size 1344x768] [--rows AXIS] [-y]
 
 The axes are the model (a preset: its model and workflow, so this is also the model comparison for #64),

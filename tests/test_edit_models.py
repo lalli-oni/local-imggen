@@ -122,3 +122,49 @@ def test_every_download_script_exists():
         if "download" in p:
             assert (imagegen.ROOT / "models" / p["download"]).is_file(), name
 
+
+
+def test_klein3_text_to_image(comfy):
+    imagegen.generate("a lighthouse", "klein3", seed=4, width=1344, height=768)
+    wf = comfy.workflows()[0]
+    assert _node(wf, "UNETLoader")["unet_name"] == "flux3-image-klein-bf16.safetensors"
+    assert _node(wf, "CLIPLoader")["clip_name"] == "qwen3vl_4b_bf16.safetensors"
+    assert _node(wf, "CLIPLoader")["type"] == "flux3"
+    ks = _node(wf, "KSampler")
+    assert (ks["seed"], ks["steps"], ks["cfg"], ks["scheduler"]) == (4, 16, 1.0, "simple")
+    shift = _node(wf, "ModelSamplingFlux")
+    assert shift["max_shift"] == shift["base_shift"] == 2.77259  # ln(16): BFL's alpha 16
+    assert (shift["width"], shift["height"]) == (1344, 768)
+    assert _node(wf, "EmptyFlux2LatentImage")["width"] == 1344
+    assert _node(wf, "CLIPTextEncode")["text"] == "a lighthouse"
+
+
+def test_klein3_per_cell_steps_override(comfy):
+    imagegen.generate("a lighthouse", "klein3", seed=1, steps=8)
+    assert _node(comfy.workflows()[0], "KSampler")["steps"] == 8
+
+
+def test_klein3_edit_passes_the_image_as_a_reference(comfy, make_image):
+    imagegen.edit(str(make_image(size=(1920, 1080))), "make it wave", preset="klein3", seed=2)
+    wf = comfy.workflows()[0]
+    ref = next(n["inputs"] for n in wf.values() if n["class_type"] == "ReferenceMultiLatent")
+    assert wf[ref["images.image0"][0]]["class_type"] == "LoadImage"
+    assert ref["resolution"] == "resize" and ref["resolution.megapixels"] == 1.0  # tulu's /object_info, 2026-11-25
+    ks = _node(wf, "KSampler")
+    assert ks["positive"][1] == 0 and ks["negative"][1] == 1  # ReferenceMultiLatent returns both conditionings
+    lat = _node(wf, "EmptyFlux2LatentImage")  # the edit keeps the source's shape (scaled to a pixel budget)
+    assert abs(lat["width"] / lat["height"] - 1920 / 1080) < 0.1
+
+
+def test_klein3_doctor_says_how_to_get_the_gated_files(comfy):
+    comfy.models["diffusion_models"] = []
+    checks = {c["name"]: c for c in doctor.check_models(imagegen.load_config(), api_up=True)}
+    c = checks["model flux3-image-klein-bf16.safetensors"]
+    assert c["status"] == "warn" and "models/flux3-klein.sh" in c["fix"] and "huggingface/token" in c["fix"]
+    assert "huggingface/token" not in checks["model flux-2-klein-4b-fp8.safetensors"]["fix"]
+
+
+def test_gated_hint_only_when_every_script_is_gated(comfy):
+    comfy.models["vae"] = []
+    c = {c["name"]: c for c in doctor.check_models(imagegen.load_config(), api_up=True)}["model flux2-vae.safetensors"]
+    assert "flux2-klein.sh" in c["fix"] and "huggingface/token" not in c["fix"]  # klein4B's script is public
