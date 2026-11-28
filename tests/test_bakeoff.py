@@ -302,7 +302,6 @@ def test_t2i_cli(comfy, make_image, fake_proc, capsys):
     img = str(make_image())
     for bad in (["bakeoff", img, "x", "--ref", "y.png"],                 # --ref without --t2i
                 ["bakeoff", img, "x", "--size", "1344x768"],             # --size without --t2i, even the default
-                ["bakeoff", img, "x", "--steps", "klein=8"],
                 ["bakeoff", img],                                        # edit mode without instructions
                 ["bakeoff", "--t2i"],                                    # nothing to run
                 ["bakeoff", "--t2i", "x", "--ref", img],                 # a ref without a ref prompt
@@ -435,3 +434,32 @@ def test_a_busy_comfyui_stops_the_bakeoff_before_it_starts(comfy, fake_proc):
     assert comfy.order == []
     with pytest.raises(RuntimeError, match='"clear": true'):
         imagegen.main(["bakeoff", "--t2i", "fox", "--presets", "klein"])  # __main__ prints it as "error: ..."
+
+
+def test_edit_step_sweep(comfy, make_image, fake_proc):
+    """Edit mode takes --steps like t2i: a column per step count, one model load per preset."""
+    run = bakeoff.bakeoff(str(make_image()), ["wave", "side"], ["kontext", "klein", "qwen"], count=1, seed=4,
+                          steps={"klein": [4, 8, 16], "qwen": 15}, interval=0.01)
+    res = [r["preset"] for r in run["bakeoff"]["presets"]]
+    assert res == ["kontext", "klein@4", "klein@8", "klein@16", "qwen"]
+    assert comfy.frees == 3
+    assert [_steps(wf) for wf in comfy.workflows()] == [20, 20, 4, 4, 8, 8, 16, 16, 15, 15]  # kontext: its own
+    labels = {r["preset"]: r["label"] for r in run["bakeoff"]["presets"]}
+    assert labels["klein@8"] == "FLUX.2 klein 4B · 8 steps" and labels["qwen"] == "Qwen-Image 2.1 · 15 steps"
+    assert run["bakeoff"]["steps"] == {"klein": [4, 8, 16], "qwen": [15]}
+    assert [r["steps"] for r in run["bakeoff"]["presets"]] == [20, 4, 8, 16, 15]
+    tags = [im["tag"] for im in run["images"]]
+    assert tags[:5] == ["FLUX.1 Kontext dev · 20 steps · 1", "FLUX.2 klein 4B · 4 steps · 1",
+                        "FLUX.2 klein 4B · 8 steps · 1", "FLUX.2 klein 4B · 16 steps · 1",
+                        "Qwen-Image 2.1 · 15 steps · 1"]
+    assert '"steps": {' in (Path(run["run_dir"]) / "index.html").read_text()
+    for bad, msg in (({"draft": 8}, "isn't in the bake-off"), ({"klein": 0}, "1-150"),
+                     ({"klein": [8, 8]}, "each value once")):
+        with pytest.raises(ValueError, match=msg):
+            bakeoff.bakeoff(str(make_image()), ["x"], ["klein"], steps=bad)
+
+
+def test_edit_step_sweep_cli(comfy, make_image, fake_proc):
+    assert imagegen.main(["bakeoff", str(make_image()), "wave", "-p", "klein,qwen", "-n", "1",
+                          "--steps", "klein=4/8, qwen=15"]) == 0
+    assert [_steps(wf) for wf in comfy.workflows()] == [4, 8, 15]

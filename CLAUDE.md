@@ -10,6 +10,7 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   `gen vary PATH [--mask M] [-s 0.4]` for img2img/inpaint, `gen edit PATH "instruction"` for instruction edits
   (FLUX.2 klein by default since the #40 bake-off, `EDIT_PRESET`; `-p kontext` / `-p qwen`), `gen cutout PATH [--clean]` for background removal,
   `gen bakeoff PATH "instr"...` (bakeoff.py: same edits through several edit presets, time/VRAM/RAM, one sheet;
+  `--steps klein=4/8/16,qwen=25` (#107, edit and `--t2i` alike: a column per step count, `klein@8`);
   `--t2i "fresh prompt"... [--ref IMG --ref-prompt "scene"...]` compares text-to-image models, #51: fresh prompts from text,
   and the ref test through each preset's edit_workflow or its `ref_preset` (SDXL -> sdxl_ref, IP-Adapter); labels from `model`;
   the sheet is rewritten after every column and on Ctrl-C, `--rebuild FOLDER` for older stopped folders),
