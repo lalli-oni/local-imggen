@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "imagegen reference helper",
+  "version": "0.1.0",
+  "description": "Copy buttons and element highlighting for the daily reference-image checklist. It never fills, clicks, submits or saves anything on a page.",
+  "permissions": [
+    "storage",
+    "sidePanel",
+    "activeTab",
+    "scripting",
+    "clipboardWrite"
+  ],
+  "action": {
+    "default_title": "imagegen references"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "https://gemini.google.com/*",
+    "https://designer.microsoft.com/*",
+    "https://app.leonardo.ai/*",
+    "https://ideogram.ai/*"
+  ]
+}

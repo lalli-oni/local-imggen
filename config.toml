@@ -509,3 +509,44 @@ preset = "klein"
 count = 2
 needs_text = true             # one targeted fix per pass, typed on the board
 instruction = "{text}. Keep everything else exactly the same: the same character, pose, colours and background."
+
+# Reference inbox (#112, gen ref): free web tiers where a person clicks Generate (the services' terms ban bots and
+# programmatic extraction, so nothing here drives a web page). `daily` is the free cap per day used to warn when a
+# plan asks for more; these numbers come from secondary sources and change, so check them and edit.
+[refs]
+watch = []                    # extra folders searched on `gen ref import` for <task-id>.png, e.g. the browser's Downloads
+
+[ref_services.chatgpt]
+title = "ChatGPT"
+url = "https://chatgpt.com/"
+daily = 3
+upload = true
+tips = "Best at scene and world look. Say 'Create an image' first. Signs: give the exact text in quotes."
+
+[ref_services.gemini]
+title = "Gemini"
+url = "https://gemini.google.com/app"
+daily = 3
+upload = true
+tips = "Choose 'Create images'. The free allowance depends on the Google account: check it."
+
+[ref_services.designer]
+title = "Microsoft Designer"
+url = "https://designer.microsoft.com/image-creator"
+daily = 15
+upload = false
+tips = "15 free boosts a day. Text only: no reference upload."
+
+[ref_services.leonardo]
+title = "Leonardo"
+url = "https://app.leonardo.ai/image-generation"
+daily = 10
+upload = true
+tips = "Daily free tokens. Check the licence on free images before using them for more than yourself."
+
+[ref_services.ideogram]
+title = "Ideogram"
+url = "https://ideogram.ai/"
+daily = 4
+upload = true
+tips = "Best at readable text in the picture (signs). Free credits are weekly."

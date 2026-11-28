@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>imagegen references</title>
+<style>
+  :root { color-scheme: light dark; --bg:#fff; --fg:#1b1b22; --mute:#6a6a78; --card:#f4f4f8; --line:#d8d8e2; --acc:#c026a8; --ok:#15803d; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#14141a; --fg:#ececf2; --mute:#9a9aab; --card:#1e1e27; --line:#33333f; --acc:#f472d0; --ok:#4ade80; } }
+  body { margin: 0; padding: 12px; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; }
+  h1 { font-size: 1.05rem; margin: 0 0 8px; }
+  h2 { font-size: .95rem; margin: 16px 0 4px; }
+  textarea { width: 100%; min-height: 90px; background: var(--card); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 8px; font: 12px ui-monospace, monospace; }
+  button { font: inherit; padding: 4px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); cursor: pointer; }
+  button.primary { background: var(--acc); border-color: var(--acc); color: #fff; }
+  button.copied { border-color: var(--ok); color: var(--ok); }
+  .task { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin: 8px 0; }
+  .task.done { opacity: .5; }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 5px 0; }
+  .mute { color: var(--mute); font-size: .85rem; }
+  .prompt { white-space: pre-wrap; max-height: 5.5em; overflow: auto; font-size: .85rem; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px; }
+  #msg { min-height: 1.2em; color: var(--mute); }
+  code { word-break: break-all; }
+</style>
+<h1>Reference images</h1>
+<div class="mute">Paste the plan text Claude wrote. This panel only copies text and outlines buttons: you press Generate and save the file yourself.</div>
+<textarea id="paste" placeholder='{"date": "...", "tasks": [...]}'></textarea>
+<div class="row">
+  <button class="primary" id="load">Load plan</button>
+  <button id="cmd">Copy tulu command</button>
+  <button id="clear">Clear</button>
+</div>
+<div id="msg"></div>
+<div id="list"></div>
+<script src="services.js"></script>
+<script src="highlight.js"></script>
+<script src="sidepanel.js"></script>

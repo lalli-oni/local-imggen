@@ -435,7 +435,7 @@ def record_pass(slug: str, run: dict, version: int, used: dict, author: str = "h
 
 
 def promote(slug: str, image: str, asset: str, note: str | None = None, as_ref: str | None = None,
-            author: str = "human", shows: list[str] | None = None) -> dict:
+            author: str = "human", shows: list[str] | None = None, external: dict | None = None) -> dict:
     """Make an image the next version of an asset (and optionally a ref); commits a project version.
 
     The asset version records the project version the image was made from (from its sidecar when it
@@ -448,7 +448,7 @@ def promote(slug: str, image: str, asset: str, note: str | None = None, as_ref: 
     src = _image(image, "assets")
     with locked(slug):
         proj = load(slug)
-        r = _add_asset_version(proj, src, asset, note, author, shows)
+        r = _add_asset_version(proj, src, asset, note, author, shows, external=external)
         changed = ["assets"]
         if as_ref:
             _add_ref(proj, as_ref, project_dir(slug) / r["file"])
@@ -480,8 +480,11 @@ def _shows(proj: dict, shows: list[str] | None, origin: dict) -> dict:
 
 
 def _add_asset_version(proj: dict, src: Path, asset: str, note: str | None, author: str,
-                       shows: list[str] | None, imported: bool = False) -> dict:
-    """Copy src in as the next version of asset (no commit; the caller commits)."""
+                       shows: list[str] | None, imported: bool = False, external: dict | None = None) -> dict:
+    """Copy src in as the next version of asset (no commit; the caller commits).
+
+    external (#112): where an image made outside imagegen came from ({service, prompt, task, date});
+    kept on the asset version, and its prompt stands in for a sidecar's."""
     slug = proj["slug"]
     meta = imagegen.find_sidecar(src) or {}
     origin = meta.get("project") or {}
@@ -501,7 +504,8 @@ def _add_asset_version(proj: dict, src: Path, asset: str, note: str | None, auth
         "project_version": made_from or proj["version"],
         "from_pass": made_from is not None, "promoted_in": proj["version"] + 1,
         **({"imported": True} if imported else {}), **({"shows": shown} if shown else {}),
-        **{k: meta[k] for k in ("prompt", "seed", "preset") if k in meta}})
+        **{k: meta[k] for k in ("prompt", "seed", "preset") if k in meta},
+        **({"external": external, "prompt": external.get("prompt", "")} if external else {})})
     entry["current"], entry["kept_at"], entry["kept_chars"] = n, None, {}
     return {"asset": asset, "asset_version": n, "file": str(dest.relative_to(project_dir(slug)))}
 
@@ -655,6 +659,7 @@ def summary(slug: str, mark_seen: str | None = None, history: int = 5, board: bo
                         "made_from_project_version": cur["project_version"],
                         **({"shows": cur["shows"]} if cur.get("shows") else {}),
                         **({"imported": True} if cur.get("imported") else {}),
+                        **({"external": cur["external"]} if cur.get("external") else {}),
                         "stale": bool(reasons), "stale_reasons": reasons,
                         "history": [{"v": h["v"], "at": h["at"], "author": h["author"], "note": h["note"],
                                      "project_version": h["project_version"]} for h in a["versions"]]}
@@ -800,7 +805,8 @@ def _print_status(s: dict) -> None:
         for n, a in s["assets"].items():
             flag = f"  STALE: {'; '.join(a['stale_reasons'])}" if a["stale"] else ""
             shows = f" shows {', '.join(a['shows'])}" if a.get("shows") else ""
-            origin = "imported" if a.get("imported") else f"from project v{a['made_from_project_version']}"
+            origin = (f"external ({a['external']['service']})" if a.get("external")
+                      else "imported" if a.get("imported") else f"from project v{a['made_from_project_version']}")
             print(f"  {n:20} {a['current']:4} ({origin}){shows}{flag}")
     print("history:")
     for v in s["recent_versions"]:
