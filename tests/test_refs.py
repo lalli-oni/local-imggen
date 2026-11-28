@@ -151,4 +151,8 @@ def test_extension_knows_every_configured_service():
     in_js = set(re.findall(r"^  (\w+): \{$", js, re.M))
     assert in_js == set(refs.services())
     manifest = json.loads((Path(imagegen.ROOT) / "extension" / "manifest.json").read_text())
-    assert not manifest.get("host_permissions") and "content_scripts" not in manifest  # nothing runs on pages by itself
+    assert "content_scripts" not in manifest  # nothing runs on pages by itself
+    # host access only to the configured services' own origins, no wildcards over other sites
+    hosts = sorted(h for h in manifest["host_permissions"])
+    urls = sorted(re.sub(r"^(https://[^/]+)/.*$", r"\1/*", s["url"]) for s in refs.services().values())
+    assert hosts == urls and not any("*." in h or "all_urls" in h for h in hosts)

@@ -99,7 +99,7 @@ via ROCm 7.2 in WSL2 (Ubuntu 24.04). This repo is a thin driver around ComfyUI's
   with service, prompt, attachments, target project/asset[/as_ref] or character/ref) and writes `<output_dir>/refs-inbox/<date>/`
   `plan.json`, `checklist.md`, `checklist.html` (copy buttons); `gen ref import [--yes] [--watch DIR]` finds `<id>.<ext>` there and files it
   (`projects.promote(external=...)` or a character ref; the asset version records `external`); `gen ref status|services`.
-  `extension/` is a Chrome/Edge side panel (load unpacked, MV3, `activeTab` only, no content scripts or host permissions):
+  `extension/` is a Chrome/Edge side panel (load unpacked, MV3, host permissions only for the [ref_services] sites, no content scripts):
   pastes the plan text, copy buttons, outlines the prompt/attach/generate/download element on click. It must never fill,
   click, submit, read or save anything on a page (test_refs_browser.py checks); selectors in extension/services.js are best effort.
 - `doctor.py`: read-only health checks behind `gen doctor` and the MCP `doctor` tool

@@ -2,8 +2,10 @@
 
 Helps with the daily reference-image checklist (#112, `gen ref plan`). It **only copies text and outlines
 elements**; you press Generate and save the file yourself. It never fills a box, clicks, submits, reads the
-page or saves an image, and it has no persistent content script or host permissions: the outline is injected into
-the tab you are looking at, on the click of a button (`activeTab`). That keeps it on the "a person using the site"
+page or saves an image, and it has no persistent content script: the outline is injected into the tab you are looking at, on the
+click of a button. `host_permissions` lists only the five services' own sites (the side panel's buttons do not
+count as the `activeTab` gesture, so injection needs the host grant). Chrome shows this as "read and change your
+data on chatgpt.com, ..." when you load it; the code only ever calls the outline function. That keeps it on the "a person using the site"
 side of the free tiers' terms (they ban bots and programmatic extraction). If a service's terms change, drop it
 from `services.js`.
 
