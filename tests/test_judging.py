@@ -26,6 +26,13 @@ def test_example_matches_fields():
     assert ex["confidence"] in ("high", "medium", "low")
 
 
+def test_kinds_in_table_are_known():
+    _, text = _example()
+    table = re.search(r"\| kind \|.*?\n\n", text, re.S).group(0)
+    found = set(re.findall(r"^\| `(\w+)` \|", table, re.M))
+    assert found == KINDS
+
+
 def test_doc_lists_every_kind():
     _, text = _example()
     for k in KINDS:
@@ -34,10 +41,11 @@ def test_doc_lists_every_kind():
 
 def test_agent_file():
     raw = (ROOT / ".claude" / "agents" / "image-judge.md").read_text()
-    head = raw.split("---")[1]
-    fields = dict(l.split(":", 1) for l in head.strip().splitlines())
+    m = re.match(r"---\n(.*?)\n---\n", raw, re.S)
+    assert m, "agent file needs frontmatter"
+    fields = dict(l.split(":", 1) for l in m.group(1).splitlines())
     assert fields["name"].strip() == "image-judge"
     assert fields["model"].strip() == "sonnet"
     tools = {t.strip() for t in fields["tools"].split(",")}
-    assert tools <= {"Read", "Glob", "Grep"}, "the judge must stay read-only"
+    assert tools == {"Read"}, "the judge must stay read-only, no Glob/Grep over other runs"
     assert "docs/judging.md" in raw

@@ -3,7 +3,7 @@
 A rubric so a person and the `image-judge` subagent (`.claude/agents/image-judge.md`) look at an image the same way.
 Scores are **advisory**: nothing picks, rates or deletes an image from them. The point for now is to see how
 closely the judge matches human assessments (see "Calibration" below). Only judge images you made or were pointed at:
-other runs may be private.
+other runs may be private. The agent has only `Read`, so it can't search folders, but path scoping is by instruction, not enforced.
 
 ## Input
 One image (or a few), plus whatever applies:
@@ -12,7 +12,7 @@ One image (or a few), plus whatever applies:
 - a **character ref** image, when a character should appear.
 
 Look at the full-size file. A downscaled preview or a contact sheet hides small hands, text and seams, so the judge
-sets `confidence` to `low` when that is all it had (a grid cell is a preview). To zoom, pass crops of the image as extra files.
+sets `confidence` to `low` when that is all it had (a grid cell is a preview). The judge can't crop: to zoom, the caller makes crops and passes them as extra files.
 
 ## What is scored
 
@@ -28,7 +28,7 @@ Anything that looks wrong as a picture, apart from whether it matches the prompt
 | `seam` | tiling lines, tile boundaries, abrupt changes in light or detail |
 | `noise` | grain, banding, speckle, smeared patches |
 | `blank` | all black, all one colour, nothing drawn |
-| `off_model` | the character differs from the ref (see character match) |
+| `off_model` | only with a ref: the character differs from it. Then `character_match.score` must agree (severity 3 means score 1 or 2) |
 | `other` | anything else, with a note |
 
 Severity: **1** only visible when zoomed in; **2** noticeable at normal size; **3** ruins the image.
@@ -51,8 +51,8 @@ tentacle count); `notes` names the differences.
 
 ### 5. Overall and confidence
 `overall` is 1 to 5 in 0.5 steps, a judgement of the picture as a whole (a severity-3 artifact caps it at 2; garbled
-incidental text is a smaller cost than a melted face). `confidence` is `high` (full-size view, clear call), `medium` or `low`
-(preview only, or very busy scene).
+incidental text is a smaller cost than a melted face). `confidence` is `high` (full-size view, clear call), `medium` (full size but a very busy scene, or a
+close call), `low` (preview or grid cell only).
 
 Score scale for all 1-5 fields: 5 excellent, 4 good with small misses, 3 mixed, 2 poor, 1 fails.
 
@@ -79,11 +79,11 @@ Fields: `image`, `artifacts[]` (`kind` from the table, `where`, `severity` 1-3, 
 
 ## Using it
 Ask in a session: "judge these images" (give paths, the prompt, style and ref). In Claude Code the agent is picked up from
-`.claude/agents/`, in Þór's local sessions too. Cloud threads can only judge images they can read (project folder, or via `gen tunnel`).
+`.claude/agents/`, in Þór's local sessions too. Cloud threads can only judge images they can read (the project folder, or files saved by `python tunnel.py call view_image`, if that tool is allow-listed).
 Next steps, not built: writing `judge.json` next to `run.json` and showing scores on the contact sheet.
 
 ## Calibration (#113 slice 1, 2026-11-28)
-First run: the 36 cells of the three #102 grids (`docs/model-comparison/*-final.jpg`: klein @8, klein3 @24, qwen @25, four seeds), cut out of the
+Informal first run (the raw judge output is not committed, so treat the figures as indicative): the 36 cells of the three #102 grids (`docs/model-comparison/*-final.jpg`: klein @8, klein3 @24, qwen @25, four seeds), cut out of the
 grids and doubled in size, so every call was made from a ~480 px preview (confidence `medium`/`low`). The originals are on tulu.
 
 Þór has not recorded per-image counts yet, only the notes in `docs/model-comparison.md` marked (Þór), so there is no numeric agreement
